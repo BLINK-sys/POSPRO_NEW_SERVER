@@ -108,6 +108,22 @@ def create_app():
 app = create_app()
 
 
+@app.route('/')
+def index():
+    return {
+        "message": "POSPRO Shop API Server",
+        "status": "running",
+        "version": "1.0.0",
+        "endpoints": {
+            "categories": "/categories",
+            "products": "/products", 
+            "auth": "/auth",
+            "upload": "/upload",
+            "api": "/api"
+        }
+    }
+
+
 @app.route('/uploads/products/<int:product_id>/<filename>')
 def serve_product_file(product_id, filename):
     folder = os.path.join(app.config['UPLOAD_FOLDER'], 'products', str(product_id))
