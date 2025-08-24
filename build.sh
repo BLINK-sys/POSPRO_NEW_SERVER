@@ -2,7 +2,8 @@
 # exit on error
 set -o errexit
 
+# Устанавливаем зависимости
 pip install -r requirements.txt
 
-python manage.py collectstatic --no-input
-python manage.py migrate
+# Создаем папку uploads
+mkdir -p uploads
