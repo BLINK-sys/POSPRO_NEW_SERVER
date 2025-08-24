@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# exit on error
-set -o errexit
+set -e
 
 # Создаем папку uploads если её нет
 mkdir -p uploads
 
-# Запускаем приложение с gunicorn
-gunicorn app:app --bind 0.0.0.0:$PORT
+# Инициализируем базу данных
+python init_db.py
+
+# Запускаем приложение
+gunicorn app:app --bind 0.0.0.0:$PORT --workers 2
