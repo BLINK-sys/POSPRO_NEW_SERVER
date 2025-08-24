@@ -124,6 +124,34 @@ def init_database_on_startup():
                 from models.systemuser import SystemUser
                 user_count = SystemUser.query.count()
                 print(f"✅ База данных инициализирована. Пользователей: {user_count}")
+                
+                # Проверяем, есть ли системный пользователь
+                existing_user = SystemUser.query.filter_by(email='bocan.anton@mail.ru').first()
+                if not existing_user:
+                    print("👤 Создание системного пользователя...")
+                    # Создаем системного пользователя
+                    admin_user = SystemUser(
+                        full_name='Антон Бочан',
+                        email='bocan.anton@mail.ru',
+                        phone='',
+                        access_orders=True,
+                        access_catalog=True,
+                        access_clients=True,
+                        access_users=True,
+                        access_settings=True,
+                        access_dashboard=True,
+                        access_brands=True,
+                        access_statuses=True,
+                        access_pages=True
+                    )
+                    admin_user.set_password('1')
+                    from extensions import db
+                    db.session.add(admin_user)
+                    db.session.commit()
+                    print("✅ Системный пользователь создан")
+                else:
+                    print("✅ Системный пользователь уже существует")
+                
                 return True
             except Exception as e:
                 print(f"❌ Таблицы не созданы: {e}")
