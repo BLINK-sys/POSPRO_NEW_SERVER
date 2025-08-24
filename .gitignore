@@ -153,3 +153,4 @@ logs/
 # Configuration files with sensitive data
 config_local.py
 .env.local
+.env
