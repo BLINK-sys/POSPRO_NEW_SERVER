@@ -8,7 +8,18 @@ class Config:
     if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     
-    SQLALCHEMY_DATABASE_URI = DATABASE_URL or "postgresql://pospro:yfcnhjqrf@localhost:5432/pospro_server_db"
+    # Попытка использовать asyncpg если psycopg2 не работает
+    if DATABASE_URL and "postgresql://" in DATABASE_URL:
+        try:
+            import psycopg2
+            SQLALCHEMY_DATABASE_URI = DATABASE_URL
+        except ImportError:
+            # Если psycopg2 не работает, попробуем asyncpg
+            DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+            SQLALCHEMY_DATABASE_URI = DATABASE_URL
+    else:
+        SQLALCHEMY_DATABASE_URI = DATABASE_URL or "postgresql://pospro:yfcnhjqrf@localhost:5432/pospro_server_db"
+    
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret")
