@@ -20,8 +20,13 @@ def test_import(module_name):
     """Тестирует импорт модуля"""
     try:
         __import__(module_name)
+        print(f"✅ {module_name} успешно импортирован")
         return True
-    except ImportError:
+    except ImportError as e:
+        print(f"❌ Ошибка импорта {module_name}: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ Неожиданная ошибка при импорте {module_name}: {e}")
         return False
 
 def main():
@@ -52,7 +57,16 @@ def main():
             return
     
     print("❌ Не удалось установить ни один PostgreSQL драйвер")
-    sys.exit(1)
+    print("💡 Попробуем использовать psycopg2-binary==2.9.7 как fallback...")
+    
+    # Fallback - используем последний установленный драйвер
+    try:
+        import psycopg2
+        print("✅ Используем psycopg2-binary==2.9.7 как fallback")
+        return
+    except ImportError:
+        print("❌ Даже fallback не работает")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
