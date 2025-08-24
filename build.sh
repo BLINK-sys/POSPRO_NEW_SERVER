@@ -2,11 +2,11 @@
 # exit on error
 set -o errexit
 
-# Устанавливаем основные зависимости
+# Устанавливаем зависимости
 pip install -r requirements.txt
-
-# Устанавливаем psycopg2-binary отдельно
-pip install psycopg2-binary==2.9.7
 
 # Создаем папку uploads
 mkdir -p uploads
+
+# Инициализируем базу данных
+python init_db.py
