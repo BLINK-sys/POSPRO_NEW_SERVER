@@ -6,6 +6,8 @@
 import os
 from app import create_app
 from extensions import db
+# Импортируем все модели для создания таблиц
+import models
 
 def init_database():
     """Инициализирует базу данных PostgreSQL"""

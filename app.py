@@ -29,6 +29,9 @@ from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
 
+# Импортируем все модели для создания таблиц
+import models
+
 
 def create_app():
     app = Flask(__name__)
