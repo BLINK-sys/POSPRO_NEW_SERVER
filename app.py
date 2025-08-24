@@ -103,9 +103,6 @@ def create_app():
     print(f"📂 Создаём папку uploads: {app.config['UPLOAD_FOLDER']}")
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-    with app.app_context():
-        db.create_all()
-
     return app
 
 
