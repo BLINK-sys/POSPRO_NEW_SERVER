@@ -10,7 +10,8 @@ class Config:
     elif DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     
-    SQLALCHEMY_DATABASE_URI = DATABASE_URL or "postgresql+psycopg://pospro:yfcnhjqrf@localhost:5432/pospro_server_db"
+    # Fallback на локальную базу если DATABASE_URL не установлен
+    SQLALCHEMY_DATABASE_URI = DATABASE_URL or "postgresql+psycopg://pospro_user:mAbPOToSmG4Cc9o0v6fw8WA2gvQZyOAT@dpg-d2ld55ripnbc7383bnig-a.frankfurt-postgres.render.com/pospro_server_db"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret")
