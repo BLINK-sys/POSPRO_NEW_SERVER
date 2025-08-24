@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
+echo "🚀 Запуск POSPRO Server v2.0 - $(date)"
+
 # Создаем папку uploads в /var/data если её нет
 mkdir -p /var/data/uploads
 
