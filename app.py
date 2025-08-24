@@ -113,6 +113,61 @@ def create_app():
 
 app = create_app()
 
+# Инициализация базы данных при запуске приложения
+def init_database_on_startup():
+    """Инициализирует базу данных при запуске приложения"""
+    try:
+        print("🔧 Инициализация БД при запуске приложения...")
+        with app.app_context():
+            # Проверяем, есть ли таблицы
+            try:
+                from models.systemuser import SystemUser
+                user_count = SystemUser.query.count()
+                print(f"✅ База данных инициализирована. Пользователей: {user_count}")
+                return True
+            except Exception as e:
+                print(f"❌ Таблицы не созданы: {e}")
+                # Создаем таблицы
+                from extensions import db
+                import models
+                db.create_all()
+                print("✅ Таблицы созданы")
+                
+                # Создаем системного пользователя
+                try:
+                    existing_user = SystemUser.query.filter_by(email='bocan.anton@mail.ru').first()
+                    if not existing_user:
+                        admin_user = SystemUser(
+                            full_name='Антон Бочан',
+                            email='bocan.anton@mail.ru',
+                            phone='',
+                            access_orders=True,
+                            access_catalog=True,
+                            access_clients=True,
+                            access_users=True,
+                            access_settings=True,
+                            access_dashboard=True,
+                            access_brands=True,
+                            access_statuses=True,
+                            access_pages=True
+                        )
+                        admin_user.set_password('1')
+                        db.session.add(admin_user)
+                        db.session.commit()
+                        print("✅ Системный пользователь создан")
+                    else:
+                        print("✅ Системный пользователь уже существует")
+                except Exception as e:
+                    print(f"❌ Ошибка создания пользователя: {e}")
+                
+                return True
+    except Exception as e:
+        print(f"❌ Ошибка инициализации БД: {e}")
+        return False
+
+# Запускаем инициализацию
+init_database_on_startup()
+
 
 @app.route('/')
 def index():
