@@ -133,9 +133,14 @@ def init_database_on_startup():
                 db.create_all()
                 print("✅ Таблицы созданы")
                 
-                # Создаем системного пользователя
+                # Создаем системного пользователя в новой сессии
                 try:
-                    existing_user = SystemUser.query.filter_by(email='bocan.anton@mail.ru').first()
+                    # Создаем новую сессию для создания пользователя
+                    from sqlalchemy.orm import sessionmaker
+                    Session = sessionmaker(bind=db.engine)
+                    session = Session()
+                    
+                    existing_user = session.query(SystemUser).filter_by(email='bocan.anton@mail.ru').first()
                     if not existing_user:
                         admin_user = SystemUser(
                             full_name='Антон Бочан',
@@ -152,13 +157,20 @@ def init_database_on_startup():
                             access_pages=True
                         )
                         admin_user.set_password('1')
-                        db.session.add(admin_user)
-                        db.session.commit()
+                        session.add(admin_user)
+                        session.commit()
                         print("✅ Системный пользователь создан")
                     else:
                         print("✅ Системный пользователь уже существует")
+                    
+                    session.close()
                 except Exception as e:
                     print(f"❌ Ошибка создания пользователя: {e}")
+                    try:
+                        session.rollback()
+                        session.close()
+                    except:
+                        pass
                 
                 return True
     except Exception as e:
