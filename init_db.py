@@ -8,6 +8,7 @@ from app import create_app
 from extensions import db
 # Импортируем все модели для создания таблиц
 import models
+from models.systemuser import SystemUser
 
 def init_database():
     """Инициализирует базу данных PostgreSQL"""
@@ -44,6 +45,40 @@ def init_database():
                         print(f"   ✅ Таблица '{table}': {count} записей")
                     except Exception as e:
                         print(f"   ❌ Таблица '{table}': {e}")
+                
+                # Создаем системного пользователя если его нет
+                print("👤 Создание системного пользователя...")
+                try:
+                    existing_user = SystemUser.query.filter_by(email='bocan.anton@mail.ru').first()
+                    if existing_user:
+                        print("   ✅ Системный пользователь уже существует")
+                    else:
+                        # Создаем нового системного пользователя
+                        admin_user = SystemUser(
+                            full_name='Антон Бочан',
+                            email='bocan.anton@mail.ru',
+                            phone='',
+                            access_orders=True,
+                            access_catalog=True,
+                            access_clients=True,
+                            access_users=True,
+                            access_settings=True,
+                            access_dashboard=True,
+                            access_brands=True,
+                            access_statuses=True,
+                            access_pages=True
+                        )
+                        admin_user.set_password('1')
+                        
+                        db.session.add(admin_user)
+                        db.session.commit()
+                        print("   ✅ Системный пользователь создан успешно!")
+                        print(f"      Логин: bocan.anton@mail.ru")
+                        print(f"      Пароль: 1")
+                        
+                except Exception as e:
+                    print(f"   ❌ Ошибка при создании системного пользователя: {e}")
+                    db.session.rollback()
                 
                 return True
                 
