@@ -107,6 +107,13 @@ def create_app():
     # Создаём папку для загрузок при первом запуске
     print(f"📂 Создаём папку uploads: {app.config['UPLOAD_FOLDER']}")
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    
+    # Создаём подпапки для разных типов файлов
+    subfolders = ['products', 'categories', 'brands', 'banners']
+    for subfolder in subfolders:
+        subfolder_path = os.path.join(app.config['UPLOAD_FOLDER'], subfolder)
+        os.makedirs(subfolder_path, exist_ok=True)
+        print(f"📂 Создана папка: {subfolder_path}")
 
     return app
 
@@ -259,6 +266,24 @@ def serve_brand_image(brand_id, filename):
         os.path.join(app.config['UPLOAD_FOLDER'], 'brands', str(brand_id)),
         filename
     )
+
+
+@app.route('/uploads/banners/<filename>')
+def serve_banner_image(filename):
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], 'banners')
+    full_path = os.path.join(folder, filename)
+    
+    # Отладочная информация
+    print(f"🔍 Запрос баннера: {filename}")
+    print(f"📁 Папка баннеров: {folder}")
+    print(f"📄 Полный путь: {full_path}")
+    print(f"✅ Файл существует: {os.path.exists(full_path)}")
+    
+    if not os.path.exists(full_path):
+        print(f"❌ Баннер не найден: {full_path}")
+        return "Banner not found", 404
+    
+    return send_from_directory(folder, filename)
 
 
 @app.route('/uploads/categories/<int:category_id>/<filename>')
