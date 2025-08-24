@@ -153,10 +153,18 @@ def delete_draft(product_id):
 
 
 # �� Финализировать черновик
-@products_bp.route('/<int:product_id>/finalize', methods=['PUT'])
+@products_bp.route('/<int:product_id>/finalize', methods=['PUT', 'POST'])
 def finalize_product(product_id):
     try:
-        logger.info(f"Начало финализации товара ID: {product_id}")
+        logger.info(f"=== НАЧАЛО ФИНАЛИЗАЦИИ ТОВАРА ===")
+        logger.info(f"ID товара: {product_id}")
+        logger.info(f"Метод запроса: {request.method}")
+        logger.info(f"Content-Type: {request.content_type}")
+        logger.info(f"Данные запроса: {request.get_data()}")
+        
+        data = request.json or {}
+        logger.info(f"Получены данные: {list(data.keys())}")
+        logger.info(f"Полные данные: {data}")
         
         # Проверяем существование товара
         product = Product.query.get_or_404(product_id)
@@ -345,9 +353,14 @@ def get_product_by_slug(slug):
 @products_bp.route('/', methods=['POST'])
 def create_product():
     try:
-        logger.info("Начало создания товара")
+        logger.info("=== НАЧАЛО СОЗДАНИЯ ТОВАРА ===")
+        logger.info(f"Метод запроса: {request.method}")
+        logger.info(f"Content-Type: {request.content_type}")
+        logger.info(f"Данные запроса: {request.get_data()}")
+        
         data = request.json or {}
         logger.info(f"Получены данные: {list(data.keys())}")
+        logger.info(f"Полные данные: {data}")
 
         # Простая обработка статуса и бренда
         status = data.get('status')
@@ -394,9 +407,14 @@ def create_product():
         return jsonify({'message': 'Product created', 'id': product.id}), 201
         
     except Exception as e:
-        logger.error(f"Ошибка при создании товара: {str(e)}")
+        logger.error(f"=== ОШИБКА ПРИ СОЗДАНИИ ТОВАРА ===")
+        logger.error(f"Тип ошибки: {type(e).__name__}")
+        logger.error(f"Сообщение ошибки: {str(e)}")
+        logger.error(f"Детали ошибки: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         db.session.rollback()
-        return jsonify({'error': 'Ошибка при создании товара'}), 500
+        return jsonify({'error': 'Ошибка при создании товара', 'details': str(e)}), 500
 
 
 # 🔹 Обновить товар
