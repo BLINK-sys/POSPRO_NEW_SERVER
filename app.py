@@ -34,7 +34,10 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    CORS(app)
+    # Настройка CORS для работы с фронтендом
+    CORS(app, origins=["http://localhost:3000", "https://pospro-new-ui.vercel.app"], 
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         allow_headers=["Content-Type", "Authorization"])
 
     db.init_app(app)
     jwt.init_app(app)
@@ -110,18 +113,27 @@ app = create_app()
 
 @app.route('/')
 def index():
-    return {
-        "message": "POSPRO Shop API Server",
-        "status": "running",
-        "version": "1.0.0",
-        "endpoints": {
-            "categories": "/categories",
-            "products": "/products", 
-            "auth": "/auth",
-            "upload": "/upload",
-            "api": "/api"
+    try:
+        return {
+            "message": "POSPRO Shop API Server",
+            "status": "running",
+            "version": "1.0.0",
+            "database": "connected",
+            "endpoints": {
+                "categories": "/categories",
+                "products": "/products", 
+                "auth": "/auth",
+                "upload": "/upload",
+                "api": "/api"
+            }
         }
-    }
+    except Exception as e:
+        return {
+            "message": "POSPRO Shop API Server",
+            "status": "error",
+            "error": str(e),
+            "version": "1.0.0"
+        }, 500
 
 
 @app.route('/uploads/products/<int:product_id>/<filename>')
@@ -164,6 +176,19 @@ def serve_uploads(filename):
     upload_dir = os.path.join(app.root_path, 'uploads')
     return send_from_directory(upload_dir, filename)
 
+
+# Глобальный обработчик ошибок
+@app.errorhandler(500)
+def internal_error(error):
+    return {"error": "Internal Server Error", "message": str(error)}, 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return {"error": "Not Found", "message": "Endpoint not found"}, 404
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    return {"error": "Server Error", "message": str(e)}, 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
