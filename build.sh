@@ -2,7 +2,10 @@
 # exit on error
 set -o errexit
 
-# Устанавливаем зависимости
+# Устанавливаем системные зависимости PostgreSQL
+apt-get update && apt-get install -y libpq-dev postgresql-client
+
+# Устанавливаем Python зависимости
 pip install -r requirements.txt
 
 # Создаем папку uploads
