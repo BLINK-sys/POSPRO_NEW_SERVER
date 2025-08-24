@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-# Создаем папку uploads если её нет
-mkdir -p uploads
+# Создаем папку uploads в /var/data если её нет
+mkdir -p /var/data/uploads
 
 # Инициализируем базу данных
 python init_db.py

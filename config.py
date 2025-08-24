@@ -17,8 +17,8 @@ class Config:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret")
     JWT_IDENTITY_CLAIM = 'sub'
     
-    # Настройка папки загрузок
-    UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", os.path.join(os.path.dirname(__file__), 'uploads'))
+    # Настройка папки загрузок - используем /var/data/uploads на Render
+    UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/var/data/uploads")
     MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 20MB
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'zip', 'rar', 'doc', 'docx', 'mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm'}
 
