@@ -237,7 +237,7 @@ def serve_category_image(category_id, filename):
 
 @app.route('/uploads/<path:filename>')
 def serve_uploads(filename):
-    upload_dir = os.path.join(app.root_path, 'uploads')
+    upload_dir = app.config['UPLOAD_FOLDER']
     return send_from_directory(upload_dir, filename)
 
 

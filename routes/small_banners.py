@@ -138,9 +138,9 @@ def delete_small_banner_image():
     try:
         # Извлекаем путь к файлу из URL
         if image_url.startswith('/uploads/'):
-            # Убираем ведущий слеш и создаем полный путь
-            relative_path = image_url.lstrip('/')
-            file_path = os.path.join(relative_path)
+            # Создаем полный путь используя UPLOAD_FOLDER
+            relative_path = image_url.lstrip('/uploads/')
+            file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], relative_path)
             
             print(f"📁 Full file path: {file_path}")
             

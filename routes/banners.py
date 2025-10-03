@@ -73,7 +73,7 @@ def delete_banner(banner_id):
     # Удаление файла изображения, если путь начинается с "/uploads/"
     if banner.image and banner.image.startswith('/uploads/'):
         try:
-            file_path = os.path.join(current_app.root_path, banner.image.lstrip('/'))
+            file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], banner.image.lstrip('/uploads/'))
             if os.path.exists(file_path):
                 os.remove(file_path)
 
