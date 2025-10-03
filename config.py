@@ -25,8 +25,8 @@ class Config:
             raise RuntimeError("DATABASE_URL is not set in environment variables!")
         SQLALCHEMY_DATABASE_URI = db_url
         
-        # На Render используем выделенный диск для загрузок
-        UPLOAD_FOLDER = "/disk/uploads"
+        # На Render используем переменную окружения или папку uploads в проекте
+        UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", os.path.join(os.path.dirname(__file__), 'uploads'))
         print("Render config loaded successfully")
     else:
         print("Local development configuration...")
