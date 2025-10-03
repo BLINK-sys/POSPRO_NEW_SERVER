@@ -13,6 +13,11 @@ from models.small_banner_card import SmallBanner
 public_homepage_bp = Blueprint('public_homepage', __name__)
 
 
+@public_homepage_bp.route('/public', methods=['GET'])
+def get_public_info():
+    return {"message": "Public API", "status": "ok"}
+
+
 @public_homepage_bp.route('/public/homepage', methods=['GET'])
 def get_homepage_data():
     banners = Banner.query.filter_by(active=True).order_by(Banner.order).all()
