@@ -101,7 +101,7 @@ def create_app():
     app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH
 
     # Создаём папку для загрузок при первом запуске
-    print(f"📂 Создаём папку uploads: {app.config['UPLOAD_FOLDER']}")
+    print(f"Creating uploads folder: {app.config['UPLOAD_FOLDER']}")
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
     with app.app_context():
@@ -119,14 +119,14 @@ def serve_product_file(product_id, filename):
     full_path = os.path.join(folder, filename)
     
     # Отладочная информация
-    print(f"🔍 Запрос файла: {filename}")
-    print(f"📁 Папка продукта: {folder}")
-    print(f"📄 Полный путь: {full_path}")
-    print(f"✅ Файл существует: {os.path.exists(full_path)}")
-    print(f"📂 UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
+    print(f"File request: {filename}")
+    print(f"Product folder: {folder}")
+    print(f"Full path: {full_path}")
+    print(f"File exists: {os.path.exists(full_path)}")
+    print(f"UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
     
     if not os.path.exists(full_path):
-        print(f"❌ Файл не найден: {full_path}")
+        print(f"File not found: {full_path}")
         return "File not found", 404
     
     return send_from_directory(folder, filename)

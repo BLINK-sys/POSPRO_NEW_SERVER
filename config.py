@@ -17,30 +17,17 @@ class Config:
         'mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm'
     }
 
-    # Определяем среду выполнения
-    def __init__(self):
-        # Проверяем, работаем ли мы на Render
-        if os.getenv("RENDER"):  # Render автоматически устанавливает эту переменную
-            self._setup_render_config()
-        else:
-            self._setup_local_config()
-
-    def _setup_render_config(self):
-        """Конфигурация для Render"""
+    # Определяем среду выполнения и настраиваем базу данных
+    if os.getenv("RENDER"):  # Render автоматически устанавливает эту переменную
         print("Render configuration...")
-        
         # Проверяем, что DATABASE_URL задан
         db_url = os.getenv("DATABASE_URL")
         if not db_url:
             raise RuntimeError("DATABASE_URL is not set in environment variables!")
-        
-        self.SQLALCHEMY_DATABASE_URI = db_url
+        SQLALCHEMY_DATABASE_URI = db_url
         print("Render config loaded successfully")
-
-    def _setup_local_config(self):
-        """Конфигурация для локальной разработки"""
+    else:
         print("Local development configuration...")
-        
         # Локальная база данных PostgreSQL
-        self.SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "postgresql://pospro:yfcnhjqrf@localhost:5432/pospro_server_db")
+        SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "postgresql://pospro:yfcnhjqrf@localhost:5432/pospro_server_db")
         print("Local config loaded successfully")
