@@ -3,22 +3,29 @@
 Скрипт для инициализации базы данных на Render
 """
 import os
-from app import create_app
+from flask import Flask
+from config import Config
 from extensions import db
 
 def init_database():
     """Инициализация базы данных"""
-    app = create_app()
+    
+    # Создаем минимальное приложение только для инициализации БД
+    app = Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = Config.SQLALCHEMY_DATABASE_URI
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = Config.SQLALCHEMY_TRACK_MODIFICATIONS
+    
+    db.init_app(app)
     
     with app.app_context():
-        print("🔧 Создание таблиц базы данных...")
+        print("Creating database tables...")
         db.create_all()
-        print("✅ База данных успешно инициализирована!")
+        print("Database initialized successfully!")
         
         # Проверяем, что таблицы созданы
         inspector = db.inspect(db.engine)
         tables = inspector.get_table_names()
-        print(f"📊 Создано таблиц: {len(tables)}")
+        print(f"Created tables: {len(tables)}")
         for table in tables:
             print(f"  - {table}")
 
