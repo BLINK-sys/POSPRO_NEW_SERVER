@@ -185,6 +185,40 @@ def serve_product_file(product_id, filename):
     return send_from_directory(folder, filename)
 
 
+@app.route('/uploads/products/<int:product_id>/documents/<filename>')
+def serve_product_document(product_id, filename):
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], 'products', str(product_id), 'documents')
+    full_path = os.path.join(folder, filename)
+    
+    print(f"Document request: {filename}")
+    print(f"Documents folder: {folder}")
+    print(f"Full path: {full_path}")
+    print(f"File exists: {os.path.exists(full_path)}")
+    
+    if not os.path.exists(full_path):
+        print(f"Document not found: {full_path}")
+        return "Document not found", 404
+    
+    return send_from_directory(folder, filename)
+
+
+@app.route('/uploads/products/<int:product_id>/drivers/<filename>')
+def serve_product_driver(product_id, filename):
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], 'products', str(product_id), 'drivers')
+    full_path = os.path.join(folder, filename)
+    
+    print(f"Driver request: {filename}")
+    print(f"Drivers folder: {folder}")
+    print(f"Full path: {full_path}")
+    print(f"File exists: {os.path.exists(full_path)}")
+    
+    if not os.path.exists(full_path):
+        print(f"Driver not found: {full_path}")
+        return "Driver not found", 404
+    
+    return send_from_directory(folder, filename)
+
+
 @app.route('/uploads/brands/<int:brand_id>/<filename>')
 def serve_brand_image(brand_id, filename):
     return send_from_directory(

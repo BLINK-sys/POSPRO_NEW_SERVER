@@ -45,16 +45,23 @@ def sync_media_from_filesystem(product_id):
     Синхронизирует медиафайлы из файловой системы с базой данных.
     Создает записи в БД для файлов, которые существуют на диске, но отсутствуют в БД.
     """
+    print(f"Syncing media files from filesystem for product {product_id}")
     media_folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
+    print(f"Media folder path: {media_folder}")
     
     if not os.path.exists(media_folder):
+        print(f"Media folder does not exist: {media_folder}")
         return
     
     # Получаем список файлов в папке (исключаем папки documents и drivers)
     try:
-        files = [f for f in os.listdir(media_folder) 
+        all_files = os.listdir(media_folder)
+        print(f"All files in media folder: {all_files}")
+        
+        files = [f for f in all_files 
                 if os.path.isfile(os.path.join(media_folder, f)) 
                 and f not in ['documents', 'drivers']]
+        print(f"Media files found: {files}")
     except Exception as e:
         print(f"Ошибка при чтении папки медиа: {e}")
         return
@@ -94,14 +101,21 @@ def sync_documents_from_filesystem(product_id):
     Синхронизирует документы из файловой системы с базой данных.
     Создает записи в БД для файлов, которые существуют на диске, но отсутствуют в БД.
     """
+    print(f"Syncing documents from filesystem for product {product_id}")
     documents_folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id), 'documents')
+    print(f"Documents folder path: {documents_folder}")
     
     if not os.path.exists(documents_folder):
+        print(f"Documents folder does not exist: {documents_folder}")
         return
     
     # Получаем список файлов в папке
     try:
-        files = [f for f in os.listdir(documents_folder) if os.path.isfile(os.path.join(documents_folder, f))]
+        all_files = os.listdir(documents_folder)
+        print(f"All files in documents folder: {all_files}")
+        
+        files = [f for f in all_files if os.path.isfile(os.path.join(documents_folder, f))]
+        print(f"Document files found: {files}")
     except Exception as e:
         print(f"Ошибка при чтении папки документов: {e}")
         return
@@ -146,14 +160,21 @@ def sync_drivers_from_filesystem(product_id):
     Синхронизирует драйверы из файловой системы с базой данных.
     Создает записи в БД для файлов, которые существуют на диске, но отсутствуют в БД.
     """
+    print(f"Syncing drivers from filesystem for product {product_id}")
     drivers_folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id), 'drivers')
+    print(f"Drivers folder path: {drivers_folder}")
     
     if not os.path.exists(drivers_folder):
+        print(f"Drivers folder does not exist: {drivers_folder}")
         return
     
     # Получаем список файлов в папке
     try:
-        files = [f for f in os.listdir(drivers_folder) if os.path.isfile(os.path.join(drivers_folder, f))]
+        all_files = os.listdir(drivers_folder)
+        print(f"All files in drivers folder: {all_files}")
+        
+        files = [f for f in all_files if os.path.isfile(os.path.join(drivers_folder, f))]
+        print(f"Driver files found: {files}")
     except Exception as e:
         print(f"Ошибка при чтении папки драйверов: {e}")
         return
@@ -357,16 +378,24 @@ def upload_product_video():
 # 🔹 Получить медиафайлы по товару
 @upload_bp.route('/media/<int:product_id>', methods=['GET'])
 def get_media(product_id):
+    print(f"Getting media for product {product_id}")
     # Сначала синхронизируем файлы с базой данных
     sync_media_from_filesystem(product_id)
     
     media = ProductMedia.query.filter_by(product_id=product_id).order_by(ProductMedia.order).all()
-    return jsonify([{
+    print(f"Found {len(media)} media items")
+    for m in media:
+        print(f"  - ID: {m.id}, URL: {m.url}, Type: {m.media_type}, Order: {m.order}")
+    
+    result = [{
         'id': m.id,
         'url': m.url,
         'media_type': m.media_type,
         'order': m.order
-    } for m in media])
+    } for m in media]
+    
+    print(f"Returning media data: {result}")
+    return jsonify(result)
 
 
 # 🔹 Добавить медиа по URL
@@ -483,32 +512,48 @@ def reorder_media(product_id):
 # 🔹 Получить документы и драйвера
 @upload_bp.route('/documents/<int:product_id>', methods=['GET'])
 def get_documents(product_id):
+    print(f"Getting documents for product {product_id}")
     # Сначала синхронизируем файлы с базой данных
     sync_documents_from_filesystem(product_id)
     
     docs = ProductDocument.query.filter_by(product_id=product_id, file_type='doc').all()
-    return jsonify([{
+    print(f"Found {len(docs)} documents")
+    for d in docs:
+        print(f"  - ID: {d.id}, Filename: {d.filename}, URL: {d.url}, Type: {d.file_type}")
+    
+    result = [{
         'id': d.id,
         'filename': d.filename,
         'url': d.url,
         'file_type': d.file_type,
         'mime_type': d.mime_type
-    } for d in docs])
+    } for d in docs]
+    
+    print(f"Returning documents data: {result}")
+    return jsonify(result)
 
 
 @upload_bp.route('/drivers/<int:product_id>', methods=['GET'])
 def get_drivers(product_id):
+    print(f"Getting drivers for product {product_id}")
     # Сначала синхронизируем файлы с базой данных
     sync_drivers_from_filesystem(product_id)
     
     drivers = ProductDocument.query.filter_by(product_id=product_id, file_type='driver').all()
-    return jsonify([{
+    print(f"Found {len(drivers)} drivers")
+    for d in drivers:
+        print(f"  - ID: {d.id}, Filename: {d.filename}, URL: {d.url}, Type: {d.file_type}")
+    
+    result = [{
         'id': d.id,
         'filename': d.filename,
         'url': d.url,
         'file_type': d.file_type,
         'mime_type': d.mime_type
-    } for d in drivers])
+    } for d in drivers]
+    
+    print(f"Returning drivers data: {result}")
+    return jsonify(result)
 
 
 # 🔹 Добавить документы
