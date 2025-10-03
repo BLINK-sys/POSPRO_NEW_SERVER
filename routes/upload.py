@@ -268,13 +268,23 @@ def delete_category_image(category_id):
 # 🔹 Загрузка медиафайла для товара
 @upload_bp.route('/upload_product', methods=['POST'])
 def upload_product_file():
+    print("Handling product file upload")
+    print(f"Form data: {request.form}")
+    print(f"Files: {list(request.files.keys())}")
+    
     product_id = request.form.get('product_id')
+    print(f"Product ID: {product_id}")
     
     if 'file' not in request.files or not product_id:
-        return jsonify({'error': 'No file or product_id provided'}), 400
+        error_msg = f"No file or product_id provided. Files: {list(request.files.keys())}, product_id: {product_id}"
+        print(error_msg)
+        return jsonify({'error': error_msg}), 400
 
     file = request.files['file']
+    print(f"File: {file.filename}, Content type: {file.content_type}")
+    
     if file.filename == '':
+        print("No selected file")
         return jsonify({'error': 'No selected file'}), 400
 
     filename = sanitize_filename(file.filename)
@@ -296,6 +306,8 @@ def upload_product_file():
     file_url = f'/uploads/products/{product_id}/{filename}'
     
     try:
+        print(f"Creating database record: product_id={product_id}, url={file_url}, media_type={media_type}, filename={filename}")
+        
         media = ProductMedia(
             product_id=product_id,
             url=file_url,
@@ -303,6 +315,8 @@ def upload_product_file():
         )
         db.session.add(media)
         db.session.commit()
+        
+        print(f"Product file uploaded successfully with ID: {media.id}")
         
         return jsonify({
             'message': 'File uploaded and saved to database',
@@ -314,6 +328,8 @@ def upload_product_file():
         
     except Exception as e:
         print(f"Ошибка при создании записи в БД: {str(e)}")
+        import traceback
+        traceback.print_exc()
         db.session.rollback()
         
         # Удаляем загруженный файл, если не удалось создать запись в БД
@@ -323,7 +339,7 @@ def upload_product_file():
         except Exception as del_e:
             print(f"Ошибка при удалении файла после неудачной записи в БД: {del_e}")
         
-        return jsonify({'error': 'Failed to save file information to database'}), 500
+        return jsonify({'error': f'Failed to save file information to database: {str(e)}'}), 500
 
 
 # 🔹 Загрузка изображений товара (альтернативный эндпоинт)
