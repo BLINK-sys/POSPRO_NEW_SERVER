@@ -94,10 +94,9 @@ def create_app():
 
     app.register_blueprint(public_homepage_bp, url_prefix='/api')
 
-    # Получаем абсолютный путь к папке, где находится app.py
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
-    app.config['ALLOWED_EXTENSIONS'] = {'jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov', 'avi'}
+    # Настройки загрузки файлов берутся из Config
+    app.config['UPLOAD_FOLDER'] = Config.UPLOAD_FOLDER
+    app.config['ALLOWED_EXTENSIONS'] = Config.ALLOWED_EXTENSIONS
     app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH
 
     # Создаём папку для загрузок при первом запуске
