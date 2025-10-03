@@ -41,6 +41,6 @@ class Config:
         """Конфигурация для локальной разработки"""
         print("Local development configuration...")
         
-        # Локальная база данных SQLite
-        self.SQLALCHEMY_DATABASE_URI = "sqlite:///pospro.db"
+        # Локальная база данных PostgreSQL
+        self.SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "postgresql://pospro:yfcnhjqrf@localhost:5432/pospro_server_db")
         print("Local config loaded successfully")
