@@ -367,11 +367,27 @@ def add_media(product_id):
         if 'url' not in data:
             print("URL not provided in data")
             return jsonify({'error': 'URL is required'}), 400
+        
+        # Обрабатываем случай, когда url может быть вложенным объектом
+        url_value = data['url']
+        if isinstance(url_value, dict):
+            # Если url - это объект, извлекаем строку URL
+            if 'url' in url_value:
+                url_value = url_value['url']
+                print(f"Extracted URL from nested object: {url_value}")
+            else:
+                print("URL object doesn't contain 'url' field")
+                return jsonify({'error': 'Invalid URL format'}), 400
+        
+        media_type_value = data.get('media_type', 'image')
+        if isinstance(media_type_value, dict) and 'media_type' in media_type_value:
+            media_type_value = media_type_value['media_type']
+            print(f"Extracted media_type from nested object: {media_type_value}")
             
         media = ProductMedia(
             product_id=product_id,
-            url=data['url'],
-            media_type=data.get('media_type', 'image')
+            url=url_value,
+            media_type=media_type_value
         )
         db.session.add(media)
         db.session.commit()
