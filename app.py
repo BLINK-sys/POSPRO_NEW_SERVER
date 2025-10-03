@@ -29,6 +29,7 @@ from routes.orders import orders_bp
 from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
+from models.systemuser import SystemUser
 
 
 def create_app():
@@ -105,8 +106,51 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        
+        # Создаем системного пользователя по умолчанию
+        create_default_system_user()
 
     return app
+
+
+def create_default_system_user():
+    """Создание системного пользователя по умолчанию"""
+    try:
+        # Проверяем, существует ли уже пользователь с таким email
+        existing_user = SystemUser.query.filter_by(email='bocan.anton@mail.ru').first()
+        
+        if not existing_user:
+            # Создаем нового системного пользователя
+            admin_user = SystemUser(
+                full_name='Администратор',
+                email='bocan.anton@mail.ru',
+                phone='+7 (777) 777-77-77',
+                # Устанавливаем все права доступа
+                access_orders=True,
+                access_catalog=True,
+                access_clients=True,
+                access_users=True,
+                access_settings=True,
+                access_dashboard=True,
+                access_brands=True,
+                access_statuses=True,
+                access_pages=True
+            )
+            
+            # Устанавливаем пароль
+            admin_user.set_password('1')
+            
+            # Сохраняем в базу данных
+            db.session.add(admin_user)
+            db.session.commit()
+            
+            print("✅ Системный пользователь создан: bocan.anton@mail.ru")
+        else:
+            print("ℹ️ Системный пользователь уже существует: bocan.anton@mail.ru")
+            
+    except Exception as e:
+        print(f"❌ Ошибка при создании системного пользователя: {e}")
+        db.session.rollback()
 
 
 app = create_app()
