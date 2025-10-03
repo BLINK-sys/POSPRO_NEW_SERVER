@@ -422,17 +422,46 @@ def delete_media(media_id):
 # 🔹 Перестановка порядка медиа
 @upload_bp.route('/media/reorder/<int:product_id>', methods=['POST'])
 def reorder_media(product_id):
-    data = request.json
-    if not isinstance(data, list):
-        return jsonify({'error': 'Invalid data format'}), 400
+    try:
+        data = request.json
+        print(f"Reordering media for product {product_id}: {data}")
+        
+        if not isinstance(data, list):
+            print("Invalid data format - not a list")
+            return jsonify({'error': 'Invalid data format'}), 400
 
-    for item in data:
-        media = ProductMedia.query.filter_by(id=item.get('id'), product_id=product_id).first()
-        if media and item.get('order') is not None:
-            media.order = item['order']
+        for item in data:
+            # Обрабатываем случай, когда item может быть вложенным объектом
+            item_id = item.get('id')
+            if isinstance(item_id, dict):
+                # Если id - это объект, извлекаем значение id
+                item_id = item_id.get('id')
+                print(f"Extracted id from nested object: {item_id}")
+            
+            item_order = item.get('order')
+            if isinstance(item_order, dict):
+                # Если order - это объект, извлекаем значение order
+                item_order = item_order.get('order')
+                print(f"Extracted order from nested object: {item_order}")
+            
+            if item_id is not None:
+                media = ProductMedia.query.filter_by(id=item_id, product_id=product_id).first()
+                if media and item_order is not None:
+                    media.order = item_order
+                    print(f"Updated media {item_id} order to {item_order}")
+                else:
+                    print(f"Media {item_id} not found or order is None")
 
-    db.session.commit()
-    return jsonify({'message': 'Media reordered'}), 200
+        db.session.commit()
+        print("Media reordered successfully")
+        return jsonify({'message': 'Media reordered'}), 200
+        
+    except Exception as e:
+        print(f"Error reordering media: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        db.session.rollback()
+        return jsonify({'error': f'Failed to reorder media: {str(e)}'}), 500
 
 
 # 🔹 Получить документы и драйвера
