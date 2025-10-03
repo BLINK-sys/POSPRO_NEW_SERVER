@@ -4,10 +4,10 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")
     # Используем переменную окружения для URL базы данных (для Render)
     #SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "postgresql://pospro:yfcnhjqrf@localhost:5432/pospro_server_db")    
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-    "DATABASE_URL",
-    "postgresql://pospro_user:FkfSdSLXtK9ZFei3tch3KmUYuL0eq1r0@dpg-d3fnijili9vc73e7pvq0-a:5432/pospro_db"
-)
+        db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("❌ DATABASE_URL is not set!")
+    SQLALCHEMY_DATABASE_URI = db_url
 
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
