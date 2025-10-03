@@ -6,8 +6,9 @@ class Config:
     #SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "postgresql://pospro:yfcnhjqrf@localhost:5432/pospro_server_db")    
     SQLALCHEMY_DATABASE_URI = os.getenv(
     "DATABASE_URL",
-    "postgresql://pospro_user:FkfSdSLXtK9ZFei3tch3KmUYuL0eq1rO@dpg-d3fnijili9vc73e7pvq0-a:5432/pospro_db"
+    "postgresql://pospro_user:FkfSdSLXtK9ZFei3tch3KmUYuL0eq1r0@dpg-d3fnijili9vc73e7pvq0-a:5432/pospro_db"
 )
+
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret")
