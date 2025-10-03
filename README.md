@@ -45,12 +45,13 @@ venv\Scripts\activate     # Windows
 pip install -r requirements.txt
 ```
 
-4. Настройте переменные окружения:
+4. Настройте переменные окружения (опционально):
 ```bash
-# Создайте файл .env
-SECRET_KEY=your-secret-key
-JWT_SECRET_KEY=your-jwt-secret
-DATABASE_URL=postgresql://user:password@localhost:5432/pospro_db
+# Скопируйте пример файла
+cp env.example .env
+
+# Отредактируйте .env файл под свои нужды
+# Для локальной разработки используется SQLite, поэтому DATABASE_URL не нужен
 ```
 
 5. Инициализируйте базу данных:
@@ -60,10 +61,22 @@ python init_db.py
 
 6. Запустите сервер:
 ```bash
+# Способ 1: Через скрипт (рекомендуется)
+python run_local.py
+
+# Способ 2: Напрямую
 python app.py
 ```
 
 Сервер будет доступен по адресу: `http://localhost:5000`
+
+### Автоматическое определение среды
+
+Проект автоматически определяет среду выполнения:
+- **Локально**: Использует SQLite базу данных (`pospro.db`)
+- **На Render**: Использует PostgreSQL из переменной `DATABASE_URL`
+
+Никаких дополнительных настроек не требуется!
 
 ### Развертывание на Render
 
