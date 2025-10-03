@@ -356,15 +356,33 @@ def get_media(product_id):
 # 🔹 Добавить медиа по URL
 @upload_bp.route('/media/<int:product_id>', methods=['POST'])
 def add_media(product_id):
-    data = request.json
-    media = ProductMedia(
-        product_id=product_id,
-        url=data['url'],
-        media_type=data['media_type']
-    )
-    db.session.add(media)
-    db.session.commit()
-    return jsonify({'message': 'Media added', 'id': media.id}), 201
+    try:
+        data = request.json
+        print(f"Adding media for product {product_id}: {data}")
+        
+        if not data:
+            print("No data provided")
+            return jsonify({'error': 'No data provided'}), 400
+            
+        if 'url' not in data:
+            print("URL not provided in data")
+            return jsonify({'error': 'URL is required'}), 400
+            
+        media = ProductMedia(
+            product_id=product_id,
+            url=data['url'],
+            media_type=data.get('media_type', 'image')
+        )
+        db.session.add(media)
+        db.session.commit()
+        
+        print(f"Media added successfully with ID: {media.id}")
+        return jsonify({'message': 'Media added', 'id': media.id}), 201
+        
+    except Exception as e:
+        print(f"Error adding media: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': f'Failed to add media: {str(e)}'}), 500
 
 
 # 🔹 Удалить медиа
@@ -439,6 +457,14 @@ def add_document(product_id):
         data = request.json
         print(f"Добавление документа для товара {product_id}: {data}")
         
+        if not data:
+            print("No data provided for document")
+            return jsonify({'error': 'No data provided'}), 400
+            
+        if 'filename' not in data or 'url' not in data:
+            print(f"Missing required fields. Required: filename, url. Provided: {list(data.keys())}")
+            return jsonify({'error': 'filename and url are required'}), 400
+        
         doc = ProductDocument(
             product_id=product_id,
             filename=data['filename'],
@@ -455,7 +481,7 @@ def add_document(product_id):
     except Exception as e:
         print(f"Ошибка при добавлении документа: {str(e)}")
         db.session.rollback()
-        return jsonify({'error': 'Failed to add document'}), 500
+        return jsonify({'error': f'Failed to add document: {str(e)}'}), 500
 
 
 @upload_bp.route('/drivers/<int:product_id>', methods=['POST'])
@@ -463,6 +489,14 @@ def add_driver(product_id):
     try:
         data = request.json
         print(f"Добавление драйвера для товара {product_id}: {data}")
+        
+        if not data:
+            print("No data provided for driver")
+            return jsonify({'error': 'No data provided'}), 400
+            
+        if 'filename' not in data or 'url' not in data:
+            print(f"Missing required fields. Required: filename, url. Provided: {list(data.keys())}")
+            return jsonify({'error': 'filename and url are required'}), 400
         
         doc = ProductDocument(
             product_id=product_id,
@@ -480,7 +514,7 @@ def add_driver(product_id):
     except Exception as e:
         print(f"Ошибка при добавлении драйвера: {str(e)}")
         db.session.rollback()
-        return jsonify({'error': 'Failed to add driver'}), 500
+        return jsonify({'error': f'Failed to add driver: {str(e)}'}), 500
 
 
 # 🔹 Загрузка файла-документа
@@ -495,12 +529,23 @@ def upload_driver_file():
 
 
 def _handle_file_upload(req, folder_type):
+    print(f"Handling file upload for {folder_type}")
+    print(f"Form data: {req.form}")
+    print(f"Files: {list(req.files.keys())}")
+    
     product_id = req.form.get('product_id')
+    print(f"Product ID: {product_id}")
+    
     if 'file' not in req.files or not product_id:
-        return jsonify({'error': 'No file or product_id provided'}), 400
+        error_msg = f"No file or product_id provided. Files: {list(req.files.keys())}, product_id: {product_id}"
+        print(error_msg)
+        return jsonify({'error': error_msg}), 400
 
     file = req.files['file']
+    print(f"File: {file.filename}, Content type: {file.content_type}")
+    
     if file.filename == '':
+        print("No selected file")
         return jsonify({'error': 'No selected file'}), 400
 
     filename = sanitize_filename(file.filename)
@@ -521,11 +566,14 @@ def _handle_file_upload(req, folder_type):
     
     # Создаем запись в базе данных
     try:
+        file_type = folder_type.rstrip('s')  # 'documents' -> 'doc', 'drivers' -> 'driver'
+        print(f"Creating database record: product_id={product_id}, filename={filename}, url={file_url}, file_type={file_type}, mime_type={mime_type}")
+        
         doc = ProductDocument(
             product_id=product_id,
             filename=filename,
             url=file_url,
-            file_type=folder_type.rstrip('s'),  # 'documents' -> 'doc', 'drivers' -> 'driver'
+            file_type=file_type,
             mime_type=mime_type
         )
         db.session.add(doc)
@@ -543,6 +591,8 @@ def _handle_file_upload(req, folder_type):
         
     except Exception as e:
         print(f"Ошибка при создании записи в БД: {str(e)}")
+        import traceback
+        traceback.print_exc()
         db.session.rollback()
         
         # Удаляем загруженный файл, если не удалось создать запись в БД
@@ -552,7 +602,7 @@ def _handle_file_upload(req, folder_type):
         except Exception as del_e:
             print(f"Ошибка при удалении файла после неудачной записи в БД: {del_e}")
         
-        return jsonify({'error': 'Failed to save file information to database'}), 500
+        return jsonify({'error': f'Failed to save file information to database: {str(e)}'}), 500
 
 
 # 🔹 Удаление документа и драйвера
