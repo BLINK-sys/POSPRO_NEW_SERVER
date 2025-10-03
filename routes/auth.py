@@ -12,6 +12,9 @@ auth_bp = Blueprint('auth', __name__)
 @auth_bp.route('/register', methods=['POST'])
 def register():
     data = request.json or {}
+    
+    # Логируем полученные данные для отладки
+    print(f"Registration data received: {data}")
 
     organization_type = data.get('organizationType')
     email = data.get('email')
@@ -19,35 +22,61 @@ def register():
     delivery_address = data.get('deliveryAddress')
     password = data.get('password')
 
+    print(f"Parsed data - organization_type: {organization_type}, email: {email}, phone: {phone}, delivery_address: {delivery_address}, password: {'***' if password else None}")
+
     if not all([organization_type, email, phone, delivery_address, password]):
-        return jsonify({'error': 'Недостаточно данных'}), 400
+        missing_fields = []
+        if not organization_type: missing_fields.append('organizationType')
+        if not email: missing_fields.append('email')
+        if not phone: missing_fields.append('phone')
+        if not delivery_address: missing_fields.append('deliveryAddress')
+        if not password: missing_fields.append('password')
+        
+        error_msg = f'Недостаточно данных. Отсутствуют поля: {", ".join(missing_fields)}'
+        print(f"Registration error: {error_msg}")
+        return jsonify({'error': error_msg}), 400
 
     if SystemUser.query.filter_by(email=email).first() or User.query.filter_by(email=email).first():
-        return jsonify({'error': 'Пользователь с таким email уже существует'}), 400
+        error_msg = 'Пользователь с таким email уже существует'
+        print(f"Registration error: {error_msg}")
+        return jsonify({'error': error_msg}), 400
 
-    user = User(
-        organization_type=organization_type,
-        email=email,
-        phone=phone,
-        delivery_address=delivery_address,
-    )
+    try:
+        user = User(
+            organization_type=organization_type,
+            email=email,
+            phone=phone,
+            delivery_address=delivery_address,
+        )
 
-    if organization_type == 'individual':
-        user.full_name = data.get('fullName')
-    elif organization_type == 'ip':
-        user.iin = data.get('iin')
-        user.ip_name = data.get('ipName')
-    elif organization_type == 'too':
-        user.bin = data.get('bin')
-        user.too_name = data.get('tooName')
-    else:
-        return jsonify({'error': 'Неверный тип организации'}), 400
+        if organization_type == 'individual':
+            user.full_name = data.get('fullName')
+            print(f"Individual user - full_name: {user.full_name}")
+        elif organization_type == 'ip':
+            user.iin = data.get('iin')
+            user.ip_name = data.get('ipName')
+            print(f"IP user - iin: {user.iin}, ip_name: {user.ip_name}")
+        elif organization_type == 'too':
+            user.bin = data.get('bin')
+            user.too_name = data.get('tooName')
+            print(f"TOO user - bin: {user.bin}, too_name: {user.too_name}")
+        else:
+            error_msg = 'Неверный тип организации'
+            print(f"Registration error: {error_msg}")
+            return jsonify({'error': error_msg}), 400
 
-    user.set_password(password)
-    db.session.add(user)
-    db.session.commit()
-
-    return jsonify({'message': 'Пользователь зарегистрирован', 'id': user.id})
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+        
+        print(f"User registered successfully with ID: {user.id}")
+        return jsonify({'message': 'Пользователь зарегистрирован', 'id': user.id})
+        
+    except Exception as e:
+        db.session.rollback()
+        error_msg = f'Ошибка регистрации: {str(e)}'
+        print(f"Registration error: {error_msg}")
+        return jsonify({'error': error_msg}), 400
 
 
 @auth_bp.route('/login', methods=['POST'])
