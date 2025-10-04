@@ -15,12 +15,19 @@ upload_bp = Blueprint('upload', __name__)
 def sanitize_filename(filename):
     """Сохраняет русские и латинские буквы, цифры, _, -, ."""
     print(f"Original filename: {filename}")
+    print(f"Original filename bytes: {filename.encode('utf-8')}")
     
-    # Просто заменим пробелы и уберем опасные символы — без перекодирования
+    # НЕ используем NFKD для кириллицы, так как это ломает русские символы
+    # filename = unicodedata.normalize('NFKD', filename)  # Убираем эту строку
+    
     filename = filename.replace(' ', '_')
-    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    print(f"After space replace: {filename}")
     
-    print(f"Sanitized filename: {filename}")
+    # Более мягкая очистка - убираем только опасные символы
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)  # Убираем только системные символы
+    print(f"After regex: {filename}")
+    print(f"Final filename bytes: {filename.encode('utf-8')}")
+    
     return filename
 
 
@@ -603,7 +610,7 @@ def get_documents(product_id):
     
     result = [{
         'id': d.id,
-        'filename': d.safe_filename,
+        'filename': d.filename,
         'url': d.url,
         'file_type': d.file_type,
         'mime_type': d.mime_type
@@ -626,7 +633,7 @@ def get_drivers(product_id):
     
     result = [{
         'id': d.id,
-        'filename': d.safe_filename,
+        'filename': d.filename,
         'url': d.url,
         'file_type': d.file_type,
         'mime_type': d.mime_type
