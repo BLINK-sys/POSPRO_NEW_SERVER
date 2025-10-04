@@ -55,6 +55,7 @@ def sync_media_from_filesystem(product_id):
     """
     Синхронизирует медиафайлы из файловой системы с базой данных.
     Создает записи в БД для файлов, которые существуют на диске, но отсутствуют в БД.
+    Удаляет записи из БД для файлов, которые отсутствуют на диске.
     """
     print(f"Syncing media files from filesystem for product {product_id}")
     media_folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
@@ -62,6 +63,9 @@ def sync_media_from_filesystem(product_id):
     
     if not os.path.exists(media_folder):
         print(f"Media folder does not exist: {media_folder}")
+        # Удаляем все записи медиа для этого товара, так как папки нет
+        ProductMedia.query.filter_by(product_id=product_id).delete()
+        db.session.commit()
         return
     
     # Получаем список файлов в папке (исключаем папки documents и drivers)
@@ -77,7 +81,21 @@ def sync_media_from_filesystem(product_id):
         print(f"Ошибка при чтении папки медиа: {e}")
         return
     
-    # Для каждого файла проверяем, есть ли запись в БД
+    # Получаем все записи медиа для этого товара из БД
+    db_media = ProductMedia.query.filter_by(product_id=product_id).all()
+    print(f"Media records in DB: {len(db_media)}")
+    
+    # Создаем множество URL файлов на диске
+    disk_urls = {f'/uploads/products/{product_id}/{filename}' for filename in files}
+    print(f"Disk URLs: {disk_urls}")
+    
+    # Удаляем записи из БД для файлов, которых нет на диске
+    for media in db_media:
+        if media.url not in disk_urls:
+            print(f"Removing DB record for missing file: {media.url}")
+            db.session.delete(media)
+    
+    # Создаем записи в БД для файлов, которых нет в БД
     for filename in files:
         file_url = f'/uploads/products/{product_id}/{filename}'
         
@@ -100,11 +118,18 @@ def sync_media_from_filesystem(product_id):
             
             try:
                 db.session.add(new_media)
-                db.session.commit()
                 print(f"Создана запись в БД для медиафайла: {filename}")
             except Exception as e:
                 print(f"Ошибка при создании записи для медиафайла {filename}: {e}")
                 db.session.rollback()
+    
+    # Сохраняем все изменения
+    try:
+        db.session.commit()
+        print("Media sync completed successfully")
+    except Exception as e:
+        print(f"Ошибка при сохранении изменений синхронизации: {e}")
+        db.session.rollback()
 
 
 def sync_documents_from_filesystem(product_id):
@@ -484,18 +509,33 @@ def add_media(product_id):
 # 🔹 Удалить медиа
 @upload_bp.route('/media/<int:media_id>', methods=['DELETE'])
 def delete_media(media_id):
+    print(f"Deleting media with ID: {media_id}")
     media = ProductMedia.query.get_or_404(media_id)
+    
+    print(f"Media found: ID={media.id}, URL={media.url}, Type={media.media_type}")
 
     if media.url.startswith('/uploads/'):
         try:
             filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], media.url.lstrip('/uploads/'))
+            print(f"Attempting to delete file: {filepath}")
+            print(f"File exists: {os.path.exists(filepath)}")
+            
             if os.path.exists(filepath):
                 os.remove(filepath)
+                print(f"File deleted successfully: {filepath}")
+            else:
+                print(f"File not found: {filepath}")
         except Exception as e:
             print(f"Ошибка удаления файла: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print(f"Media URL does not start with /uploads/: {media.url}")
 
+    print(f"Deleting media record from database: ID={media.id}")
     db.session.delete(media)
     db.session.commit()
+    print(f"Media record deleted successfully")
     return jsonify({'message': 'Media deleted'})
 
 
