@@ -109,9 +109,6 @@ def create_app():
         
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
-        
-        # Исправляем последовательность product_media
-        fix_product_media_sequence()
 
     return app
 
@@ -147,58 +144,13 @@ def create_default_system_user():
             db.session.add(admin_user)
             db.session.commit()
             
-            print("Системный пользователь создан: bocan.anton@mail.ru")
+            print("✅ Системный пользователь создан: bocan.anton@mail.ru")
         else:
-            print("Системный пользователь уже существует: bocan.anton@mail.ru")
+            print("ℹ️ Системный пользователь уже существует: bocan.anton@mail.ru")
             
     except Exception as e:
-        print(f"Ошибка при создании системного пользователя: {e}")
+        print(f"❌ Ошибка при создании системного пользователя: {e}")
         db.session.rollback()
-
-
-def fix_product_media_sequence():
-    """Исправляет последовательность ID в таблице product_media"""
-    try:
-        import psycopg2
-        from config import Config
-        
-        # Получаем URL базы данных
-        db_url = Config.SQLALCHEMY_DATABASE_URI
-        print(f"Checking product_media sequence...")
-        
-        # Подключаемся к базе данных
-        conn = psycopg2.connect(db_url)
-        cursor = conn.cursor()
-        
-        # Получаем максимальный ID
-        cursor.execute("SELECT MAX(id) FROM product_media")
-        max_id = cursor.fetchone()[0]
-        
-        if max_id:
-            # Проверяем текущее значение последовательности
-            cursor.execute("SELECT last_value FROM product_media_id_seq")
-            last_value = cursor.fetchone()[0]
-            
-            # Если последовательность отстает от максимального ID
-            if last_value < max_id:
-                print(f"WARNING: product_media sequence is behind! Max ID: {max_id}, sequence: {last_value}")
-                
-                # Исправляем последовательность
-                new_value = max_id + 1
-                cursor.execute(f"SELECT setval('product_media_id_seq', {new_value})")
-                conn.commit()
-                
-                print(f"SUCCESS: product_media sequence updated to {new_value}")
-            else:
-                print(f"SUCCESS: product_media sequence is OK (max_id: {max_id}, sequence: {last_value})")
-        
-        cursor.close()
-        conn.close()
-        
-    except Exception as e:
-        print(f"Error fixing product_media sequence: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 app = create_app()
