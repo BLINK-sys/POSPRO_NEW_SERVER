@@ -546,11 +546,18 @@ def reorder_media(product_id):
         data = request.json
         print(f"Reordering media for product {product_id}: {data}")
         
-        if not isinstance(data, list):
-            print("Invalid data format - not a list")
+        # Поддерживаем как старый формат (список), так и новый (объект с items)
+        if isinstance(data, dict) and 'items' in data:
+            items = data['items']
+            print(f"Using items from object: {items}")
+        elif isinstance(data, list):
+            items = data
+            print(f"Using direct list: {items}")
+        else:
+            print("Invalid data format - expected list or object with 'items'")
             return jsonify({'error': 'Invalid data format'}), 400
 
-        for item in data:
+        for item in items:
             # Обрабатываем случай, когда item может быть вложенным объектом
             item_id = item.get('id')
             if isinstance(item_id, dict):
