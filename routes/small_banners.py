@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from extensions import db
 from models.small_banner_card import SmallBanner
 import os
@@ -90,7 +90,7 @@ def upload_small_banner_image():
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         
         # Создаем директорию для конкретного баннера
-        upload_dir = f'uploads/banners/small_banners/{banner_id}'
+        upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'banners', 'small_banners', str(banner_id))
         os.makedirs(upload_dir, exist_ok=True)
         print(f"📁 Upload directory: {upload_dir}")
         
