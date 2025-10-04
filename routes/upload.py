@@ -17,6 +17,17 @@ def sanitize_filename(filename):
     print(f"Original filename: {filename}")
     print(f"Original filename bytes: {filename.encode('utf-8')}")
     
+    # Проверяем на искаженные символы и пытаемся исправить
+    if 'Đ' in filename or 'Ð' in filename:
+        print("Detected corrupted characters, attempting to fix...")
+        try:
+            # Пытаемся исправить двойное кодирование
+            fixed = filename.encode('utf-8').decode('latin1').encode('cp1251').decode('utf-8')
+            print(f"Fixed filename: {fixed}")
+            filename = fixed
+        except Exception as e:
+            print(f"Failed to fix encoding: {e}")
+    
     # НЕ используем NFKD для кириллицы, так как это ломает русские символы
     # filename = unicodedata.normalize('NFKD', filename)  # Убираем эту строку
     

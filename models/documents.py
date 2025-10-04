@@ -13,10 +13,22 @@ class ProductDocument(db.Model):
     def safe_filename(self):
         """Возвращает безопасное имя файла с правильной кодировкой"""
         try:
-            # Пытаемся декодировать как UTF-8
+            # Сначала проверяем, содержит ли имя файла искаженные символы
+            if 'Đ' in self.filename or 'Ð' in self.filename:
+                # Пытаемся исправить двойное кодирование
+                try:
+                    # Декодируем как UTF-8, затем как latin1, затем как cp1251, затем обратно в UTF-8
+                    fixed = self.filename.encode('utf-8').decode('latin1').encode('cp1251').decode('utf-8')
+                    print(f"Исправлено имя файла: {self.filename} -> {fixed}")
+                    return fixed
+                except Exception as e:
+                    print(f"Ошибка исправления двойного кодирования: {e}")
+            
+            # Если нет искаженных символов, возвращаем как есть
             return self.filename
+            
         except UnicodeDecodeError:
-            # Если не удалось, пытаемся исправить кодировку
+            # Если не удалось декодировать, пытаемся исправить кодировку
             try:
                 # Пробуем разные кодировки
                 for encoding in ['cp1251', 'latin1', 'iso-8859-1']:
