@@ -610,7 +610,7 @@ def get_documents(product_id):
     
     result = [{
         'id': d.id,
-        'filename': d.filename,
+        'filename': d.safe_filename,
         'url': d.url,
         'file_type': d.file_type,
         'mime_type': d.mime_type
@@ -633,7 +633,7 @@ def get_drivers(product_id):
     
     result = [{
         'id': d.id,
-        'filename': d.filename,
+        'filename': d.safe_filename,
         'url': d.url,
         'file_type': d.file_type,
         'mime_type': d.mime_type
