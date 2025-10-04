@@ -14,9 +14,20 @@ upload_bp = Blueprint('upload', __name__)
 
 def sanitize_filename(filename):
     """Сохраняет русские и латинские буквы, цифры, _, -, ."""
-    filename = unicodedata.normalize('NFKD', filename)
+    print(f"Original filename: {filename}")
+    print(f"Original filename bytes: {filename.encode('utf-8')}")
+    
+    # НЕ используем NFKD для кириллицы, так как это ломает русские символы
+    # filename = unicodedata.normalize('NFKD', filename)  # Убираем эту строку
+    
     filename = filename.replace(' ', '_')
-    filename = re.sub(r'[^\wа-яА-ЯёЁ\.\-]', '', filename)
+    print(f"After space replace: {filename}")
+    
+    # Более мягкая очистка - убираем только опасные символы
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)  # Убираем только системные символы
+    print(f"After regex: {filename}")
+    print(f"Final filename bytes: {filename.encode('utf-8')}")
+    
     return filename
 
 
@@ -748,14 +759,32 @@ def delete_driver(doc_id):
 
 def _delete_document_or_driver(doc_id, file_type):
     doc = ProductDocument.query.filter_by(id=doc_id, file_type=file_type).first_or_404()
+    
+    print(f"Deleting {file_type}: {doc.filename}")
+    print(f"Database URL: {doc.url}")
+    print(f"Database filename: {doc.filename}")
 
     if doc.url.startswith('/uploads/'):
         try:
             filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.url.lstrip('/uploads/'))
+            print(f"Full file path: {filepath}")
+            print(f"File exists: {os.path.exists(filepath)}")
+            
+            # Проверяем содержимое директории
+            dir_path = os.path.dirname(filepath)
+            if os.path.exists(dir_path):
+                files_in_dir = os.listdir(dir_path)
+                print(f"Files in directory {dir_path}: {files_in_dir}")
+            
             if os.path.exists(filepath):
                 os.remove(filepath)
+                print(f"File deleted successfully: {filepath}")
+            else:
+                print(f"File not found: {filepath}")
         except Exception as e:
             print(f"Ошибка удаления файла ({file_type}): {e}")
+            import traceback
+            traceback.print_exc()
 
     db.session.delete(doc)
     db.session.commit()
