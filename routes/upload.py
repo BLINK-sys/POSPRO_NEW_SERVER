@@ -15,49 +15,12 @@ upload_bp = Blueprint('upload', __name__)
 def sanitize_filename(filename):
     """Сохраняет русские и латинские буквы, цифры, _, -, ."""
     print(f"Original filename: {filename}")
-    print(f"Original filename bytes: {filename.encode('utf-8')}")
     
-    # Проверяем на искаженные символы и пытаемся исправить
-    if 'Ð' in filename:
-        print("Detected corrupted characters, attempting to fix...")
-        
-        # Способ 1: UTF-8 → Latin1 → CP1251 → UTF-8
-        try:
-            fixed = filename.encode('utf-8').decode('latin1').encode('cp1251').decode('utf-8')
-            print(f"Fixed filename method 1: {fixed}")
-            filename = fixed
-        except Exception as e:
-            print(f"Method 1 failed: {e}")
-            
-            # Способ 2: Прямое декодирование как CP1251
-            try:
-                fixed = filename.encode('latin1').decode('cp1251')
-                print(f"Fixed filename method 2: {fixed}")
-                filename = fixed
-            except Exception as e2:
-                print(f"Method 2 failed: {e2}")
-                
-                # Способ 3: Через bytes
-                try:
-                    corrupted_bytes = filename.encode('utf-8')
-                    latin1_decoded = corrupted_bytes.decode('latin1')
-                    fixed = latin1_decoded.encode('cp1251').decode('utf-8')
-                    print(f"Fixed filename method 3: {fixed}")
-                    filename = fixed
-                except Exception as e3:
-                    print(f"Method 3 failed: {e3}")
-    
-    # НЕ используем NFKD для кириллицы, так как это ломает русские символы
-    # filename = unicodedata.normalize('NFKD', filename)  # Убираем эту строку
-    
+    # Просто заменим пробелы и уберем опасные символы — без перекодирования
     filename = filename.replace(' ', '_')
-    print(f"After space replace: {filename}")
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
     
-    # Более мягкая очистка - убираем только опасные символы
-    filename = re.sub(r'[<>:"/\\|?*]', '', filename)  # Убираем только системные символы
-    print(f"After regex: {filename}")
-    print(f"Final filename bytes: {filename.encode('utf-8')}")
-    
+    print(f"Sanitized filename: {filename}")
     return filename
 
 
