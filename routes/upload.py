@@ -458,7 +458,57 @@ def get_media(product_id):
     return jsonify(result)
 
 
-# 🔹 Добавить медиа по URL
+# 🔹 Добавить медиа по URL (новый маршрут для фронтенда)
+@upload_bp.route('/media', methods=['POST', 'OPTIONS'])
+def add_media_by_url():
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    try:
+        data = request.json
+        print(f"Adding media by URL: {data}")
+        
+        if not data:
+            print("No data provided")
+            return jsonify({'error': 'No data provided'}), 400
+        
+        product_id = data.get('product_id')
+        url_value = data.get('url')
+        media_type_value = data.get('media_type')
+        
+        if not all([product_id, url_value, media_type_value]):
+            print(f"Missing required fields: product_id={product_id}, url={url_value}, media_type={media_type_value}")
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        # Обрабатываем случай, когда url может быть вложенным объектом
+        if isinstance(url_value, dict):
+            url_value = url_value.get('url')
+            print(f"Extracted url from nested object: {url_value}")
+        
+        # Обрабатываем случай, когда media_type может быть вложенным объектом
+        if isinstance(media_type_value, dict):
+            media_type_value = media_type_value.get('media_type')
+            print(f"Extracted media_type from nested object: {media_type_value}")
+        
+        # Создаем новую запись в БД
+        media = ProductMedia(
+            product_id=product_id,
+            url=url_value,
+            media_type=media_type_value
+        )
+        db.session.add(media)
+        db.session.commit()
+        
+        print(f"Media added successfully with ID: {media.id}")
+        return jsonify({'message': 'Media added', 'id': media.id}), 201
+        
+    except Exception as e:
+        print(f"Error adding media: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': f'Failed to add media: {str(e)}'}), 500
+
+
+# 🔹 Добавить медиа по URL (старый маршрут для совместимости)
 @upload_bp.route('/media/<int:product_id>', methods=['POST'])
 def add_media(product_id):
     try:
