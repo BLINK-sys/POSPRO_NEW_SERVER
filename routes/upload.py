@@ -289,49 +289,66 @@ def delete_category_image(category_id):
 # 🔹 Загрузка медиафайла для товара
 @upload_bp.route('/upload_product', methods=['POST'])
 def upload_product_file():
-    print("Handling product file upload")
-    print(f"Form data: {request.form}")
+    print("=" * 50)
+    print("HANDLING PRODUCT FILE UPLOAD")
+    print("=" * 50)
+    print(f"Request method: {request.method}")
+    print(f"Content-Type: {request.content_type}")
+    print(f"Form data: {dict(request.form)}")
     print(f"Files: {list(request.files.keys())}")
     
     product_id = request.form.get('product_id')
-    print(f"Product ID: {product_id}")
+    print(f"Product ID from form: {product_id} (type: {type(product_id)})")
     
     if 'file' not in request.files or not product_id:
         error_msg = f"No file or product_id provided. Files: {list(request.files.keys())}, product_id: {product_id}"
-        print(error_msg)
+        print(f"ERROR: {error_msg}")
         return jsonify({'error': error_msg}), 400
     
     # Преобразуем product_id в число
     try:
         product_id = int(product_id)
+        print(f"Product ID converted to int: {product_id}")
     except (ValueError, TypeError):
-        print(f"Invalid product_id: {product_id}")
+        print(f"ERROR: Invalid product_id: {product_id}")
         return jsonify({'error': 'Invalid product_id'}), 400
 
     file = request.files['file']
-    print(f"File: {file.filename}, Content type: {file.content_type}")
+    print(f"File received: {file.filename}, Content type: {file.content_type}, Size: {file.content_length}")
     
     if file.filename == '':
-        print("No selected file")
+        print("ERROR: No selected file")
         return jsonify({'error': 'No selected file'}), 400
 
     filename = sanitize_filename(file.filename)
+    print(f"Sanitized filename: {filename}")
     
     # ✅ Автоматически определяем тип медиа на основе расширения файла
     media_type = get_media_type_from_filename(filename)
+    print(f"Detected media type: {media_type}")
     
     # Проверяем, что файл разрешен
     if not allowed_file(filename):
+        print(f"ERROR: File type not allowed: {filename}")
         return jsonify({'error': 'File type not allowed'}), 400
 
     folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
+    print(f"Upload folder: {folder}")
     os.makedirs(folder, exist_ok=True)
 
     filepath = os.path.join(folder, filename)
-    file.save(filepath)
+    print(f"Full file path: {filepath}")
+    
+    try:
+        file.save(filepath)
+        print(f"File saved successfully to: {filepath}")
+    except Exception as e:
+        print(f"ERROR saving file: {e}")
+        return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
 
     # ✅ Создаем URL и записываем в БД
     file_url = f'/uploads/products/{product_id}/{filename}'
+    print(f"File URL: {file_url}")
     
     try:
         print(f"Creating database record: product_id={product_id}, url={file_url}, media_type={media_type}, filename={filename}")
@@ -344,7 +361,7 @@ def upload_product_file():
         db.session.add(media)
         db.session.commit()
         
-        print(f"Product file uploaded successfully with ID: {media.id}")
+        print(f"SUCCESS: Product file uploaded successfully with ID: {media.id}")
         
         return jsonify({
             'message': 'File uploaded and saved to database',
