@@ -300,6 +300,13 @@ def upload_product_file():
         error_msg = f"No file or product_id provided. Files: {list(request.files.keys())}, product_id: {product_id}"
         print(error_msg)
         return jsonify({'error': error_msg}), 400
+    
+    # Преобразуем product_id в число
+    try:
+        product_id = int(product_id)
+    except (ValueError, TypeError):
+        print(f"Invalid product_id: {product_id}")
+        return jsonify({'error': 'Invalid product_id'}), 400
 
     file = request.files['file']
     print(f"File: {file.filename}, Content type: {file.content_type}")
