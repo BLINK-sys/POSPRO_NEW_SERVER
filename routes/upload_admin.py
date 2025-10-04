@@ -6,6 +6,8 @@ import os
 import re
 import unicodedata
 from datetime import datetime
+from extensions import db
+from models.banner import Banner
 
 upload_admin_bp = Blueprint('upload_admin', __name__)
 
@@ -51,9 +53,33 @@ def upload_image():
     file_path = os.path.join(folder, final_filename)
     file.save(file_path)
 
+    # Сохраняем URL изображения в базу данных
+    image_url = f'/uploads/banners/{banner_id}/{final_filename}'
+    
+    try:
+        banner = Banner.query.get(banner_id)
+        if banner:
+            # Удаляем старое изображение, если есть
+            if banner.image and banner.image.startswith('/uploads/'):
+                try:
+                    old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], banner.image.lstrip('/uploads/'))
+                    if os.path.exists(old_file):
+                        os.remove(old_file)
+                except Exception as e:
+                    print(f"Ошибка удаления старого изображения баннера: {e}")
+            
+            banner.image = image_url
+            db.session.commit()
+            print(f"Banner image URL saved to database: {image_url}")
+        else:
+            print(f"Banner with ID {banner_id} not found")
+    except Exception as e:
+        print(f"Error saving banner image to database: {e}")
+        db.session.rollback()
+
     return jsonify({
         'message': 'Image uploaded',
-        'url': f'/uploads/banners/{banner_id}/{final_filename}'
+        'url': image_url
     })
 
 

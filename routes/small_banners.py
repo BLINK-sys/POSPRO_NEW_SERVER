@@ -102,6 +102,30 @@ def upload_small_banner_image():
         # Возвращаем относительный путь
         relative_path = f"/uploads/banners/small_banners/{banner_id}/{unique_filename}"
         print(f"✅ Upload successful: {relative_path}")
+        
+        # Сохраняем URL изображения в базу данных
+        try:
+            from models.small_banner_card import SmallBannerCard
+            banner = SmallBannerCard.query.get(banner_id)
+            if banner:
+                # Удаляем старое изображение, если есть
+                if banner.image_url and banner.image_url.startswith('/uploads/'):
+                    try:
+                        old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], banner.image_url.lstrip('/uploads/'))
+                        if os.path.exists(old_file):
+                            os.remove(old_file)
+                    except Exception as e:
+                        print(f"Ошибка удаления старого изображения малого баннера: {e}")
+                
+                banner.image_url = relative_path
+                db.session.commit()
+                print(f"Small banner image URL saved to database: {relative_path}")
+            else:
+                print(f"Small banner with ID {banner_id} not found")
+        except Exception as e:
+            print(f"Error saving small banner image to database: {e}")
+            db.session.rollback()
+        
         return jsonify({
             'success': True,
             'message': 'Изображение загружено',
