@@ -255,5 +255,27 @@ def serve_small_banner_image(banner_id, filename):
     return send_from_directory(upload_dir, filename)
 
 
+@app.route('/uploads/<path:filename>')
+def serve_uploaded_file(filename):
+    """Универсальный маршрут для обслуживания загруженных файлов"""
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
+    # Отладочная информация
+    print(f"File request: {filename}")
+    print(f"Full path: {file_path}")
+    print(f"File exists: {os.path.exists(file_path)}")
+    print(f"UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
+    
+    if not os.path.exists(file_path):
+        print(f"File not found: {file_path}")
+        return "File not found", 404
+    
+    # Определяем директорию и имя файла
+    directory = os.path.dirname(file_path)
+    file_name = os.path.basename(file_path)
+    
+    return send_from_directory(directory, file_name)
+
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
