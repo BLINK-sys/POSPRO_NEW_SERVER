@@ -277,7 +277,7 @@ def upload_category_image(category_id):
     # Удалить старое изображение, если есть
     if category.image_url and category.image_url.startswith('/uploads/'):
         try:
-            old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], category.image_url.lstrip('/uploads/'))
+            old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], category.image_url[9:])  # Remove '/uploads/' prefix
             if os.path.exists(old_file):
                 os.remove(old_file)
         except Exception as e:
@@ -301,7 +301,7 @@ def delete_category_image(category_id):
         return jsonify({'message': 'No image to delete'}), 200
 
     # Путь к файлу
-    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], category.image_url.lstrip('/uploads/'))
+    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], category.image_url[9:])  # Remove '/uploads/' prefix
 
     try:
         if os.path.exists(file_path):
@@ -516,7 +516,7 @@ def delete_media(media_id):
 
     if media.url.startswith('/uploads/'):
         try:
-            filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], media.url.lstrip('/uploads/'))
+            filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], media.url[9:])  # Remove '/uploads/' prefix
             print(f"Attempting to delete file: {filepath}")
             print(f"File exists: {os.path.exists(filepath)}")
             
@@ -806,7 +806,7 @@ def _delete_document_or_driver(doc_id, file_type):
 
     if doc.url.startswith('/uploads/'):
         try:
-            filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.url.lstrip('/uploads/'))
+            filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.url[9:])  # Remove '/uploads/' prefix
             print(f"Full file path: {filepath}")
             print(f"File exists: {os.path.exists(filepath)}")
             

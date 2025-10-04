@@ -111,7 +111,7 @@ def upload_small_banner_image():
                 # Удаляем старое изображение, если есть
                 if banner.image_url and banner.image_url.startswith('/uploads/'):
                     try:
-                        old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], banner.image_url.lstrip('/uploads/'))
+                        old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], banner.image_url[9:])  # Remove '/uploads/' prefix
                         if os.path.exists(old_file):
                             os.remove(old_file)
                     except Exception as e:
@@ -163,7 +163,7 @@ def delete_small_banner_image():
         # Извлекаем путь к файлу из URL
         if image_url.startswith('/uploads/'):
             # Создаем полный путь используя UPLOAD_FOLDER
-            relative_path = image_url.lstrip('/uploads/')
+            relative_path = image_url[9:]  # Remove '/uploads/' prefix
             file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], relative_path)
             
             print(f"📁 Full file path: {file_path}")

@@ -62,7 +62,7 @@ def upload_image():
             # Удаляем старое изображение, если есть
             if banner.image and banner.image.startswith('/uploads/'):
                 try:
-                    old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], banner.image.lstrip('/uploads/'))
+                    old_file = os.path.join(current_app.config['UPLOAD_FOLDER'], banner.image[9:])  # Remove '/uploads/' prefix
                     if os.path.exists(old_file):
                         os.remove(old_file)
                 except Exception as e:
