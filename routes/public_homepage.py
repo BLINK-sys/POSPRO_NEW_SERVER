@@ -30,6 +30,9 @@ def get_homepage_data():
         'button_text': b.button_text,
         'button_link': b.button_link,
         'show_button': b.show_button,
+        'open_in_new_tab': b.open_in_new_tab,
+        'button_color': b.button_color,
+        'button_text_color': b.button_text_color,
         'order': b.order
     } for b in banners]
 
