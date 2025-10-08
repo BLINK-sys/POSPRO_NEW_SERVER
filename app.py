@@ -29,7 +29,6 @@ from routes.orders import orders_bp
 from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
-from routes.characteristics_list import characteristics_list_bp
 from models.systemuser import SystemUser
 
 
@@ -46,7 +45,6 @@ def create_app():
     app.register_blueprint(categories_bp, url_prefix="/categories")  # /categories/*
     app.register_blueprint(products_bp, url_prefix="/products")  # /products/*
     app.register_blueprint(characteristics_bp, url_prefix="/characteristics")  # /characteristics/*
-    app.register_blueprint(characteristics_list_bp, url_prefix="/api")  # /api/characteristics-list/*
 
     # 🔹 Загрузка файлов и медиа
     app.register_blueprint(upload_bp, url_prefix='/upload')  # /upload/*
