@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from extensions import db
 from models.characteristic import ProductCharacteristic
+from models.characteristics_list import CharacteristicsList
 
 characteristics_bp = Blueprint('characteristics', __name__)
 
@@ -9,12 +10,22 @@ characteristics_bp = Blueprint('characteristics', __name__)
 def get_characteristics(product_id):
     chars = ProductCharacteristic.query.filter_by(product_id=product_id).order_by(
         ProductCharacteristic.sort_order).all()
-    return jsonify([{
-        'id': c.id,
-        'key': c.key,
-        'value': c.value,
-        'sort_order': c.sort_order
-    } for c in chars])
+    
+    result = []
+    for c in chars:
+        # Получаем данные из справочника характеристик
+        characteristic_info = CharacteristicsList.query.get(c.characteristic_id)
+        if characteristic_info:
+            result.append({
+                'id': c.id,
+                'characteristic_id': c.characteristic_id,
+                'key': characteristic_info.characteristic_key,
+                'value': c.value,
+                'unit_of_measurement': characteristic_info.unit_of_measurement,
+                'sort_order': c.sort_order
+            })
+    
+    return jsonify(result)
 
 
 @characteristics_bp.route('/<int:product_id>', methods=['POST'])
@@ -22,7 +33,7 @@ def add_characteristic(product_id):
     data = request.json
     char = ProductCharacteristic(
         product_id=product_id,
-        key=data['key'],
+        characteristic_id=data['characteristic_id'],
         value=data['value'],
         sort_order=data.get('sort_order', 0)
     )
@@ -35,7 +46,7 @@ def add_characteristic(product_id):
 def update_characteristic(char_id):
     char = ProductCharacteristic.query.get_or_404(char_id)
     data = request.json
-    char.key = data['key']
+    char.characteristic_id = data['characteristic_id']
     char.value = data['value']
     char.sort_order = data.get('sort_order', char.sort_order)
     db.session.commit()

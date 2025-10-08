@@ -11,7 +11,7 @@ characteristics_list_bp = Blueprint('characteristics_list', __name__)
 def get_characteristics_list():
     """Получить список всех характеристик"""
     try:
-        characteristics = CharacteristicsList.query.all()
+        characteristics = CharacteristicsList.query.order_by(CharacteristicsList.id.desc()).all()
         return jsonify({
             'success': True,
             'data': [char.to_dict() for char in characteristics]
