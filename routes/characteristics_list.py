@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 characteristics_list_bp = Blueprint('characteristics_list', __name__)
 
-@characteristics_list_bp.route('/characteristics-list', methods=['GET'])
+@characteristics_list_bp.route('/', methods=['GET'])
 @jwt_required()
 def get_characteristics_list():
     """Получить список всех характеристик"""
@@ -22,7 +22,7 @@ def get_characteristics_list():
             'message': f'Ошибка при получении списка характеристик: {str(e)}'
         }), 500
 
-@characteristics_list_bp.route('/characteristics-list/<int:characteristic_id>', methods=['GET'])
+@characteristics_list_bp.route('/<int:characteristic_id>', methods=['GET'])
 @jwt_required()
 def get_characteristic(characteristic_id):
     """Получить характеристику по ID"""
@@ -44,7 +44,7 @@ def get_characteristic(characteristic_id):
             'message': f'Ошибка при получении характеристики: {str(e)}'
         }), 500
 
-@characteristics_list_bp.route('/characteristics-list', methods=['POST'])
+@characteristics_list_bp.route('/', methods=['POST'])
 @jwt_required()
 def create_characteristic():
     """Создать новую характеристику (только для админов)"""
@@ -110,7 +110,7 @@ def create_characteristic():
             'message': f'Ошибка при создании характеристики: {str(e)}'
         }), 500
 
-@characteristics_list_bp.route('/characteristics-list/<int:characteristic_id>', methods=['PUT'])
+@characteristics_list_bp.route('/<int:characteristic_id>', methods=['PUT'])
 @jwt_required()
 def update_characteristic(characteristic_id):
     """Обновить характеристику (только для админов)"""
@@ -184,7 +184,7 @@ def update_characteristic(characteristic_id):
             'message': f'Ошибка при обновлении характеристики: {str(e)}'
         }), 500
 
-@characteristics_list_bp.route('/characteristics-list/<int:characteristic_id>', methods=['DELETE'])
+@characteristics_list_bp.route('/<int:characteristic_id>', methods=['DELETE'])
 @jwt_required()
 def delete_characteristic(characteristic_id):
     """Удалить характеристику (только для админов)"""
