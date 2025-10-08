@@ -74,20 +74,38 @@ def reorder_characteristics(product_id):
         return '', 200
 
     data = request.get_json()
+    
+    print(f"DEBUG: Received data: {data}")  # Отладочная информация
 
     if not isinstance(data, list):
         return jsonify({'error': 'Invalid data format'}), 400
 
     for item in data:
+        print(f"DEBUG: Processing item: {item}")  # Отладочная информация
+        
         char_id = item.get('id')
         sort_order = item.get('sort_order')
 
         if char_id is None or sort_order is None:
+            print(f"DEBUG: Skipping item - missing id or sort_order")
             continue
 
+        # Убеждаемся, что char_id это число, а не объект
+        if isinstance(char_id, dict):
+            print(f"DEBUG: char_id is dict: {char_id}")
+            char_id = char_id.get('id')
+        
+        if not char_id:
+            print(f"DEBUG: No valid char_id found")
+            continue
+
+        print(f"DEBUG: Looking for characteristic with id={char_id}, product_id={product_id}")
         char = ProductCharacteristic.query.filter_by(id=char_id, product_id=product_id).first()
         if char:
+            print(f"DEBUG: Found characteristic, updating sort_order to {sort_order}")
             char.sort_order = sort_order
+        else:
+            print(f"DEBUG: Characteristic not found")
 
     db.session.commit()
     return jsonify({'message': 'Characteristics reordered'}), 200

@@ -279,12 +279,25 @@ def get_product_by_slug(slug):
 
     # 🧩 Все характеристики
     characteristics = ProductCharacteristic.query.filter_by(product_id=product.id).all()
-    characteristics_data = [{
-        'id': c.id,
-        'key': c.key,
-        'value': c.value,
-        'sort_order': c.sort_order
-    } for c in characteristics]
+    characteristics_data = []
+    for c in characteristics:
+        # Получаем данные из справочника характеристик по ID из поля key
+        try:
+            characteristic_id = int(c.key) if c.key else None
+        except (ValueError, TypeError):
+            characteristic_id = None
+            
+        if characteristic_id:
+            from models.characteristics_list import CharacteristicsList
+            characteristic_info = CharacteristicsList.query.get(characteristic_id)
+            if characteristic_info:
+                characteristics_data.append({
+                    'id': c.id,
+                    'key': characteristic_info.characteristic_key,
+                    'value': c.value,
+                    'sort_order': c.sort_order,
+                    'unit_of_measurement': characteristic_info.unit_of_measurement or ''
+                })
 
     # 🖼️ Все медиафайлы
     media = ProductMedia.query.filter_by(product_id=product.id).order_by(ProductMedia.order).all()
