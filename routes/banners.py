@@ -20,6 +20,9 @@ def get_banners():
         'button_text': b.button_text,
         'button_link': b.button_link,
         'show_button': b.show_button,
+        'open_in_new_tab': b.open_in_new_tab,
+        'button_color': b.button_color,
+        'button_text_color': b.button_text_color,
         'active': b.active
     } for b in banners])
 
@@ -41,7 +44,10 @@ def add_banner():
         active=data.get('active', True),
         button_text=data.get('button_text'),
         button_link=data.get('button_link'),
-        show_button=data.get('show_button', False)
+        show_button=data.get('show_button', False),
+        open_in_new_tab=data.get('open_in_new_tab', False),
+        button_color=data.get('button_color', '#000000'),
+        button_text_color=data.get('button_text_color', '#ffffff')
     )
     db.session.add(banner)
     db.session.commit()
@@ -61,6 +67,9 @@ def update_banner(banner_id):
     banner.button_text = data.get('button_text', banner.button_text)
     banner.button_link = data.get('button_link', banner.button_link)
     banner.show_button = data.get('show_button', banner.show_button)
+    banner.open_in_new_tab = data.get('open_in_new_tab', banner.open_in_new_tab)
+    banner.button_color = data.get('button_color', banner.button_color)
+    banner.button_text_color = data.get('button_text_color', banner.button_text_color)
 
     db.session.commit()
     return jsonify({'message': 'Баннер обновлён'})
