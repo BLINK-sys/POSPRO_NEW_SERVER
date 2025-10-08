@@ -1,70 +1,45 @@
 #!/usr/bin/env python3
 """
-Скрипт для создания таблицы characteristics_list
+Скрипт для создания таблицы characteristics_list в базе данных
 """
 
 import os
 import sys
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from dotenv import load_dotenv
 
-# Добавляем текущую директорию в путь для импорта
+# Добавляем текущую директорию в путь Python
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from config import Config
+# Загружаем переменные окружения только для локальной разработки
+if not os.getenv("RENDER"):
+    load_dotenv()
+
+from app import create_app
+from extensions import db
+from models.characteristics_list import CharacteristicsList
 
 def create_characteristics_list_table():
     """Создает таблицу characteristics_list"""
+    app = create_app()
     
-    # Создаем подключение к базе данных
-    engine = create_engine(Config.SQLALCHEMY_DATABASE_URI)
-    
-    try:
-        with engine.connect() as connection:
-            # SQL для создания таблицы characteristics_list
-            create_table_sql = """
-            CREATE TABLE IF NOT EXISTS characteristics_list (
-                id SERIAL PRIMARY KEY,
-                characteristic_key VARCHAR(100) NOT NULL UNIQUE,
-                unit_of_measurement VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """
+    with app.app_context():
+        try:
+            # Создаем таблицу
+            db.create_all()
+            print("✅ Таблица characteristics_list создана успешно!")
             
-            # Выполняем создание таблицы
-            connection.execute(text(create_table_sql))
-            connection.commit()
+            # Проверяем, что таблица создалась
+            result = db.engine.execute("SELECT to_regclass('characteristics_list')")
+            table_exists = result.fetchone()[0] is not None
             
-            print("SUCCESS: Таблица characteristics_list успешно создана")
-            
-            # Добавляем начальные данные
-            insert_data_sql = """
-            INSERT INTO characteristics_list (characteristic_key, unit_of_measurement) VALUES
-            ('ВЕС', 'кг'),
-            ('ДЛИНА', 'см'),
-            ('ШИРИНА', 'см'),
-            ('ВЫСОТА', 'см'),
-            ('ОБЪЕМ', 'л'),
-            ('МОЩНОСТЬ', 'Вт'),
-            ('НАПРЯЖЕНИЕ', 'В'),
-            ('ТОК', 'А'),
-            ('ЧАСТОТА', 'Гц'),
-            ('ТЕМПЕРАТУРА', '°C')
-            ON CONFLICT (characteristic_key) DO NOTHING;
-            """
-            
-            connection.execute(text(insert_data_sql))
-            connection.commit()
-            
-            print("SUCCESS: Начальные данные добавлены в таблицу characteristics_list")
-            
-    except SQLAlchemyError as e:
-        print(f"ERROR: Ошибка при создании таблицы: {e}")
-        return False
-    except Exception as e:
-        print(f"ERROR: Неожиданная ошибка: {e}")
-        return False
+            if table_exists:
+                print("✅ Таблица characteristics_list существует в базе данных")
+            else:
+                print("❌ Таблица characteristics_list не найдена")
+                
+        except Exception as e:
+            print(f"❌ Ошибка при создании таблицы: {e}")
+            return False
     
     return True
 
@@ -73,7 +48,7 @@ if __name__ == "__main__":
     success = create_characteristics_list_table()
     
     if success:
-        print("SUCCESS: Процесс завершен успешно!")
+        print("🎉 Готово!")
     else:
-        print("ERROR: Процесс завершен с ошибками!")
+        print("💥 Произошла ошибка!")
         sys.exit(1)

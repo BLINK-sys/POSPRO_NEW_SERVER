@@ -13,8 +13,6 @@ from routes.homepage_blocks import homepage_blocks_bp
 from routes.homepage_categories import homepage_categories_bp
 from routes.products import products_bp
 from routes.characteristics import characteristics_bp
-from routes.characteristics_list import characteristics_bp as characteristics_list_bp
-from routes.admin_setup import admin_setup_bp
 from routes.profile import profile_bp
 from routes.public_homepage import public_homepage_bp
 from routes.small_banners import small_banner_bp
@@ -31,6 +29,7 @@ from routes.orders import orders_bp
 from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
+from routes.characteristics_list import characteristics_list_bp
 from models.systemuser import SystemUser
 
 
@@ -47,8 +46,7 @@ def create_app():
     app.register_blueprint(categories_bp, url_prefix="/categories")  # /categories/*
     app.register_blueprint(products_bp, url_prefix="/products")  # /products/*
     app.register_blueprint(characteristics_bp, url_prefix="/characteristics")  # /characteristics/*
-    app.register_blueprint(characteristics_list_bp)  # /api/characteristics/*
-    app.register_blueprint(admin_setup_bp)  # /api/admin/setup/*
+    app.register_blueprint(characteristics_list_bp, url_prefix="/api")  # /api/characteristics-list/*
 
     # 🔹 Загрузка файлов и медиа
     app.register_blueprint(upload_bp, url_prefix='/upload')  # /upload/*
