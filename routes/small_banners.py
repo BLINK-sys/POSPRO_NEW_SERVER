@@ -25,7 +25,8 @@ def get_all_small_banners():
             'button_bg_color': b.button_bg_color,
             'button_link': b.button_link,
             'card_bg_color': b.card_bg_color,
-            'show_button': b.show_button
+            'show_button': b.show_button,
+            'open_in_new_tab': b.open_in_new_tab
         } for b in banners
     ])
 

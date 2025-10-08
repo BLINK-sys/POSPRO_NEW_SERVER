@@ -184,7 +184,8 @@ def get_homepage_data():
                         'button_text': sb.button_text,
                         'button_text_color': sb.button_text_color,
                         'button_bg_color': sb.button_bg_color,
-                        'button_link': sb.button_link
+                        'button_link': sb.button_link,
+                        'open_in_new_tab': sb.open_in_new_tab
                     })
                     print(f"Added small banner: {sb.title}")
                 else:

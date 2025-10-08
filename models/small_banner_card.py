@@ -18,3 +18,4 @@ class SmallBanner(db.Model):
     button_link = db.Column(db.String(255), nullable=True)
     card_bg_color = db.Column(db.String(20), nullable=True)
     show_button = db.Column(db.Boolean, default=True)
+    open_in_new_tab = db.Column(db.Boolean, default=False)  # ✅ Новое поле
