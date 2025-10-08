@@ -2,6 +2,7 @@ from .user import User
 from .product import Product
 from .category import Category
 from .characteristic import ProductCharacteristic
+from .characteristics_list import CharacteristicsList
 from .media import ProductMedia
 from .documents import ProductDocument
 from .brand import Brand
