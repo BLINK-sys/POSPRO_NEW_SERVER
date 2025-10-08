@@ -14,7 +14,11 @@ def get_characteristics(product_id):
     result = []
     for c in chars:
         # Получаем данные из справочника характеристик по ID из поля key
-        characteristic_id = int(c.key) if c.key.isdigit() else None
+        try:
+            characteristic_id = int(c.key) if c.key else None
+        except (ValueError, TypeError):
+            characteristic_id = None
+            
         if characteristic_id:
             characteristic_info = CharacteristicsList.query.get(characteristic_id)
             if characteristic_info:
@@ -23,7 +27,7 @@ def get_characteristics(product_id):
                     'characteristic_id': characteristic_id,
                     'key': characteristic_info.characteristic_key,
                     'value': c.value,
-                    'unit_of_measurement': characteristic_info.unit_of_measurement,
+                    'unit_of_measurement': characteristic_info.unit_of_measurement or '',
                     'sort_order': c.sort_order
                 })
     

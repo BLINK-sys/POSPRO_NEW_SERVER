@@ -85,7 +85,7 @@ def create_characteristic():
         
         new_characteristic = CharacteristicsList(
             characteristic_key=characteristic_key,
-            unit_of_measurement=unit_of_measurement
+            unit_of_measurement=unit_of_measurement.strip() if unit_of_measurement else ''
         )
         
         db.session.add(new_characteristic)
@@ -161,7 +161,7 @@ def update_characteristic(characteristic_id):
             characteristic.characteristic_key = new_key
         
         if 'unit_of_measurement' in data:
-            characteristic.unit_of_measurement = data['unit_of_measurement'].strip() if data['unit_of_measurement'] else None
+            characteristic.unit_of_measurement = data['unit_of_measurement'].strip() if data['unit_of_measurement'] else ''
         
         db.session.commit()
         
