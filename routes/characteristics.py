@@ -13,17 +13,19 @@ def get_characteristics(product_id):
     
     result = []
     for c in chars:
-        # Получаем данные из справочника характеристик
-        characteristic_info = CharacteristicsList.query.get(c.characteristic_id)
-        if characteristic_info:
-            result.append({
-                'id': c.id,
-                'characteristic_id': c.characteristic_id,
-                'key': characteristic_info.characteristic_key,
-                'value': c.value,
-                'unit_of_measurement': characteristic_info.unit_of_measurement,
-                'sort_order': c.sort_order
-            })
+        # Получаем данные из справочника характеристик по ID из поля key
+        characteristic_id = int(c.key) if c.key.isdigit() else None
+        if characteristic_id:
+            characteristic_info = CharacteristicsList.query.get(characteristic_id)
+            if characteristic_info:
+                result.append({
+                    'id': c.id,
+                    'characteristic_id': characteristic_id,
+                    'key': characteristic_info.characteristic_key,
+                    'value': c.value,
+                    'unit_of_measurement': characteristic_info.unit_of_measurement,
+                    'sort_order': c.sort_order
+                })
     
     return jsonify(result)
 
@@ -33,7 +35,7 @@ def add_characteristic(product_id):
     data = request.json
     char = ProductCharacteristic(
         product_id=product_id,
-        characteristic_id=data['characteristic_id'],
+        key=str(data['characteristic_id']),  # Сохраняем ID как строку в поле key
         value=data['value'],
         sort_order=data.get('sort_order', 0)
     )
@@ -46,7 +48,7 @@ def add_characteristic(product_id):
 def update_characteristic(char_id):
     char = ProductCharacteristic.query.get_or_404(char_id)
     data = request.json
-    char.characteristic_id = data['characteristic_id']
+    char.key = str(data['characteristic_id'])  # Обновляем ID в поле key
     char.value = data['value']
     char.sort_order = data.get('sort_order', char.sort_order)
     db.session.commit()
