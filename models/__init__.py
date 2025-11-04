@@ -13,3 +13,4 @@ from .order import Order, OrderItem
 from .order_status import OrderStatus
 from .order_manager import OrderManager
 from .systemuser import SystemUser
+from .supplier import Supplier

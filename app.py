@@ -21,6 +21,7 @@ from routes.system_brands import system_brands_bp
 from routes.system_users import system_users_bp
 from routes.upload import upload_bp
 from routes.brands_statuses import bp as brands_statuses_bp
+from routes.suppliers import suppliers_bp
 import os
 
 from routes.upload_admin import upload_admin_bp
@@ -53,6 +54,9 @@ def create_app():
 
     # 🔹 Метаданные (статусы, бренды и пр.)
     app.register_blueprint(brands_statuses_bp, url_prefix='/meta')  # /meta/*
+    
+    # 🔹 Справочник поставщиков
+    app.register_blueprint(suppliers_bp, url_prefix='/meta/suppliers')  # /meta/suppliers/*
 
     # 🔹 Аутентификация и сессии
     app.register_blueprint(auth_bp, url_prefix='/auth')  # /auth/login, /auth/me и т.д.

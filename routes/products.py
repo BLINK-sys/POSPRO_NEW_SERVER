@@ -203,6 +203,7 @@ def finalize_product(product_id):
             product.is_visible = data.get('is_visible', False)
             product.country = data.get('country', '')
             product.brand = brand
+            product.postavka = data.get('postavka')  # Опциональное поле
             product.description = data.get('description', '')
             product.category_id = data.get('category_id')
             
@@ -261,6 +262,7 @@ def get_products():
             'is_visible': p.is_visible,
             'country': p.country,
             'brand': 'no' if not p.brand else p.brand,
+            'postavka': p.postavka,
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
@@ -340,6 +342,7 @@ def get_product_by_slug(slug):
         'is_visible': product.is_visible,
         'country': product.country,
         'brand': 'no' if not product.brand else product.brand,
+        'postavka': product.postavka,
         'description': product.description,
         'category_id': product.category_id,
         'image': first_image.url if first_image else None,
@@ -393,6 +396,7 @@ def create_product():
             is_visible=data.get('is_visible', True),
             country=data.get('country', ''),
             brand=brand,
+            postavka=data.get('postavka'),  # Опциональное поле
             description=data.get('description', ''),
             category_id=data.get('category_id'),
             is_draft=False
@@ -450,6 +454,7 @@ def update_product(product_id):
         product.brand = brand
         product.is_visible = data.get('is_visible', product.is_visible)
         product.country = data.get('country', product.country)
+        product.postavka = data.get('postavka', product.postavka)  # Опциональное поле
         product.description = data.get('description', product.description)
         product.category_id = data.get('category_id', product.category_id)
 
@@ -517,6 +522,7 @@ def search_products():
             'is_visible': p.is_visible,
             'country': p.country,
             'brand': 'no' if not p.brand else p.brand,
+            'postavka': p.postavka,
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
@@ -556,6 +562,7 @@ def get_products_by_brand(brand_name):
                 'is_visible': p.is_visible,
                 'country': p.country,
                 'brand': 'no' if not p.brand else p.brand,
+                'postavka': p.postavka,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
@@ -667,6 +674,7 @@ def get_products_by_brand_detailed(brand_name):
                 'wholesale_price': p.wholesale_price,
                 'quantity': p.quantity,
                 'is_visible': p.is_visible,
+                'postavka': p.postavka,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image_url': first_image.url if first_image else None,
@@ -785,6 +793,7 @@ def get_products_by_brand_and_category(brand_name):
                 'is_visible': p.is_visible,
                 'country': p.country,
                 'brand': 'no' if not p.brand else p.brand,
+                'postavka': p.postavka,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
