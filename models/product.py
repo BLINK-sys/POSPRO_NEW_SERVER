@@ -13,7 +13,6 @@ class Product(db.Model):
     is_visible = db.Column(db.Boolean, default=True)
     country = db.Column(db.String(100))
     brand = db.Column(db.String(100))
-    postavka = db.Column(db.String(255), nullable=True)  # Опциональное поле
     description = db.Column(db.Text)
     status = db.Column(db.Integer, db.ForeignKey('status.id'))
     status_info = db.relationship('Status', backref='products', lazy='joined')
