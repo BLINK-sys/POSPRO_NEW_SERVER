@@ -19,8 +19,16 @@ def get_categories():
         'slug': c.slug,
         'description': c.description,
         'image_url': c.image_url,
-        'parent_id': c.parent_id
+        'parent_id': c.parent_id,
+        'order': c.order,
+        'show_in_menu': c.show_in_menu
     } for c in categories])
+
+
+@categories_bp.route('/<int:category_id>', methods=['GET'])
+def get_category(category_id):
+    category = Category.query.get_or_404(category_id)
+    return jsonify(category.to_dict())
 
 
 @categories_bp.route('/with-image', methods=['POST'])
@@ -35,11 +43,13 @@ def create_category_with_image():
     if not name or not slug:
         return jsonify({'error': 'name and slug are required'}), 400
 
+    show_in_menu = request.form.get('show_in_menu', 'true').lower() == 'true'
     category = Category(
         name=name,
         slug=slug,
         description=description,
-        parent_id=parent_id if parent_id else None
+        parent_id=parent_id if parent_id else None,
+        show_in_menu=show_in_menu
     )
     db.session.add(category)
     db.session.flush()  # Получаем ID до коммита
@@ -63,7 +73,9 @@ def create_category_with_image():
         'slug': category.slug,
         'description': category.description,
         'image_url': category.image_url,
-        'parent_id': category.parent_id
+        'parent_id': category.parent_id,
+        'order': category.order,
+        'show_in_menu': category.show_in_menu
     }), 201
 
 
@@ -76,8 +88,10 @@ def update_category(category_id):
     category.description = data.get('description')
     category.image_url = data.get('image_url')
     category.parent_id = data.get('parent_id')
+    if 'show_in_menu' in data:
+        category.show_in_menu = bool(data['show_in_menu'])
     db.session.commit()
-    return jsonify({'message': 'Category updated'})
+    return jsonify(category.to_dict())
 
 
 @categories_bp.route('/<int:category_id>', methods=['DELETE'])
