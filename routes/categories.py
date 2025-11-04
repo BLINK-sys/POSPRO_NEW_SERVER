@@ -10,6 +10,15 @@ from models.category import Category
 categories_bp = Blueprint('categories', __name__)
 
 
+def get_all_children_recursive(category_id):
+    """Рекурсивно получает все дочерние категории (включая вложенные)"""
+    children = Category.query.filter_by(parent_id=category_id).all()
+    all_children = list(children)
+    for child in children:
+        all_children.extend(get_all_children_recursive(child.id))
+    return all_children
+
+
 @categories_bp.route('/', methods=['GET'])
 def get_categories():
     categories = Category.query.order_by(Category.parent_id, Category.order).all()
@@ -88,8 +97,17 @@ def update_category(category_id):
     category.description = data.get('description')
     category.image_url = data.get('image_url')
     category.parent_id = data.get('parent_id')
+    
     if 'show_in_menu' in data:
-        category.show_in_menu = bool(data['show_in_menu'])
+        new_show_in_menu = bool(data['show_in_menu'])
+        category.show_in_menu = new_show_in_menu
+        
+        # Если категория отключается, отключаем все дочерние категории рекурсивно
+        if not new_show_in_menu:
+            all_children = get_all_children_recursive(category_id)
+            for child in all_children:
+                child.show_in_menu = False
+    
     db.session.commit()
     return jsonify(category.to_dict())
 
