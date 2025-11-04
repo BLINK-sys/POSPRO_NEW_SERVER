@@ -206,6 +206,7 @@ def finalize_product(product_id):
             product.postavka = data.get('postavka')  # Опциональное поле
             product.description = data.get('description', '')
             product.category_id = data.get('category_id')
+            product.supplier_id = data.get('supplier_id')
             
             logger.info(f"Поля товара обновлены: name='{product.name}', article='{product.article}', price={product.price}")
             
@@ -263,6 +264,7 @@ def get_products():
             'country': p.country,
             'brand': 'no' if not p.brand else p.brand,
             'postavka': p.postavka,
+            'supplier_id': p.supplier_id,
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
@@ -343,6 +345,7 @@ def get_product_by_slug(slug):
         'country': product.country,
         'brand': 'no' if not product.brand else product.brand,
         'postavka': product.postavka,
+        'supplier_id': product.supplier_id,
         'description': product.description,
         'category_id': product.category_id,
         'image': first_image.url if first_image else None,
@@ -399,6 +402,7 @@ def create_product():
             postavka=data.get('postavka'),  # Опциональное поле
             description=data.get('description', ''),
             category_id=data.get('category_id'),
+            supplier_id=data.get('supplier_id'),
             is_draft=False
         )
         
@@ -457,6 +461,7 @@ def update_product(product_id):
         product.postavka = data.get('postavka', product.postavka)  # Опциональное поле
         product.description = data.get('description', product.description)
         product.category_id = data.get('category_id', product.category_id)
+        product.supplier_id = data.get('supplier_id', product.supplier_id)
 
         logger.info(f"Поля товара обновлены: name='{product.name}', article='{product.article}'")
         
@@ -523,6 +528,7 @@ def search_products():
             'country': p.country,
             'brand': 'no' if not p.brand else p.brand,
             'postavka': p.postavka,
+            'supplier_id': p.supplier_id,
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
