@@ -336,17 +336,6 @@ def get_product_by_slug(slug):
         'mime_type': d.mime_type
     } for d in drivers]
 
-    # Формируем объект бренда
-    brand_data = None
-    if product.brand:
-        brand_data = {
-            'id': product.brand.id,
-            'name': product.brand.name,
-            'country': product.brand.country,
-            'description': product.brand.description,
-            'image_url': product.brand.image_url
-        }
-    
     result = {
         'id': product.id,
         'name': product.name,
@@ -358,9 +347,8 @@ def get_product_by_slug(slug):
         'status': 'no' if product.status is None else str(product.status),
         'is_visible': product.is_visible,
         'country': product.country,
-        'brand_id': product.brand_id,
+        'brand': 'no' if not product.brand_id else product.brand_id,
         'brand_name': product.brand.name if product.brand else None,
-        'brand': brand_data,
         'supplier_id': product.supplier_id,
         'description': product.description,
         'category_id': product.category_id,
