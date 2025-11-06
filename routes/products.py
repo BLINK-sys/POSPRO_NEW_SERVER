@@ -8,6 +8,7 @@ from extensions import db
 from models import ProductDocument, ProductCharacteristic
 from models.product import Product
 from models.media import ProductMedia
+from models.brand import Brand
 
 products_bp = Blueprint('products', __name__)
 logger = logging.getLogger(__name__)
@@ -189,20 +190,38 @@ def finalize_product(product_id):
             product.wholesale_price = data.get('wholesale_price', 0)
             product.quantity = data.get('quantity', 0)
             
-            # Простая обработка статуса и бренда
+            # Обработка статуса
             status = data.get('status', product.status)
-            brand = data.get('brand', product.brand)
-            
-            # Обработка 'no'
             if str(status) == 'no':
                 status = None
-            if str(brand) == 'no':
-                brand = ''
+            
+            # Обработка бренда: приоритет brand_id, затем brand (название) для обратной совместимости
+            brand_id = data.get('brand_id')
+            brand_name = data.get('brand', product.brand)
+            
+            if brand_id is not None:
+                # Если передан brand_id, используем его
+                if brand_id:
+                    brand_obj = Brand.query.get(brand_id)
+                    if not brand_obj:
+                        return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
+                    brand_name = brand_obj.name
+                else:
+                    brand_name = ''
+            elif brand_name and str(brand_name) != 'no':
+                # Если передан brand (название), пытаемся найти ID
+                brand_obj = Brand.query.filter_by(name=brand_name).first()
+                if brand_obj:
+                    brand_id = brand_obj.id
+            else:
+                brand_name = ''
+                brand_id = None
 
             product.status = status            
             product.is_visible = data.get('is_visible', False)
             product.country = data.get('country', '')
-            product.brand = brand
+            product.brand = brand_name  # Для обратной совместимости
+            product.brand_id = brand_id  # Новое поле
             product.description = data.get('description', '')
             product.category_id = data.get('category_id')
             
@@ -249,6 +268,28 @@ def get_products():
         first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
             .order_by(ProductMedia.order).first()
 
+        # Получаем информацию о бренде
+        brand_info = None
+        if p.brand_id and p.brand_info:
+            brand_info = {
+                'id': p.brand_info.id,
+                'name': p.brand_info.name,
+                'country': p.brand_info.country,
+                'description': p.brand_info.description,
+                'image_url': p.brand_info.image_url
+            }
+        elif p.brand:
+            # Обратная совместимость: ищем бренд по названию
+            brand_obj = Brand.query.filter_by(name=p.brand).first()
+            if brand_obj:
+                brand_info = {
+                    'id': brand_obj.id,
+                    'name': brand_obj.name,
+                    'country': brand_obj.country,
+                    'description': brand_obj.description,
+                    'image_url': brand_obj.image_url
+                }
+
         result.append({
             'id': p.id,
             'name': p.name,
@@ -260,7 +301,9 @@ def get_products():
             'status': 'no' if p.status is None else str(p.status),
             'is_visible': p.is_visible,
             'country': p.country,
-            'brand': 'no' if not p.brand else p.brand,
+            'brand': 'no' if not p.brand else p.brand,  # Для обратной совместимости
+            'brand_id': p.brand_id,  # Новое поле
+            'brand_info': brand_info,  # Полная информация о бренде
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
@@ -328,6 +371,28 @@ def get_product_by_slug(slug):
         'mime_type': d.mime_type
     } for d in drivers]
 
+    # Получаем информацию о бренде
+    brand_info = None
+    if product.brand_id and product.brand_info:
+        brand_info = {
+            'id': product.brand_info.id,
+            'name': product.brand_info.name,
+            'country': product.brand_info.country,
+            'description': product.brand_info.description,
+            'image_url': product.brand_info.image_url
+        }
+    elif product.brand:
+        # Обратная совместимость: ищем бренд по названию
+        brand_obj = Brand.query.filter_by(name=product.brand).first()
+        if brand_obj:
+            brand_info = {
+                'id': brand_obj.id,
+                'name': brand_obj.name,
+                'country': brand_obj.country,
+                'description': brand_obj.description,
+                'image_url': brand_obj.image_url
+            }
+
     result = {
         'id': product.id,
         'name': product.name,
@@ -339,7 +404,9 @@ def get_product_by_slug(slug):
         'status': 'no' if product.status is None else str(product.status),
         'is_visible': product.is_visible,
         'country': product.country,
-        'brand': 'no' if not product.brand else product.brand,
+        'brand': 'no' if not product.brand else product.brand,  # Для обратной совместимости
+        'brand_id': product.brand_id,  # Новое поле
+        'brand_info': brand_info,  # Полная информация о бренде
         'description': product.description,
         'category_id': product.category_id,
         'image': first_image.url if first_image else None,
@@ -362,15 +429,31 @@ def create_product():
         data = request.json or {}
         logger.info(f"Получены данные: {list(data.keys())}")
 
-        # Простая обработка статуса и бренда
+        # Обработка статуса
         status = data.get('status')
-        brand = data.get('brand')
-        
-        # Обработка 'no'
         if str(status) == 'no':
             status = None
-        if str(brand) == 'no':
-            brand = ''
+        
+        # Обработка бренда: приоритет brand_id, затем brand (название) для обратной совместимости
+        brand_id = data.get('brand_id')
+        brand_name = data.get('brand', '')
+        
+        # Если передан brand_id, используем его
+        if brand_id:
+            # Проверяем существование бренда
+            brand_obj = Brand.query.get(brand_id)
+            if not brand_obj:
+                return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
+            # Сохраняем brand_id и название для обратной совместимости
+            brand_name = brand_obj.name
+        elif brand_name and str(brand_name) != 'no':
+            # Если передан brand (название), пытаемся найти ID
+            brand_obj = Brand.query.filter_by(name=brand_name).first()
+            if brand_obj:
+                brand_id = brand_obj.id
+            # Иначе оставляем brand_name для обратной совместимости
+        else:
+            brand_name = ''
 
         name = data.get('name', '')
         logger.info(f"Создание slug для товара: '{name}'")
@@ -392,7 +475,8 @@ def create_product():
             status=status,
             is_visible=data.get('is_visible', True),
             country=data.get('country', ''),
-            brand=brand,
+            brand=brand_name,  # Для обратной совместимости
+            brand_id=brand_id,  # Новое поле
             description=data.get('description', ''),
             category_id=data.get('category_id'),
             is_draft=False
@@ -421,15 +505,32 @@ def update_product(product_id):
         data = request.json or {}
         logger.info(f"Получены данные для обновления: {list(data.keys())}")
 
-        # Простая обработка статуса и бренда
+        # Обработка статуса
         status = data.get('status', product.status)
-        brand = data.get('brand', product.brand)
-        
-        # Обработка 'no'
         if str(status) == 'no':
             status = None
-        if str(brand) == 'no':
-            brand = ''
+        
+        # Обработка бренда: приоритет brand_id, затем brand (название) для обратной совместимости
+        brand_id = data.get('brand_id')
+        brand_name = data.get('brand', product.brand)
+        
+        if brand_id is not None:
+            # Если передан brand_id, используем его
+            if brand_id:
+                brand_obj = Brand.query.get(brand_id)
+                if not brand_obj:
+                    return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
+                brand_name = brand_obj.name
+            else:
+                brand_name = ''
+        elif brand_name and str(brand_name) != 'no':
+            # Если передан brand (название), пытаемся найти ID
+            brand_obj = Brand.query.filter_by(name=brand_name).first()
+            if brand_obj:
+                brand_id = brand_obj.id
+        else:
+            brand_name = ''
+            brand_id = None
 
         new_name = data.get('name', product.name)
         if new_name != product.name:
@@ -447,7 +548,8 @@ def update_product(product_id):
         product.wholesale_price = data.get('wholesale_price', product.wholesale_price)
         product.quantity = data.get('quantity', product.quantity)
         product.status = status
-        product.brand = brand
+        product.brand = brand_name  # Для обратной совместимости
+        product.brand_id = brand_id  # Новое поле
         product.is_visible = data.get('is_visible', product.is_visible)
         product.country = data.get('country', product.country)
         product.description = data.get('description', product.description)

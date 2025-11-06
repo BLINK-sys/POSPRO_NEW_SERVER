@@ -527,10 +527,14 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
         print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id}), пропускаем")
         return existing_id
     
-    # Получаем название бренда по старому ID
+    # Получаем новый brand_id по старому ID
+    new_brand_id = None
     brand_name = ''
-    if old_brand_id and old_brand_id in brands_name_map:
-        brand_name = brands_name_map[old_brand_id]
+    if old_brand_id and old_brand_id in brands_map:
+        new_brand_id = brands_map[old_brand_id]
+        # Получаем название для обратной совместимости
+        if old_brand_id in brands_name_map:
+            brand_name = brands_name_map[old_brand_id]
     
     # Получаем новый category_id по старому ID
     new_category_id = None
@@ -564,7 +568,8 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
             'status': None,
             'is_visible': True,
             'country': '',
-            'brand': brand_name,
+            'brand_id': new_brand_id,  # Используем brand_id вместо brand
+            'brand': brand_name,  # Для обратной совместимости
             'description': description,
             'category_id': new_category_id
         }
