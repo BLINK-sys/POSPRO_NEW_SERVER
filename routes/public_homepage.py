@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify
+﻿from flask import Blueprint, jsonify
 
 from models import ProductMedia
 from models.banner import Banner
@@ -125,7 +125,7 @@ def get_homepage_data():
                         }
 
                     brand_data = None
-                    brand_data = None
+                    if pr.brand:  # РўРµРїРµСЂСЊ pr.brand - СЌС‚Рѕ relationship (РѕР±СЉРµРєС‚ Brand)
                                                 if pr.brand:  # Теперь pr.brand - это relationship (объект Brand)
                         brand_data = {
                             'id': pr.brand.id,
