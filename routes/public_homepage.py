@@ -155,7 +155,9 @@ def get_homepage_data():
                         'category_id': pr.category_id,
                         'category': category_data,
                         'status': status_data,
-                        'brand': brand_data,
+                        'brand_id': pr.brand_id,
+                        'brand_info': brand_data,  # Используем brand_info вместо brand
+                        'brand': brand_data,  # Для обратной совместимости
                         'quantity': pr.quantity,
                         'image_url': first_image.url if first_image else None
                     })
@@ -310,7 +312,9 @@ def get_category_with_children_and_products(slug):
             'slug': p.slug,
             'price': p.price,
             'status': status_data,
-            'brand': brand_data,
+            'brand_id': p.brand_id,
+            'brand_info': brand_data,  # Используем brand_info вместо brand
+            'brand': brand_data,  # Для обратной совместимости
             'quantity': p.quantity,
             'image_url': first_image.url if first_image else None
         })
