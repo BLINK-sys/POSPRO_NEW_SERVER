@@ -20,8 +20,6 @@ class Product(db.Model):
 
     category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True)
     category = db.relationship('Category')
-    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
-    supplier = db.relationship('Supplier', backref='products')
     characteristics = db.relationship('ProductCharacteristic', backref='product', cascade='all, delete-orphan')
     media = db.relationship('ProductMedia', backref='product', cascade='all, delete-orphan')
     documents = db.relationship('ProductDocument', backref='product', cascade='all, delete-orphan')

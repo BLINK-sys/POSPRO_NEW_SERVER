@@ -9,7 +9,6 @@ class Category(db.Model):
     description = db.Column(db.Text, nullable=True)
     image_url = db.Column(db.String(255), nullable=True)
     order = db.Column(db.Integer, nullable=False, default=0)
-    show_in_menu = db.Column(db.Boolean, nullable=False, default=True)  # Отображение в меню клиента
     
     def to_dict(self):
         return {
@@ -19,6 +18,5 @@ class Category(db.Model):
             'parent_id': self.parent_id,
             'description': self.description,
             'image_url': self.image_url,
-            'order': self.order,
-            'show_in_menu': self.show_in_menu
+            'order': self.order
         }

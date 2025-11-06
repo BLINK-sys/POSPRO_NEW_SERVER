@@ -1,4 +1,4 @@
-﻿from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify
 
 from models import ProductMedia
 from models.banner import Banner
@@ -125,16 +125,22 @@ def get_homepage_data():
                         }
 
                     brand_data = None
-                    if pr.brand:  # Теперь pr.brand - это relationship (объект Brand)
-                        brand_data = {
-                            'id': pr.brand.id,
-                            'name': pr.brand.name,
-                            'country': pr.brand.country,
-                            'description': pr.brand.description,
-                            'image_url': pr.brand.image_url
-                        }
-                        print(f"✅ Найден бренд: {pr.brand.name} (ID: {pr.brand.id}) для товара '{pr.name}'")
-                        
+                    if pr.brand:
+                        # Ищем бренд по названию (поле brand содержит название, а не ID)
+                        brand = Brand.query.filter_by(name=pr.brand).first()
+                        print(f"🔍 Ищем бренд '{pr.brand}' для товара '{pr.name}' на главной странице")
+                        if brand:
+                            print(f"✅ Найден бренд: {brand.name} (ID: {brand.id})")
+                            brand_data = {
+                                'id': brand.id,
+                                'name': brand.name,
+                                'country': brand.country,
+                                'description': brand.description,
+                                'image_url': brand.image_url
+                            }
+                        else:
+                            print(f"❌ Бренд '{pr.brand}' не найден в базе данных для товара '{pr.name}'")
+
                     # Получаем информацию о категории
                     category_data = None
                     if pr.category:
@@ -206,48 +212,6 @@ def get_homepage_data():
     })
 
 
-@public_homepage_bp.route('/public/categories', methods=['GET'])
-def get_public_categories():
-    """Получить категории для меню клиента (только с show_in_menu=True)"""
-    all_categories = Category.query.filter_by(show_in_menu=True).order_by(Category.parent_id, Category.order).all()
-    
-    # Строим иерархическую структуру
-    categories_dict = {}
-    for category in all_categories:
-        categories_dict[category.id] = {
-            'id': category.id,
-            'name': category.name,
-            'slug': category.slug,
-            'image_url': category.image_url,
-            'description': category.description,
-            'parent_id': category.parent_id,
-            'order': category.order,
-            'children': []
-        }
-    
-    roots = []
-    for category in all_categories:
-        cat_data = categories_dict[category.id]
-        if category.parent_id and category.parent_id in categories_dict:
-            categories_dict[category.parent_id]['children'].append(cat_data)
-        else:
-            roots.append(cat_data)
-    
-    # Сортируем children по order
-    def sort_children(cat):
-        if cat['children']:
-            cat['children'].sort(key=lambda x: x['order'])
-            for child in cat['children']:
-                sort_children(child)
-    
-    # Сортируем корневые категории
-    roots.sort(key=lambda x: x['order'])
-    for root in roots:
-        sort_children(root)
-    
-    return jsonify(roots)
-
-
 @public_homepage_bp.route('/public/category/<string:slug>', methods=['GET'])
 def get_category_with_children_and_products(slug):
     category = Category.query.filter_by(slug=slug).first_or_404()
@@ -282,19 +246,26 @@ def get_category_with_children_and_products(slug):
                 'text_color': p.status_info.text_color,
             }
 
-        # 🔹 Получить объект бренда через relationship
+        # 🔹 Получить объект бренда по названию
         brand_data = None
-        if p.brand:  # Теперь p.brand - это relationship (объект Brand)
-            brand_data = {
-                'id': p.brand.id,
-                'name': p.brand.name,
-                'country': p.brand.country,
-                'description': p.brand.description,
-                'image_url': p.brand.image_url
-            }
-            # Добавляем бренд в уникальный список
-            unique_brands.add(p.brand.id)
-            print(f"✅ Найден бренд: {p.brand.name} (ID: {p.brand.id}) для товара '{p.name}'")
+        if p.brand:
+            # Ищем бренд по названию (поле brand содержит название, а не ID)
+            brand = Brand.query.filter_by(name=p.brand).first()
+            print(f"🔍 Ищем бренд '{p.brand}' для товара '{p.name}'")
+            if brand:
+                print(f"✅ Найден бренд: {brand.name} (ID: {brand.id})")
+                brand_data = {
+                    'id': brand.id,
+                    'name': brand.name,
+                    'country': brand.country,
+                    'description': brand.description,
+                    'image_url': brand.image_url
+                }
+                # Добавляем бренд в уникальный список
+                unique_brands.add(brand.id)
+            else:
+                print(f"❌ Бренд '{p.brand}' не найден в базе данных")
+
         products_data.append({
             'id': p.id,
             'name': p.name,
@@ -321,7 +292,7 @@ def get_category_with_children_and_products(slug):
                 'image_url': brand.image_url
             })
         else:
-            
+            print(f"❌ Бренд с ID {brand_id} не найден")
     
     print(f"📊 Итого брендов в ответе: {len(brands_data)}")
 

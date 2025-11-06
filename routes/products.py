@@ -205,7 +205,6 @@ def finalize_product(product_id):
             product.brand = brand
             product.description = data.get('description', '')
             product.category_id = data.get('category_id')
-            product.supplier_id = data.get('supplier_id')
             
             logger.info(f"Поля товара обновлены: name='{product.name}', article='{product.article}', price={product.price}")
             
@@ -262,7 +261,6 @@ def get_products():
             'is_visible': p.is_visible,
             'country': p.country,
             'brand': 'no' if not p.brand else p.brand,
-            'supplier_id': p.supplier_id,
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
@@ -342,7 +340,6 @@ def get_product_by_slug(slug):
         'is_visible': product.is_visible,
         'country': product.country,
         'brand': 'no' if not product.brand else product.brand,
-        'supplier_id': product.supplier_id,
         'description': product.description,
         'category_id': product.category_id,
         'image': first_image.url if first_image else None,
@@ -398,7 +395,6 @@ def create_product():
             brand=brand,
             description=data.get('description', ''),
             category_id=data.get('category_id'),
-            supplier_id=data.get('supplier_id'),
             is_draft=False
         )
         
@@ -456,7 +452,6 @@ def update_product(product_id):
         product.country = data.get('country', product.country)
         product.description = data.get('description', product.description)
         product.category_id = data.get('category_id', product.category_id)
-        product.supplier_id = data.get('supplier_id', product.supplier_id)
 
         logger.info(f"Поля товара обновлены: name='{product.name}', article='{product.article}'")
         
@@ -522,7 +517,6 @@ def search_products():
             'is_visible': p.is_visible,
             'country': p.country,
             'brand': 'no' if not p.brand else p.brand,
-            'supplier_id': p.supplier_id,
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
