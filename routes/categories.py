@@ -103,7 +103,34 @@ def update_category(category_id):
 @categories_bp.route('/<int:category_id>', methods=['DELETE'])
 def delete_category(category_id):
     try:
+        from models.product import Product
+        from models.homepage_categories import HomepageCategory
+        
         category = Category.query.get_or_404(category_id)
+        
+        # Собираем все ID категорий, которые будут удалены (включая дочерние)
+        categories_to_delete = [category_id]
+        
+        def collect_children_recursive(parent_id):
+            children = Category.query.filter_by(parent_id=parent_id).all()
+            for child in children:
+                categories_to_delete.append(child.id)
+                collect_children_recursive(child.id)
+        
+        collect_children_recursive(category_id)
+        
+        # Проверяем, есть ли товары в этих категориях
+        products_count = Product.query.filter(Product.category_id.in_(categories_to_delete)).count()
+        
+        if products_count > 0:
+            # Устанавливаем category_id в NULL для всех товаров в удаляемых категориях
+            Product.query.filter(Product.category_id.in_(categories_to_delete)).update(
+                {Product.category_id: None}, 
+                synchronize_session=False
+            )
+        
+        # Удаляем записи из homepage_categories
+        HomepageCategory.query.filter(HomepageCategory.category_id.in_(categories_to_delete)).delete(synchronize_session=False)
         
         # Рекурсивно удаляем все дочерние категории
         def delete_children_recursive(parent_id):
@@ -120,10 +147,17 @@ def delete_category(category_id):
         # Удаляем саму категорию
         db.session.delete(category)
         db.session.commit()
-        return jsonify({'message': 'Category deleted'}), 200
+        
+        message = 'Category deleted'
+        if products_count > 0:
+            message += f'. {products_count} products were moved to uncategorized'
+        
+        return jsonify({'message': message}), 200
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': f'Ошибка при удалении категории: {str(e)}'}), 500
+        import traceback
+        error_details = traceback.format_exc()
+        return jsonify({'error': f'Ошибка при удалении категории: {str(e)}', 'details': error_details}), 500
 
 
 @categories_bp.route('/reorder', methods=['POST'])
