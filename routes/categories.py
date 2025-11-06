@@ -105,10 +105,11 @@ def delete_category(category_id):
     try:
         from models.product import Product
         from models.homepage_categories import HomepageCategory
+        from sqlalchemy import text
         
         category = Category.query.get_or_404(category_id)
         
-        # Собираем все ID категорий, которые будут удалены (включая дочерние)
+        # Шаг 1: Собираем все ID категорий, которые будут удалены (включая дочерние)
         categories_to_delete = [category_id]
         
         def collect_children_recursive(parent_id):
@@ -119,44 +120,66 @@ def delete_category(category_id):
         
         collect_children_recursive(category_id)
         
-        # Проверяем, есть ли товары в этих категориях
-        products_count = Product.query.filter(Product.category_id.in_(categories_to_delete)).count()
+        # Шаг 2: Обрабатываем товары - устанавливаем category_id в NULL для всех товаров
+        # в удаляемых категориях (включая родительскую и все дочерние)
+        products_count = 0
+        if categories_to_delete:
+            products_count = Product.query.filter(Product.category_id.in_(categories_to_delete)).count()
+            if products_count > 0:
+                # Устанавливаем category_id в NULL для всех товаров
+                Product.query.filter(Product.category_id.in_(categories_to_delete)).update(
+                    {Product.category_id: None}, 
+                    synchronize_session=False
+                )
         
-        if products_count > 0:
-            # Устанавливаем category_id в NULL для всех товаров в удаляемых категориях
-            Product.query.filter(Product.category_id.in_(categories_to_delete)).update(
-                {Product.category_id: None}, 
-                synchronize_session=False
-            )
+        # Шаг 3: Удаляем записи из homepage_categories
+        if categories_to_delete:
+            HomepageCategory.query.filter(HomepageCategory.category_id.in_(categories_to_delete)).delete(synchronize_session=False)
         
-        # Удаляем записи из homepage_categories
-        HomepageCategory.query.filter(HomepageCategory.category_id.in_(categories_to_delete)).delete(synchronize_session=False)
+        # Шаг 4: Рекурсивно удаляем все дочерние категории (снизу вверх)
+        # Сначала удаляем самые глубокие (листья), потом поднимаемся вверх к родителю
         
-        # Рекурсивно удаляем все дочерние категории
         def delete_children_recursive(parent_id):
+            # Получаем прямых детей этой категории
             children = Category.query.filter_by(parent_id=parent_id).all()
             for child in children:
-                # Сначала удаляем всех внуков и т.д.
+                # Сначала рекурсивно удаляем всех внуков и т.д. (уходим вглубь)
                 delete_children_recursive(child.id)
-                # Затем удаляем саму дочернюю категорию
-                db.session.delete(child)
+                # После удаления всех потомков удаляем саму дочернюю категорию
+                # Обновляем parent_id у любых оставшихся дочерних (на всякий случай)
+                Category.query.filter(Category.parent_id == child.id).update(
+                    {Category.parent_id: None},
+                    synchronize_session=False
+                )
+                # Удаляем саму дочернюю категорию
+                Category.query.filter(Category.id == child.id).delete(synchronize_session=False)
+                db.session.flush()  # Применяем удаление сразу
         
-        # Удаляем все дочерние категории
+        # Удаляем все дочерние категории рекурсивно
         delete_children_recursive(category_id)
         
+        # Шаг 5: Удаляем саму родительскую категорию
+        # Обновляем parent_id у любых оставшихся дочерних (на всякий случай)
+        Category.query.filter(Category.parent_id == category_id).update(
+            {Category.parent_id: None},
+            synchronize_session=False
+        )
         # Удаляем саму категорию
-        db.session.delete(category)
+        Category.query.filter(Category.id == category_id).delete(synchronize_session=False)
+        
+        # Коммитим все изменения
         db.session.commit()
         
         message = 'Category deleted'
         if products_count > 0:
-            message += f'. {products_count} products were moved to uncategorized'
+            message += f'. {products_count} product(s) were moved to uncategorized'
         
         return jsonify({'message': message}), 200
     except Exception as e:
         db.session.rollback()
         import traceback
         error_details = traceback.format_exc()
+        current_app.logger.error(f"Error deleting category {category_id}: {error_details}")
         return jsonify({'error': f'Ошибка при удалении категории: {str(e)}', 'details': error_details}), 500
 
 
