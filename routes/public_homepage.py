@@ -135,18 +135,6 @@ def get_homepage_data():
                         }
                         print(f"✅ Найден бренд: {pr.brand.name} (ID: {pr.brand.id}) для товара '{pr.name}'")
                         
-                        if pr.brand:  # Теперь pr.brand - это relationship (объект Brand)
-                        brand_data = {
-                            'id': pr.brand.id,
-                            'name': pr.brand.name,
-                            'country': pr.brand.country,
-                            'description': pr.brand.description,
-                            'image_url': pr.brand.image_url
-                        }
-                        print(f"✅ Найден бренд: {pr.brand.name} (ID: {pr.brand.id}) для товара '{pr.name}'")
-                    else:
-                            
-
                     # Получаем информацию о категории
                     category_data = None
                     if pr.category:
