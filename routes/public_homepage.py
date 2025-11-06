@@ -125,8 +125,7 @@ def get_homepage_data():
                         }
 
                     brand_data = None
-                    if pr.brand:  # РўРµРїРµСЂСЊ pr.brand - СЌС‚Рѕ relationship (РѕР±СЉРµРєС‚ Brand)
-                                                if pr.brand:  # Теперь pr.brand - это relationship (объект Brand)
+                    if pr.brand:  # Теперь pr.brand - это relationship (объект Brand)
                         brand_data = {
                             'id': pr.brand.id,
                             'name': pr.brand.name,
