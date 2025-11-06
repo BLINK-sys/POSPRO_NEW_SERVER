@@ -295,25 +295,6 @@ def get_category_with_children_and_products(slug):
             # Добавляем бренд в уникальный список
             unique_brands.add(p.brand.id)
             print(f"✅ Найден бренд: {p.brand.name} (ID: {p.brand.id}) для товара '{p.name}'")
-        if p.brand:
-            # Добавляем бренд в уникальный список
-            unique_brands.add(p.brand.id)
-            print(f"✅ Найден бренд: {p.brand.name} (ID: {p.brand.id}) для товара '{p.name}'")
-            
-            if p.brand:  # Теперь p.brand - это relationship (объект Brand)
-            brand_data = {
-                'id': p.brand.id,
-                'name': p.brand.name,
-                'country': p.brand.country,
-                'description': p.brand.description,
-                'image_url': p.brand.image_url
-            }
-            # Добавляем бренд в уникальный список
-            unique_brands.add(p.brand.id)
-            print(f"✅ Найден бренд: {p.brand.name} (ID: {p.brand.id}) для товара '{p.name}'")
-        else:
-                
-
         products_data.append({
             'id': p.id,
             'name': p.name,
