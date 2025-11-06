@@ -613,6 +613,17 @@ def get_products_by_brand(brand_name):
             first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
                 .order_by(ProductMedia.order).first()
             
+            # Получаем информацию о бренде
+            brand_info = None
+            if p.brand_id and p.brand_info:
+                brand_info = {
+                    'id': p.brand_info.id,
+                    'name': p.brand_info.name,
+                    'country': p.brand_info.country,
+                    'description': p.brand_info.description,
+                    'image_url': p.brand_info.image_url
+                }
+            
             result.append({
                 'id': p.id,
                 'name': p.name,
@@ -625,6 +636,7 @@ def get_products_by_brand(brand_name):
                 'is_visible': p.is_visible,
                 'country': p.country,
                 'brand_id': p.brand_id,
+                'brand_info': brand_info,  # Добавляем brand_info
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
@@ -751,7 +763,9 @@ def get_products_by_brand_detailed(brand_name):
                 'category_id': p.category_id,
                 'image_url': first_image.url if first_image else None,
                 'status': status_info,
-                'brand': brand_info,
+                'brand_id': p.brand_id,
+                'brand_info': brand_info,  # Используем brand_info вместо brand
+                'brand': brand_info,  # Для обратной совместимости
                 'category': category_info,
                 'availability_status': availability_status
             })
@@ -890,6 +904,17 @@ def get_products_by_brand_and_category(brand_name):
             first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
                 .order_by(ProductMedia.order).first()
             
+            # Получаем информацию о бренде
+            brand_info = None
+            if p.brand_id and p.brand_info:
+                brand_info = {
+                    'id': p.brand_info.id,
+                    'name': p.brand_info.name,
+                    'country': p.brand_info.country,
+                    'description': p.brand_info.description,
+                    'image_url': p.brand_info.image_url
+                }
+            
             result.append({
                 'id': p.id,
                 'name': p.name,
@@ -902,6 +927,7 @@ def get_products_by_brand_and_category(brand_name):
                 'is_visible': p.is_visible,
                 'country': p.country,
                 'brand_id': p.brand_id,
+                'brand_info': brand_info,  # Добавляем brand_info
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
