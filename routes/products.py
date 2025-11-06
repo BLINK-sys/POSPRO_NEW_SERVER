@@ -89,7 +89,7 @@ def create_draft_product():
             quantity=0,
             is_visible=False,
             country='',
-            brand_id=None,
+            brand='',
             description='',
             status=None,
             is_draft=True,
@@ -191,23 +191,18 @@ def finalize_product(product_id):
             
             # Простая обработка статуса и бренда
             status = data.get('status', product.status)
-            brand_id = data.get('brand_id', product.brand_id)
+            brand = data.get('brand', product.brand)
             
             # Обработка 'no'
             if str(status) == 'no':
                 status = None
-            if brand_id == 'no' or brand_id == '':
-                brand_id = None
-            elif brand_id:
-                try:
-                    brand_id = int(brand_id)
-                except (ValueError, TypeError):
-                    brand_id = None
+            if str(brand) == 'no':
+                brand = ''
 
             product.status = status            
             product.is_visible = data.get('is_visible', False)
             product.country = data.get('country', '')
-            product.brand_id = brand_id
+            product.brand = brand
             product.description = data.get('description', '')
             product.category_id = data.get('category_id')
             product.supplier_id = data.get('supplier_id')
@@ -266,7 +261,7 @@ def get_products():
             'status': 'no' if p.status is None else str(p.status),
             'is_visible': p.is_visible,
             'country': p.country,
-            'brand_id': p.brand_id,
+            'brand': 'no' if not p.brand else p.brand,
             'supplier_id': p.supplier_id,
             'description': p.description,
             'category_id': p.category_id,
@@ -346,7 +341,7 @@ def get_product_by_slug(slug):
         'status': 'no' if product.status is None else str(product.status),
         'is_visible': product.is_visible,
         'country': product.country,
-        'brand_id': product.brand_id,
+        'brand': 'no' if not product.brand else product.brand,
         'supplier_id': product.supplier_id,
         'description': product.description,
         'category_id': product.category_id,
@@ -372,18 +367,13 @@ def create_product():
 
         # Простая обработка статуса и бренда
         status = data.get('status')
-        brand_id = data.get('brand_id')
+        brand = data.get('brand')
         
         # Обработка 'no'
         if str(status) == 'no':
             status = None
-        if brand_id == 'no' or brand_id == '':
-            brand_id = None
-        elif brand_id:
-            try:
-                brand_id = int(brand_id)
-            except (ValueError, TypeError):
-                brand_id = None
+        if str(brand) == 'no':
+            brand = ''
 
         name = data.get('name', '')
         logger.info(f"Создание slug для товара: '{name}'")
@@ -405,7 +395,7 @@ def create_product():
             status=status,
             is_visible=data.get('is_visible', True),
             country=data.get('country', ''),
-            brand_id=brand_id,
+            brand=brand,
             description=data.get('description', ''),
             category_id=data.get('category_id'),
             supplier_id=data.get('supplier_id'),
@@ -437,18 +427,13 @@ def update_product(product_id):
 
         # Простая обработка статуса и бренда
         status = data.get('status', product.status)
-        brand_id = data.get('brand_id', product.brand_id)
+        brand = data.get('brand', product.brand)
         
         # Обработка 'no'
         if str(status) == 'no':
             status = None
-        if brand_id == 'no' or brand_id == '':
-            brand_id = None
-        elif brand_id:
-            try:
-                brand_id = int(brand_id)
-            except (ValueError, TypeError):
-                brand_id = None
+        if str(brand) == 'no':
+            brand = ''
 
         new_name = data.get('name', product.name)
         if new_name != product.name:
@@ -466,7 +451,7 @@ def update_product(product_id):
         product.wholesale_price = data.get('wholesale_price', product.wholesale_price)
         product.quantity = data.get('quantity', product.quantity)
         product.status = status
-        product.brand_id = brand_id
+        product.brand = brand
         product.is_visible = data.get('is_visible', product.is_visible)
         product.country = data.get('country', product.country)
         product.description = data.get('description', product.description)
@@ -536,7 +521,7 @@ def search_products():
             'status': 'no' if p.status is None else str(p.status),
             'is_visible': p.is_visible,
             'country': p.country,
-            'brand_id': p.brand_id,
+            'brand': 'no' if not p.brand else p.brand,
             'supplier_id': p.supplier_id,
             'description': p.description,
             'category_id': p.category_id,
@@ -545,20 +530,17 @@ def search_products():
     
     return jsonify(result)
 
-@products_bp.route('/brand/<int:brand_id>', methods=['GET'])
-def get_products_by_brand(brand_id):
-    """Получить товары по ID бренда"""
+@products_bp.route('/brand/<string:brand_name>', methods=['GET'])
+def get_products_by_brand(brand_name):
+    """Получить товары по бренду"""
     try:
-        from models.brand import Brand
+        # Декодируем название бренда из URL
+        import urllib.parse
+        brand_name = urllib.parse.unquote(brand_name)
         
-        # Проверяем, существует ли бренд
-        brand = Brand.query.get(brand_id)
-        if not brand:
-            return jsonify({'error': 'Бренд не найден'}), 404
-        
-        # Получаем товары по brand_id
+        # Получаем товары по бренду
         products = Product.query.filter(
-            Product.brand_id == brand_id,
+            Product.brand == brand_name,
             Product.is_visible == True,
             Product.is_draft == False
         ).all()
@@ -579,39 +561,37 @@ def get_products_by_brand(brand_id):
                 'status': 'no' if p.status is None else str(p.status),
                 'is_visible': p.is_visible,
                 'country': p.country,
-                'brand_id': p.brand_id,
+                'brand': 'no' if not p.brand else p.brand,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
             })
         
         return jsonify({
-            'brand_id': brand_id,
-            'brand_name': brand.name,
+            'brand': brand_name,
             'products': result,
             'total_count': len(result)
         })
     except Exception as e:
-        logger.error(f"Error getting products by brand {brand_id}: {str(e)}")
+        logger.error(f"Error getting products by brand {brand_name}: {str(e)}")
         return jsonify({'error': 'Ошибка получения товаров по бренду'}), 500
 
-@products_bp.route('/brand/<int:brand_id>/detailed', methods=['GET'])
-def get_products_by_brand_detailed(brand_id):
-    """Получить товары по ID бренда с полной информацией (статус, бренд, категория)"""
+@products_bp.route('/brand/<string:brand_name>/detailed', methods=['GET'])
+def get_products_by_brand_detailed(brand_name):
+    """Получить товары по бренду с полной информацией (статус, бренд, категория)"""
     try:
+        # Декодируем название бренда из URL
+        import urllib.parse
+        brand_name = urllib.parse.unquote(brand_name)
+        
         # Импортируем необходимые модели
         from models.status import Status
         from models.brand import Brand
         from models.category import Category
         
-        # Проверяем, существует ли бренд
-        brand = Brand.query.get(brand_id)
-        if not brand:
-            return jsonify({'error': 'Бренд не найден'}), 404
-        
-        # Получаем товары по brand_id
+        # Получаем товары по бренду с джойнами для получения полной информации
         products = Product.query.filter(
-            Product.brand_id == brand_id,
+            Product.brand == brand_name,
             Product.is_visible == True,
             Product.is_draft == False
         ).all()
@@ -634,19 +614,27 @@ def get_products_by_brand_detailed(brand_id):
                         'text_color': status_obj.text_color
                     }
             
-            # Получаем информацию о бренде через relationship
+            # Получаем информацию о бренде
             brand_info = None
             if p.brand:
-                brand_info = {
-                    'id': p.brand.id,
-                    'name': p.brand.name,
-                    'country': p.brand.country,
-                    'description': p.brand.description,
-                    'image_url': p.brand.image_url
-                }
-            else:
-                # Если бренд не задан
-                brand_info = None
+                brand_obj = Brand.query.filter_by(name=p.brand).first()
+                if brand_obj:
+                    brand_info = {
+                        'id': brand_obj.id,
+                        'name': brand_obj.name,
+                        'country': brand_obj.country,
+                        'description': brand_obj.description,
+                        'image_url': brand_obj.image_url
+                    }
+                else:
+                    # Если бренд не найден в таблице Brand, создаем объект из данных товара
+                    brand_info = {
+                        'id': None,
+                        'name': p.brand,
+                        'country': p.country,
+                        'description': None,
+                        'image_url': None
+                    }
             
             # Получаем информацию о категории
             category_info = None
@@ -695,32 +683,28 @@ def get_products_by_brand_detailed(brand_id):
             })
         
         return jsonify({
-            'brand_id': brand_id,
-            'brand_name': brand.name,
+            'brand': brand_name,
             'products': result,
             'total_count': len(result)
         })
     except Exception as e:
-        logger.error(f"Error getting detailed products by brand {brand_id}: {str(e)}")
+        logger.error(f"Error getting detailed products by brand {brand_name}: {str(e)}")
         return jsonify({'error': 'Ошибка получения детальной информации о товарах по бренду'}), 500
 
-@products_bp.route('/brand/<int:brand_id>/categories', methods=['GET'])
-def get_categories_by_brand(brand_id):
-    """Получить категории товаров по ID бренда для фильтрации"""
+@products_bp.route('/brand/<string:brand_name>/categories', methods=['GET'])
+def get_categories_by_brand(brand_name):
+    """Получить категории товаров по бренду для фильтрации"""
     try:
-        from models.brand import Brand
-        
-        # Проверяем, существует ли бренд
-        brand = Brand.query.get(brand_id)
-        if not brand:
-            return jsonify({'error': 'Бренд не найден'}), 404
+        # Декодируем название бренда из URL
+        import urllib.parse
+        brand_name = urllib.parse.unquote(brand_name)
         
         # Получаем уникальные категории товаров по бренду
         from models.category import Category
         
         # Подзапрос для получения ID категорий товаров данного бренда
         category_ids = db.session.query(Product.category_id).filter(
-            Product.brand_id == brand_id,
+            Product.brand == brand_name,
             Product.is_visible == True,
             Product.is_draft == False,
             Product.category_id.isnot(None)
@@ -738,7 +722,7 @@ def get_categories_by_brand(brand_id):
         for cat in categories:
             # Подсчитываем количество товаров в каждой категории для данного бренда
             product_count = Product.query.filter(
-                Product.brand_id == brand_id,
+                Product.brand == brand_name,
                 Product.category_id == cat.id,
                 Product.is_visible == True,
                 Product.is_draft == False
@@ -759,31 +743,27 @@ def get_categories_by_brand(brand_id):
         result.sort(key=lambda x: x['product_count'], reverse=True)
         
         return jsonify({
-            'brand_id': brand_id,
-            'brand_name': brand.name,
+            'brand': brand_name,
             'categories': result
         })
     except Exception as e:
-        logger.error(f"Error getting categories by brand {brand_id}: {str(e)}")
+        logger.error(f"Error getting categories by brand {brand_name}: {str(e)}")
         return jsonify({'error': 'Ошибка получения категорий по бренду'}), 500
 
-@products_bp.route('/brand/<int:brand_id>/filter', methods=['GET'])
-def get_products_by_brand_and_category(brand_id):
-    """Получить товары по ID бренда с фильтрацией по категории"""
+@products_bp.route('/brand/<string:brand_name>/filter', methods=['GET'])
+def get_products_by_brand_and_category(brand_name):
+    """Получить товары по бренду с фильтрацией по категории"""
     try:
-        from models.brand import Brand
-        
-        # Проверяем, существует ли бренд
-        brand = Brand.query.get(brand_id)
-        if not brand:
-            return jsonify({'error': 'Бренд не найден'}), 404
+        # Декодируем название бренда из URL
+        import urllib.parse
+        brand_name = urllib.parse.unquote(brand_name)
         
         # Получаем параметры фильтрации
         category_id = request.args.get('category_id', type=int)
         
         # Базовый запрос
         query = Product.query.filter(
-            Product.brand_id == brand_id,
+            Product.brand == brand_name,
             Product.is_visible == True,
             Product.is_draft == False
         )
@@ -810,19 +790,18 @@ def get_products_by_brand_and_category(brand_id):
                 'status': 'no' if p.status is None else str(p.status),
                 'is_visible': p.is_visible,
                 'country': p.country,
-                'brand_id': p.brand_id,
+                'brand': 'no' if not p.brand else p.brand,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
             })
         
         return jsonify({
-            'brand_id': brand_id,
-            'brand_name': brand.name,
+            'brand': brand_name,
             'category_id': category_id,
             'products': result,
             'total_count': len(result)
         })
     except Exception as e:
-        logger.error(f"Error filtering products by brand {brand_id}: {str(e)}")
+        logger.error(f"Error filtering products by brand {brand_name}: {str(e)}")
         return jsonify({'error': 'Ошибка фильтрации товаров'}), 500
