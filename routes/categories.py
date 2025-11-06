@@ -25,6 +25,12 @@ def get_categories():
     } for c in categories])
 
 
+@categories_bp.route('/<int:category_id>', methods=['GET'])
+def get_category(category_id):
+    category = Category.query.get_or_404(category_id)
+    return jsonify(category.to_dict())
+
+
 @categories_bp.route('/with-image', methods=['POST'])
 def create_category_with_image():
     name = request.form.get('name')
@@ -105,7 +111,6 @@ def delete_category(category_id):
     try:
         from models.product import Product
         from models.homepage_categories import HomepageCategory
-        from sqlalchemy import text
         
         category = Category.query.get_or_404(category_id)
         
