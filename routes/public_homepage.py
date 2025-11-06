@@ -125,21 +125,15 @@ def get_homepage_data():
                         }
 
                     brand_data = None
-                    if pr.brand:
-                        # Ищем бренд по названию (поле brand содержит название, а не ID)
-                        brand = Brand.query.filter_by(name=pr.brand).first()
-                        print(f"🔍 Ищем бренд '{pr.brand}' для товара '{pr.name}' на главной странице")
-                        if brand:
-                            print(f"✅ Найден бренд: {brand.name} (ID: {brand.id})")
-                            brand_data = {
-                                'id': brand.id,
-                                'name': brand.name,
-                                'country': brand.country,
-                                'description': brand.description,
-                                'image_url': brand.image_url
-                            }
-                        else:
-                            print(f"❌ Бренд '{pr.brand}' не найден в базе данных для товара '{pr.name}'")
+                    if pr.brand_id and pr.brand_info:
+                        # Используем relationship для получения информации о бренде
+                        brand_data = {
+                            'id': pr.brand_info.id,
+                            'name': pr.brand_info.name,
+                            'country': pr.brand_info.country,
+                            'description': pr.brand_info.description,
+                            'image_url': pr.brand_info.image_url
+                        }
 
                     # Получаем информацию о категории
                     category_data = None
@@ -297,25 +291,18 @@ def get_category_with_children_and_products(slug):
                 'text_color': p.status_info.text_color,
             }
 
-        # 🔹 Получить объект бренда по названию
+        # 🔹 Получить объект бренда через relationship
         brand_data = None
-        if p.brand:
-            # Ищем бренд по названию (поле brand содержит название, а не ID)
-            brand = Brand.query.filter_by(name=p.brand).first()
-            print(f"🔍 Ищем бренд '{p.brand}' для товара '{p.name}'")
-            if brand:
-                print(f"✅ Найден бренд: {brand.name} (ID: {brand.id})")
-                brand_data = {
-                    'id': brand.id,
-                    'name': brand.name,
-                    'country': brand.country,
-                    'description': brand.description,
-                    'image_url': brand.image_url
-                }
-                # Добавляем бренд в уникальный список
-                unique_brands.add(brand.id)
-            else:
-                print(f"❌ Бренд '{p.brand}' не найден в базе данных")
+        if p.brand_id and p.brand_info:
+            brand_data = {
+                'id': p.brand_info.id,
+                'name': p.brand_info.name,
+                'country': p.brand_info.country,
+                'description': p.brand_info.description,
+                'image_url': p.brand_info.image_url
+            }
+            # Добавляем бренд в уникальный список
+            unique_brands.add(p.brand_info.id)
 
         products_data.append({
             'id': p.id,
