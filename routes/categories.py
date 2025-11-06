@@ -103,6 +103,20 @@ def update_category(category_id):
 @categories_bp.route('/<int:category_id>', methods=['DELETE'])
 def delete_category(category_id):
     category = Category.query.get_or_404(category_id)
+    
+    # Рекурсивно удаляем все дочерние категории
+    def delete_children_recursive(parent_id):
+        children = Category.query.filter_by(parent_id=parent_id).all()
+        for child in children:
+            # Сначала удаляем всех внуков и т.д.
+            delete_children_recursive(child.id)
+            # Затем удаляем саму дочернюю категорию
+            db.session.delete(child)
+    
+    # Удаляем все дочерние категории
+    delete_children_recursive(category_id)
+    
+    # Удаляем саму категорию
     db.session.delete(category)
     db.session.commit()
     return jsonify({'message': 'Category deleted'})
