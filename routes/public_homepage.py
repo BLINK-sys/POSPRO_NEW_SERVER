@@ -212,6 +212,52 @@ def get_homepage_data():
     })
 
 
+@public_homepage_bp.route('/public/categories', methods=['GET'])
+def get_public_categories():
+    """Получить все категории с show_in_menu=True для каталога (с иерархией)"""
+    # Получаем все категории с show_in_menu=True
+    all_categories = Category.query.filter_by(show_in_menu=True).order_by(Category.parent_id, Category.order).all()
+    
+    # Создаем словарь для быстрого доступа
+    categories_dict = {c.id: {
+        'id': c.id,
+        'name': c.name,
+        'slug': c.slug,
+        'image_url': c.image_url,
+        'description': c.description,
+        'parent_id': c.parent_id,
+        'order': c.order,
+        'children': []
+    } for c in all_categories}
+    
+    # Строим иерархию
+    root_categories = []
+    for cat in all_categories:
+        cat_data = categories_dict[cat.id]
+        if cat.parent_id is None:
+            # Корневая категория
+            root_categories.append(cat_data)
+        else:
+            # Вложенная категория
+            parent = categories_dict.get(cat.parent_id)
+            if parent:
+                parent['children'].append(cat_data)
+    
+    # Сортируем корневые категории по order
+    root_categories.sort(key=lambda x: x['order'] or 0)
+    
+    # Рекурсивно сортируем дочерние категории
+    def sort_children(categories):
+        for cat in categories:
+            if cat['children']:
+                cat['children'].sort(key=lambda x: x['order'] or 0)
+                sort_children(cat['children'])
+    
+    sort_children(root_categories)
+    
+    return jsonify(root_categories)
+
+
 @public_homepage_bp.route('/public/category/<string:slug>', methods=['GET'])
 def get_category_with_children_and_products(slug):
     category = Category.query.filter_by(slug=slug).first_or_404()
