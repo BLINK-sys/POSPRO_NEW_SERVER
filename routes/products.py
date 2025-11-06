@@ -90,7 +90,7 @@ def create_draft_product():
             quantity=0,
             is_visible=False,
             country='',
-            brand='',
+            brand_id=None,
             description='',
             status=None,
             is_draft=True,
@@ -195,33 +195,21 @@ def finalize_product(product_id):
             if str(status) == 'no':
                 status = None
             
-            # Обработка бренда: приоритет brand_id, затем brand (название) для обратной совместимости
-            brand_id = data.get('brand_id')
-            brand_name = data.get('brand', product.brand)
+            # Обработка бренда: используем только brand_id
+            brand_id = data.get('brand_id', product.brand_id)
             
-            if brand_id is not None:
-                # Если передан brand_id, используем его
-                if brand_id:
-                    brand_obj = Brand.query.get(brand_id)
-                    if not brand_obj:
-                        return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
-                    brand_name = brand_obj.name
-                else:
-                    brand_name = ''
-            elif brand_name and str(brand_name) != 'no':
-                # Если передан brand (название), пытаемся найти ID
-                brand_obj = Brand.query.filter_by(name=brand_name).first()
-                if brand_obj:
-                    brand_id = brand_obj.id
-            else:
-                brand_name = ''
+            if brand_id is not None and brand_id:
+                # Проверяем существование бренда
+                brand_obj = Brand.query.get(brand_id)
+                if not brand_obj:
+                    return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
+            elif brand_id == '' or brand_id == 'no':
                 brand_id = None
 
             product.status = status            
             product.is_visible = data.get('is_visible', False)
             product.country = data.get('country', '')
-            product.brand = brand_name  # Для обратной совместимости
-            product.brand_id = brand_id  # Новое поле
+            product.brand_id = brand_id
             product.description = data.get('description', '')
             product.category_id = data.get('category_id')
             
@@ -278,17 +266,6 @@ def get_products():
                 'description': p.brand_info.description,
                 'image_url': p.brand_info.image_url
             }
-        elif p.brand:
-            # Обратная совместимость: ищем бренд по названию
-            brand_obj = Brand.query.filter_by(name=p.brand).first()
-            if brand_obj:
-                brand_info = {
-                    'id': brand_obj.id,
-                    'name': brand_obj.name,
-                    'country': brand_obj.country,
-                    'description': brand_obj.description,
-                    'image_url': brand_obj.image_url
-                }
 
         result.append({
             'id': p.id,
@@ -301,8 +278,7 @@ def get_products():
             'status': 'no' if p.status is None else str(p.status),
             'is_visible': p.is_visible,
             'country': p.country,
-            'brand': 'no' if not p.brand else p.brand,  # Для обратной совместимости
-            'brand_id': p.brand_id,  # Новое поле
+            'brand_id': p.brand_id,
             'brand_info': brand_info,  # Полная информация о бренде
             'description': p.description,
             'category_id': p.category_id,
@@ -381,17 +357,6 @@ def get_product_by_slug(slug):
             'description': product.brand_info.description,
             'image_url': product.brand_info.image_url
         }
-    elif product.brand:
-        # Обратная совместимость: ищем бренд по названию
-        brand_obj = Brand.query.filter_by(name=product.brand).first()
-        if brand_obj:
-            brand_info = {
-                'id': brand_obj.id,
-                'name': brand_obj.name,
-                'country': brand_obj.country,
-                'description': brand_obj.description,
-                'image_url': brand_obj.image_url
-            }
 
     result = {
         'id': product.id,
@@ -404,8 +369,7 @@ def get_product_by_slug(slug):
         'status': 'no' if product.status is None else str(product.status),
         'is_visible': product.is_visible,
         'country': product.country,
-        'brand': 'no' if not product.brand else product.brand,  # Для обратной совместимости
-        'brand_id': product.brand_id,  # Новое поле
+        'brand_id': product.brand_id,
         'brand_info': brand_info,  # Полная информация о бренде
         'description': product.description,
         'category_id': product.category_id,
@@ -434,26 +398,14 @@ def create_product():
         if str(status) == 'no':
             status = None
         
-        # Обработка бренда: приоритет brand_id, затем brand (название) для обратной совместимости
+        # Обработка бренда: используем только brand_id
         brand_id = data.get('brand_id')
-        brand_name = data.get('brand', '')
         
-        # Если передан brand_id, используем его
+        # Если передан brand_id, проверяем существование бренда
         if brand_id:
-            # Проверяем существование бренда
             brand_obj = Brand.query.get(brand_id)
             if not brand_obj:
                 return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
-            # Сохраняем brand_id и название для обратной совместимости
-            brand_name = brand_obj.name
-        elif brand_name and str(brand_name) != 'no':
-            # Если передан brand (название), пытаемся найти ID
-            brand_obj = Brand.query.filter_by(name=brand_name).first()
-            if brand_obj:
-                brand_id = brand_obj.id
-            # Иначе оставляем brand_name для обратной совместимости
-        else:
-            brand_name = ''
 
         name = data.get('name', '')
         logger.info(f"Создание slug для товара: '{name}'")
@@ -475,8 +427,7 @@ def create_product():
             status=status,
             is_visible=data.get('is_visible', True),
             country=data.get('country', ''),
-            brand=brand_name,  # Для обратной совместимости
-            brand_id=brand_id,  # Новое поле
+            brand_id=brand_id,
             description=data.get('description', ''),
             category_id=data.get('category_id'),
             is_draft=False
@@ -510,26 +461,15 @@ def update_product(product_id):
         if str(status) == 'no':
             status = None
         
-        # Обработка бренда: приоритет brand_id, затем brand (название) для обратной совместимости
-        brand_id = data.get('brand_id')
-        brand_name = data.get('brand', product.brand)
+        # Обработка бренда: используем только brand_id
+        brand_id = data.get('brand_id', product.brand_id)
         
-        if brand_id is not None:
-            # Если передан brand_id, используем его
-            if brand_id:
-                brand_obj = Brand.query.get(brand_id)
-                if not brand_obj:
-                    return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
-                brand_name = brand_obj.name
-            else:
-                brand_name = ''
-        elif brand_name and str(brand_name) != 'no':
-            # Если передан brand (название), пытаемся найти ID
-            brand_obj = Brand.query.filter_by(name=brand_name).first()
-            if brand_obj:
-                brand_id = brand_obj.id
-        else:
-            brand_name = ''
+        if brand_id is not None and brand_id:
+            # Проверяем существование бренда
+            brand_obj = Brand.query.get(brand_id)
+            if not brand_obj:
+                return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
+        elif brand_id == '' or brand_id == 'no':
             brand_id = None
 
         new_name = data.get('name', product.name)
@@ -548,8 +488,7 @@ def update_product(product_id):
         product.wholesale_price = data.get('wholesale_price', product.wholesale_price)
         product.quantity = data.get('quantity', product.quantity)
         product.status = status
-        product.brand = brand_name  # Для обратной совместимости
-        product.brand_id = brand_id  # Новое поле
+        product.brand_id = brand_id
         product.is_visible = data.get('is_visible', product.is_visible)
         product.country = data.get('country', product.country)
         product.description = data.get('description', product.description)
@@ -607,6 +546,15 @@ def search_products():
         first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
             .order_by(ProductMedia.order).first()
         
+        # Получаем информацию о бренде
+        brand_info = None
+        if p.brand_id and p.brand_info:
+            brand_info = {
+                'id': p.brand_info.id,
+                'name': p.brand_info.name,
+                'country': p.brand_info.country
+            }
+        
         result.append({
             'id': p.id,
             'name': p.name,
@@ -618,7 +566,8 @@ def search_products():
             'status': 'no' if p.status is None else str(p.status),
             'is_visible': p.is_visible,
             'country': p.country,
-            'brand': 'no' if not p.brand else p.brand,
+            'brand_id': p.brand_id,
+            'brand_info': brand_info,
             'description': p.description,
             'category_id': p.category_id,
             'image': first_image.url if first_image else None
@@ -634,9 +583,27 @@ def get_products_by_brand(brand_name):
         import urllib.parse
         brand_name = urllib.parse.unquote(brand_name)
         
-        # Получаем товары по бренду
+        # Пытаемся найти бренд по названию или ID
+        brand_obj = None
+        try:
+            # Если это число, пытаемся найти по ID
+            brand_id = int(brand_name)
+            brand_obj = Brand.query.get(brand_id)
+        except ValueError:
+            # Если не число, ищем по названию
+            brand_obj = Brand.query.filter_by(name=brand_name).first()
+        
+        if not brand_obj:
+            return jsonify({
+                'brand': None,
+                'products': [],
+                'total_count': 0,
+                'error': 'Бренд не найден'
+            }), 404
+        
+        # Получаем товары по brand_id
         products = Product.query.filter(
-            Product.brand == brand_name,
+            Product.brand_id == brand_obj.id,
             Product.is_visible == True,
             Product.is_draft == False
         ).all()
@@ -657,14 +624,18 @@ def get_products_by_brand(brand_name):
                 'status': 'no' if p.status is None else str(p.status),
                 'is_visible': p.is_visible,
                 'country': p.country,
-                'brand': 'no' if not p.brand else p.brand,
+                'brand_id': p.brand_id,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
             })
         
         return jsonify({
-            'brand': brand_name,
+            'brand': {
+                'id': brand_obj.id,
+                'name': brand_obj.name,
+                'country': brand_obj.country
+            },
             'products': result,
             'total_count': len(result)
         })
@@ -685,9 +656,27 @@ def get_products_by_brand_detailed(brand_name):
         from models.brand import Brand
         from models.category import Category
         
-        # Получаем товары по бренду с джойнами для получения полной информации
+        # Пытаемся найти бренд по названию или ID
+        brand_obj = None
+        try:
+            # Если это число, пытаемся найти по ID
+            brand_id = int(brand_name)
+            brand_obj = Brand.query.get(brand_id)
+        except ValueError:
+            # Если не число, ищем по названию
+            brand_obj = Brand.query.filter_by(name=brand_name).first()
+        
+        if not brand_obj:
+            return jsonify({
+                'brand': None,
+                'products': [],
+                'total_count': 0,
+                'error': 'Бренд не найден'
+            }), 404
+        
+        # Получаем товары по brand_id с джойнами для получения полной информации
         products = Product.query.filter(
-            Product.brand == brand_name,
+            Product.brand_id == brand_obj.id,
             Product.is_visible == True,
             Product.is_draft == False
         ).all()
@@ -710,27 +699,16 @@ def get_products_by_brand_detailed(brand_name):
                         'text_color': status_obj.text_color
                     }
             
-            # Получаем информацию о бренде
+            # Получаем информацию о бренде из relationship
             brand_info = None
-            if p.brand:
-                brand_obj = Brand.query.filter_by(name=p.brand).first()
-                if brand_obj:
-                    brand_info = {
-                        'id': brand_obj.id,
-                        'name': brand_obj.name,
-                        'country': brand_obj.country,
-                        'description': brand_obj.description,
-                        'image_url': brand_obj.image_url
-                    }
-                else:
-                    # Если бренд не найден в таблице Brand, создаем объект из данных товара
-                    brand_info = {
-                        'id': None,
-                        'name': p.brand,
-                        'country': p.country,
-                        'description': None,
-                        'image_url': None
-                    }
+            if p.brand_id and p.brand_info:
+                brand_info = {
+                    'id': p.brand_info.id,
+                    'name': p.brand_info.name,
+                    'country': p.brand_info.country,
+                    'description': p.brand_info.description,
+                    'image_url': p.brand_info.image_url
+                }
             
             # Получаем информацию о категории
             category_info = None
@@ -779,7 +757,13 @@ def get_products_by_brand_detailed(brand_name):
             })
         
         return jsonify({
-            'brand': brand_name,
+            'brand': {
+                'id': brand_obj.id,
+                'name': brand_obj.name,
+                'country': brand_obj.country,
+                'description': brand_obj.description,
+                'image_url': brand_obj.image_url
+            },
             'products': result,
             'total_count': len(result)
         })
@@ -798,9 +782,20 @@ def get_categories_by_brand(brand_name):
         # Получаем уникальные категории товаров по бренду
         from models.category import Category
         
+        # Пытаемся найти бренд по названию или ID
+        brand_obj = None
+        try:
+            brand_id = int(brand_name)
+            brand_obj = Brand.query.get(brand_id)
+        except ValueError:
+            brand_obj = Brand.query.filter_by(name=brand_name).first()
+        
+        if not brand_obj:
+            return jsonify({'categories': []})
+        
         # Подзапрос для получения ID категорий товаров данного бренда
         category_ids = db.session.query(Product.category_id).filter(
-            Product.brand == brand_name,
+            Product.brand_id == brand_obj.id,
             Product.is_visible == True,
             Product.is_draft == False,
             Product.category_id.isnot(None)
@@ -818,7 +813,7 @@ def get_categories_by_brand(brand_name):
         for cat in categories:
             # Подсчитываем количество товаров в каждой категории для данного бренда
             product_count = Product.query.filter(
-                Product.brand == brand_name,
+                Product.brand_id == brand_obj.id,
                 Product.category_id == cat.id,
                 Product.is_visible == True,
                 Product.is_draft == False
@@ -839,7 +834,11 @@ def get_categories_by_brand(brand_name):
         result.sort(key=lambda x: x['product_count'], reverse=True)
         
         return jsonify({
-            'brand': brand_name,
+            'brand': {
+                'id': brand_obj.id,
+                'name': brand_obj.name,
+                'country': brand_obj.country
+            },
             'categories': result
         })
     except Exception as e:
@@ -854,12 +853,28 @@ def get_products_by_brand_and_category(brand_name):
         import urllib.parse
         brand_name = urllib.parse.unquote(brand_name)
         
+        # Пытаемся найти бренд по названию или ID
+        brand_obj = None
+        try:
+            brand_id = int(brand_name)
+            brand_obj = Brand.query.get(brand_id)
+        except ValueError:
+            brand_obj = Brand.query.filter_by(name=brand_name).first()
+        
+        if not brand_obj:
+            return jsonify({
+                'brand': None,
+                'products': [],
+                'total_count': 0,
+                'error': 'Бренд не найден'
+            }), 404
+        
         # Получаем параметры фильтрации
         category_id = request.args.get('category_id', type=int)
         
         # Базовый запрос
         query = Product.query.filter(
-            Product.brand == brand_name,
+            Product.brand_id == brand_obj.id,
             Product.is_visible == True,
             Product.is_draft == False
         )
@@ -886,14 +901,18 @@ def get_products_by_brand_and_category(brand_name):
                 'status': 'no' if p.status is None else str(p.status),
                 'is_visible': p.is_visible,
                 'country': p.country,
-                'brand': 'no' if not p.brand else p.brand,
+                'brand_id': p.brand_id,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
             })
         
         return jsonify({
-            'brand': brand_name,
+            'brand': {
+                'id': brand_obj.id,
+                'name': brand_obj.name,
+                'country': brand_obj.country
+            },
             'category_id': category_id,
             'products': result,
             'total_count': len(result)

@@ -13,7 +13,6 @@ class Product(db.Model):
     quantity = db.Column(db.Integer, default=0)
     is_visible = db.Column(db.Boolean, default=True)
     country = db.Column(db.String(100))
-    brand = db.Column(db.String(100))  # Старая колонка для обратной совместимости
     brand_id = db.Column(db.Integer, db.ForeignKey('brand.id'), nullable=True)
     brand_info = db.relationship('Brand', backref='products', lazy='joined')
     description = db.Column(db.Text)
