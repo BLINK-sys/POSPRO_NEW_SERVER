@@ -215,8 +215,13 @@ def get_homepage_data():
 @public_homepage_bp.route('/public/categories', methods=['GET'])
 def get_public_categories():
     """Получить все категории с show_in_menu=True для каталога (с иерархией)"""
-    # Получаем все категории с show_in_menu=True
-    all_categories = Category.query.filter_by(show_in_menu=True).order_by(Category.parent_id, Category.order).all()
+    # Получаем все категории с show_in_menu=True (если поле существует в БД)
+    # Если поле еще не добавлено в БД, возвращаем все категории
+    try:
+        all_categories = Category.query.filter_by(show_in_menu=True).order_by(Category.parent_id, Category.order).all()
+    except Exception:
+        # Если поле show_in_menu еще не существует в БД, возвращаем все категории
+        all_categories = Category.query.order_by(Category.parent_id, Category.order).all()
     
     # Создаем словарь для быстрого доступа
     categories_dict = {c.id: {
