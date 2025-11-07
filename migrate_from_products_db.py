@@ -29,14 +29,15 @@ JWT_TOKEN = None
 
 # Словари для маппинга старых ID на новые
 brands_map = {}  # {old_brand_id: new_brand_id}
-brands_name_map = {}  # {old_brand_id: brand_name} для получения названия бренда по старому ID
 categories_map = {}  # {old_category_id: new_category_id}
 brands_cache = {}  # {(name, country): brand_id} для быстрого поиска
 categories_cache = {}  # {(name, parent_id): category_id} для быстрого поиска
 characteristics_cache = {}  # {characteristic_key: characteristic_id} для быстрого поиска
+products_cache = {}  # {name: product_id} для быстрого поиска товаров
 existing_brands_loaded = False  # Флаг загрузки существующих брендов
 existing_categories_loaded = False  # Флаг загрузки существующих категорий
 existing_characteristics_loaded = False  # Флаг загрузки существующих характеристик
+existing_products_loaded = False  # Флаг загрузки существующих товаров
 
 
 def get_auth_headers():
@@ -424,10 +425,12 @@ def create_category(name, parent_id=None, image_url=None, api_url=None):
 def load_existing_products(api_url):
     """Загружает все существующие товары в кеш (по имени для проверки дубликатов)"""
     global existing_products_loaded, products_cache
-    products_cache = {}  # {name: product_id} для быстрого поиска
     
     if existing_products_loaded:
         return
+    
+    # Инициализируем кеш только при первой загрузке
+    products_cache = {}  # {name: product_id} для быстрого поиска
     
     products_url = normalize_url(api_url, 'products/')
     print(f"  Загрузка существующих товаров с {products_url}...")
@@ -529,12 +532,8 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
     
     # Получаем новый brand_id по старому ID
     new_brand_id = None
-    brand_name = ''
     if old_brand_id and old_brand_id in brands_map:
         new_brand_id = brands_map[old_brand_id]
-        # Получаем название для обратной совместимости
-        if old_brand_id in brands_name_map:
-            brand_name = brands_name_map[old_brand_id]
     
     # Получаем новый category_id по старому ID
     new_category_id = None
@@ -576,7 +575,7 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
         response = requests.post(
             products_url,
             json=data,
-            headers={'Content-Type': 'application/json'},
+            headers=get_auth_headers(),
             timeout=60
         )
         
@@ -718,6 +717,8 @@ def migrate_data(api_base_url=None, db_path=None):
         cursor.execute(f"SELECT * FROM {categories_table} ORDER BY id")
         all_categories = cursor.fetchall()
         
+        print(f"Найдено категорий в старой БД: {len(all_categories)}")
+        
         # Создаем словарь категорий по ID
         categories_dict = {}
         for cat_row in all_categories:
@@ -726,6 +727,8 @@ def migrate_data(api_base_url=None, db_path=None):
             categories_dict[old_id] = cat_dict
         
         # Функция для рекурсивного создания категорий
+        processed_count = [0]  # Используем список для изменения в замыкании
+        
         def create_category_recursive(old_cat_id, parent_new_id=None):
             if old_cat_id not in categories_dict:
                 return None
@@ -735,22 +738,30 @@ def migrate_data(api_base_url=None, db_path=None):
             if not name:
                 return None
             
-            # Если уже создана, возвращаем её ID
-            old_parent_id = cat_dict.get('parent_id')
-            cache_key = (name, parent_new_id)
-            if cache_key in categories_cache:
-                return categories_cache[cache_key]
+            # Проверяем, не обработана ли уже категория с этим old_id
+            if old_cat_id in categories_map:
+                # Категория уже была обработана, используем сохраненный ID
+                new_category_id = categories_map[old_cat_id]
+                # Не выводим сообщение для уже обработанных, чтобы не засорять лог
+            else:
+                processed_count[0] += 1
+                # Получаем изображение
+                image_url = cat_dict.get('img') or cat_dict.get('image') or cat_dict.get('image_url')
+                
+                # Создаем категорию (функция create_category сама проверяет кеш и выводит сообщения)
+                new_category_id = create_category(name, parent_new_id, image_url, api_url)
+                if new_category_id:
+                    categories_map[old_cat_id] = new_category_id
+                    time.sleep(0.2)
+                else:
+                    # Если категория уже существовала в кеше, create_category вернет её ID
+                    # Но нужно сохранить маппинг для old_id
+                    cache_key = (name, parent_new_id)
+                    if cache_key in categories_cache:
+                        new_category_id = categories_cache[cache_key]
+                        categories_map[old_cat_id] = new_category_id
             
-            # Получаем изображение
-            image_url = cat_dict.get('img') or cat_dict.get('image') or cat_dict.get('image_url')
-            
-            # Создаем категорию
-            new_category_id = create_category(name, parent_new_id, image_url, api_url)
-            if new_category_id:
-                categories_map[old_cat_id] = new_category_id
-                time.sleep(0.2)
-            
-            # Рекурсивно создаем дочерние категории
+            # Рекурсивно создаем дочерние категории (даже если категория уже существовала)
             if new_category_id:
                 for child_old_id, child_dict in categories_dict.items():
                     if child_dict.get('parent_id') == old_cat_id:
@@ -759,9 +770,15 @@ def migrate_data(api_base_url=None, db_path=None):
             return new_category_id
         
         # Создаем категории без родителя (основные)
+        root_categories_count = 0
         for old_id, cat_dict in categories_dict.items():
             if not cat_dict.get('parent_id'):
+                root_categories_count += 1
                 create_category_recursive(old_id, None)
+        
+        print(f"Обработано корневых категорий: {root_categories_count}")
+        print(f"Всего обработано категорий: {processed_count[0]}")
+        print(f"Создано/найдено категорий: {len(categories_map)}")
     else:
         print(f"  ⚠ Таблица categories не найдена")
     
@@ -782,7 +799,6 @@ def migrate_data(api_base_url=None, db_path=None):
                 new_id = create_brand(name.strip(), country, api_url)
                 if new_id and old_id:
                     brands_map[old_id] = new_id
-                    brands_name_map[old_id] = name.strip()  # Сохраняем название для использования при создании товаров
                 time.sleep(0.2)
     else:
         print(f"  ⚠ Таблица brands не найдена")

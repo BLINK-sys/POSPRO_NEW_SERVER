@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify
+from sqlalchemy.orm import joinedload
 
 from models import ProductMedia
 from models.banner import Banner
@@ -21,7 +22,6 @@ def get_public_info():
 @public_homepage_bp.route('/public/homepage', methods=['GET'])
 def get_homepage_data():
     banners = Banner.query.filter_by(active=True).order_by(Banner.order).all()
-    small_banners = {b.id: b for b in SmallBanner.query.all()}
     banners_data = [{
         'id': b.id,
         'title': b.title,
@@ -37,41 +37,91 @@ def get_homepage_data():
     } for b in banners]
 
     blocks = HomepageBlock.query.filter_by(active=True).order_by(HomepageBlock.order).all()
-    
-    # Отладочная информация
-    print(f"Found {len(blocks)} active blocks")
-    for block in blocks:
-        print(f"Block {block.id}: {block.title} (type: {block.type})")
 
-    # Используем правильные названия таблиц
-    categories = {c.id: c for c in Category.query.all()}
-    brands = {b.id: b for b in Brand.query.all()}
-    benefits = {b.id: b for b in Benefit.query.all()}
-    products = {p.id: p for p in Product.query.all()}
-    small_banners_all = {b.id: b for b in SmallBanner.query.all()}
-    
-    print(f"Available items: {len(categories)} categories, {len(brands)} brands, {len(benefits)} benefits, {len(products)} products")
-    print(f"Category IDs: {list(categories.keys())}")
-    print(f"Brand IDs: {list(brands.keys())}")
-    print(f"Benefit IDs: {list(benefits.keys())}")
-    print(f"Product IDs: {list(products.keys())}")
+    # Загружаем элементы для блоков и собираем ID, которые понадобятся далее
+    block_items_map = {}
+    category_ids = set()
+    brand_ids = set()
+    benefit_ids = set()
+    product_ids = set()
+    small_banner_ids = set()
+
+    for block in blocks:
+        block_items = HomepageBlockItem.query.filter_by(block_id=block.id).order_by(HomepageBlockItem.order).all()
+        block_items_map[block.id] = block_items
+
+        for item in block_items:
+            if not item.item_id:
+                continue
+
+            if block.type in ['category', 'categories']:
+                category_ids.add(item.item_id)
+            elif block.type in ['brand', 'brands']:
+                brand_ids.add(item.item_id)
+            elif block.type in ['benefit', 'benefits']:
+                benefit_ids.add(item.item_id)
+            elif block.type in ['product', 'products']:
+                product_ids.add(item.item_id)
+            elif block.type in ['small_banner', 'small_banners', 'info_cards']:
+                small_banner_ids.add(item.item_id)
+
+    # Загружаем необходимые сущности одним запросом на каждый тип
+    categories = {}
+    if category_ids:
+        categories = {
+            c.id: c for c in Category.query.filter(Category.id.in_(category_ids)).all()
+        }
+
+    brands = {}
+    if brand_ids:
+        brands = {
+            b.id: b for b in Brand.query.filter(Brand.id.in_(brand_ids)).all()
+        }
+
+    benefits = {}
+    if benefit_ids:
+        benefits = {
+            b.id: b for b in Benefit.query.filter(Benefit.id.in_(benefit_ids)).all()
+        }
+
+    products = {}
+    if product_ids:
+        products = {
+            p.id: p for p in Product.query.options(
+                joinedload(Product.brand_info),
+                joinedload(Product.status_info),
+                joinedload(Product.category)
+            ).filter(Product.id.in_(product_ids)).all()
+        }
+
+    # Загружаем первое изображение для каждого товара (если есть)
+    product_first_images = {}
+    if product_ids:
+        media_items = ProductMedia.query \
+            .filter(
+                ProductMedia.product_id.in_(product_ids),
+                ProductMedia.media_type == 'image'
+            ) \
+            .order_by(ProductMedia.product_id, ProductMedia.order) \
+            .all()
+
+        for media in media_items:
+            if media.product_id not in product_first_images:
+                product_first_images[media.product_id] = media
+
+    small_banners_all = {}
+    if small_banner_ids:
+        small_banners_all = {
+            b.id: b for b in SmallBanner.query.filter(SmallBanner.id.in_(small_banner_ids)).all()
+        }
 
     blocks_data = []
 
     for block in blocks:
-        # Явно получаем элементы блока из базы данных
-        block_items = HomepageBlockItem.query.filter_by(block_id=block.id).order_by(HomepageBlockItem.order).all()
-        print(f"Block {block.id} has {len(block_items)} items in database")
-        
-        # Выводим все item_id для этого блока
-        item_ids = [item.item_id for item in block_items]
-        print(f"Item IDs for block {block.id}: {item_ids}")
-        
+        block_items = block_items_map.get(block.id, [])
         items_data = []
 
         for item in block_items:
-            print(f"Processing item {item.id} with item_id {item.item_id} for block type {block.type}")
-            
             if block.type in ['category', 'categories']:
                 cat = categories.get(item.item_id)
                 if cat:
@@ -81,9 +131,6 @@ def get_homepage_data():
                         'slug': cat.slug,
                         'image_url': cat.image_url
                     })
-                    print(f"Added category: {cat.name}")
-                else:
-                    print(f"Category with id {item.item_id} not found")
             elif block.type in ['brand', 'brands']:
                 br = brands.get(item.item_id)
                 if br:
@@ -94,9 +141,6 @@ def get_homepage_data():
                         'description': br.description,
                         'image_url': br.image_url
                     })
-                    print(f"Added brand: {br.name}")
-                else:
-                    print(f"Brand with id {item.item_id} not found")
             elif block.type in ['benefit', 'benefits']:
                 ben = benefits.get(item.item_id)
                 if ben:
@@ -106,14 +150,10 @@ def get_homepage_data():
                         'title': ben.title,
                         'description': ben.description
                     })
-                    print(f"Added benefit: {ben.title}")
-                else:
-                    print(f"Benefit with id {item.item_id} not found")
             elif block.type in ['product', 'products']:
                 pr = products.get(item.item_id)
                 if pr:
-                    first_image = ProductMedia.query.filter_by(product_id=pr.id, media_type='image') \
-                        .order_by(ProductMedia.order).first()
+                    first_image = product_first_images.get(pr.id)
 
                     status_data = None
                     if pr.status_info:
@@ -161,9 +201,6 @@ def get_homepage_data():
                         'quantity': pr.quantity,
                         'image_url': first_image.url if first_image else None
                     })
-                    print(f"Added product: {pr.name}")
-                else:
-                    print(f"Product with id {item.item_id} not found")
             elif block.type in ['small_banner', 'small_banners', 'info_cards']:
                 sb = small_banners_all.get(item.item_id)
                 if sb:
@@ -183,12 +220,7 @@ def get_homepage_data():
                         'button_link': sb.button_link,
                         'open_in_new_tab': sb.open_in_new_tab
                     })
-                    print(f"Added small banner: {sb.title}")
-                else:
-                    print(f"Small banner with id {item.item_id} not found")
 
-        print(f"Final items count for block {block.id}: {len(items_data)}")
-        
         blocks_data.append({
             'id': block.id,
             'type': block.type,
