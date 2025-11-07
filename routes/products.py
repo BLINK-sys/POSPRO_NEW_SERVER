@@ -4,14 +4,110 @@ import re
 import unicodedata
 from flask import Blueprint, request, jsonify, current_app
 import logging
+from math import ceil
 from extensions import db
 from models import ProductDocument, ProductCharacteristic
 from models.product import Product
 from models.media import ProductMedia
 from models.brand import Brand
+from sqlalchemy.orm import joinedload
 
 products_bp = Blueprint('products', __name__)
 logger = logging.getLogger(__name__)
+
+
+def serialize_brand_product(product):
+    """Преобразует объект Product в словарь для публичного API бренда."""
+    # Изображение
+    image_url = None
+    try:
+        image_url = product.get_main_image_url() or None
+    except AttributeError:
+        image_url = None
+
+    # Информация о статусе
+    status_info = None
+    if getattr(product, 'status_info', None):
+        status_info = {
+            'id': product.status_info.id,
+            'name': product.status_info.name,
+            'background_color': product.status_info.background_color,
+            'text_color': product.status_info.text_color
+        }
+
+    # Информация о бренде
+    brand_info = None
+    if getattr(product, 'brand_info', None):
+        brand_info = {
+            'id': product.brand_info.id,
+            'name': product.brand_info.name,
+            'country': product.brand_info.country,
+            'description': product.brand_info.description,
+            'image_url': product.brand_info.image_url
+        }
+
+    # Информация о категории
+    category_info = None
+    if getattr(product, 'category', None):
+        category_info = {
+            'id': product.category.id,
+            'name': product.category.name,
+            'slug': product.category.slug,
+            'description': product.category.description,
+            'image_url': product.category.image_url
+        }
+
+    # Статус наличия
+    availability_status = {
+        'status_name': 'Есть в наличии' if (product.quantity or 0) > 0 else 'Нет в наличии',
+        'background_color': '#10b981' if (product.quantity or 0) > 0 else '#ef4444',
+        'text_color': '#ffffff'
+    }
+
+    return {
+        'id': product.id,
+        'name': product.name,
+        'slug': product.slug,
+        'article': getattr(product, 'article', None),
+        'price': product.price,
+        'wholesale_price': product.wholesale_price,
+        'quantity': product.quantity,
+        'is_visible': product.is_visible,
+        'description': product.description,
+        'category_id': product.category_id,
+        'image_url': image_url,
+        'image': image_url,  # Для обратной совместимости
+        'status': status_info,
+        'brand_id': product.brand_id,
+        'brand_info': brand_info,
+        'brand': brand_info,  # Для обратной совместимости
+        'category': category_info,
+        'availability_status': availability_status
+    }
+
+
+def paginate_brand_products(query, page, page_size):
+    """Выполняет пагинацию товаров бренда и возвращает сериализованные данные."""
+    page = page or 1
+    page_size = page_size or 20
+    page = max(page, 1)
+    # Не позволяем слишком большие страницы, чтобы избежать нагрузки
+    page_size = max(min(page_size, 100), 1)
+
+    total_count = query.count()
+    total_pages = ceil(total_count / page_size) if total_count else 0
+
+    if total_pages == 0:
+        current_page = 1
+        products = []
+    else:
+        current_page = min(page, total_pages)
+        offset = (current_page - 1) * page_size
+        products = query.order_by(Product.id.asc()).offset(offset).limit(page_size).all()
+
+    serialized_products = [serialize_brand_product(p) for p in products]
+
+    return serialized_products, total_count, total_pages, current_page, page_size
 
 def safe_slugify(text):
     """
@@ -657,119 +753,48 @@ def get_products_by_brand(brand_name):
 
 @products_bp.route('/brand/<string:brand_name>/detailed', methods=['GET'])
 def get_products_by_brand_detailed(brand_name):
-    """Получить товары по бренду с полной информацией (статус, бренд, категория)"""
+    """Получить товары по бренду с полной информацией (статус, бренд, категория) с пагинацией."""
     try:
-        # Декодируем название бренда из URL
         import urllib.parse
         brand_name = urllib.parse.unquote(brand_name)
-        
-        # Импортируем необходимые модели
-        from models.status import Status
-        from models.brand import Brand
-        from models.category import Category
-        
-        # Пытаемся найти бренд по названию или ID
-        brand_obj = None
+
         try:
-            # Если это число, пытаемся найти по ID
             brand_id = int(brand_name)
             brand_obj = Brand.query.get(brand_id)
         except ValueError:
-            # Если не число, ищем по названию
             brand_obj = Brand.query.filter_by(name=brand_name).first()
-        
+
         if not brand_obj:
             return jsonify({
                 'brand': None,
                 'products': [],
                 'total_count': 0,
+                'page': 1,
+                'page_size': 0,
+                'total_pages': 0,
                 'error': 'Бренд не найден'
             }), 404
-        
-        # Получаем товары по brand_id с джойнами для получения полной информации
-        products = Product.query.filter(
+
+        page = request.args.get('page', 1, type=int)
+        page_size = request.args.get('page_size', 20, type=int)
+
+        base_query = Product.query.options(
+            joinedload(Product.brand_info),
+            joinedload(Product.status_info),
+            joinedload(Product.category),
+            joinedload(Product.media)
+        ).filter(
             Product.brand_id == brand_obj.id,
-            Product.is_visible == True,
-            Product.is_draft == False
-        ).all()
-        
-        result = []
-        for p in products:
-            # Получаем первое изображение
-            first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-                .order_by(ProductMedia.order).first()
-            
-            # Получаем информацию о статусе
-            status_info = None
-            if p.status:
-                status_obj = Status.query.get(p.status)
-                if status_obj:
-                    status_info = {
-                        'id': status_obj.id,
-                        'name': status_obj.name,
-                        'background_color': status_obj.background_color,
-                        'text_color': status_obj.text_color
-                    }
-            
-            # Получаем информацию о бренде из relationship
-            brand_info = None
-            if p.brand_id and p.brand_info:
-                brand_info = {
-                    'id': p.brand_info.id,
-                    'name': p.brand_info.name,
-                    'country': p.brand_info.country,
-                    'description': p.brand_info.description,
-                    'image_url': p.brand_info.image_url
-                }
-            
-            # Получаем информацию о категории
-            category_info = None
-            if p.category_id:
-                category_obj = Category.query.get(p.category_id)
-                if category_obj:
-                    category_info = {
-                        'id': category_obj.id,
-                        'name': category_obj.name,
-                        'slug': category_obj.slug,
-                        'description': category_obj.description,
-                        'image_url': category_obj.image_url
-                    }
-            
-            # Получаем статус наличия
-            availability_status = None
-            if p.quantity > 0:
-                availability_status = {
-                    'status_name': 'Есть в наличии',
-                    'background_color': '#10b981',
-                    'text_color': '#ffffff'
-                }
-            else:
-                availability_status = {
-                    'status_name': 'Нет в наличии',
-                    'background_color': '#ef4444',
-                    'text_color': '#ffffff'
-                }
-            
-            result.append({
-                'id': p.id,
-                'name': p.name,
-                'slug': p.slug,
-                'article': p.article,
-                'price': p.price,
-                'wholesale_price': p.wholesale_price,
-                'quantity': p.quantity,
-                'is_visible': p.is_visible,
-                'description': p.description,
-                'category_id': p.category_id,
-                'image_url': first_image.url if first_image else None,
-                'status': status_info,
-                'brand_id': p.brand_id,
-                'brand_info': brand_info,  # Используем brand_info вместо brand
-                'brand': brand_info,  # Для обратной совместимости
-                'category': category_info,
-                'availability_status': availability_status
-            })
-        
+            Product.is_visible.is_(True),
+            Product.is_draft.is_(False)
+        )
+
+        products_data, total_count, total_pages, current_page, normalized_page_size = paginate_brand_products(
+            base_query,
+            page,
+            page_size
+        )
+
         return jsonify({
             'brand': {
                 'id': brand_obj.id,
@@ -778,8 +803,11 @@ def get_products_by_brand_detailed(brand_name):
                 'description': brand_obj.description,
                 'image_url': brand_obj.image_url
             },
-            'products': result,
-            'total_count': len(result)
+            'products': products_data,
+            'total_count': total_count,
+            'page': current_page,
+            'page_size': normalized_page_size,
+            'total_pages': total_pages
         })
     except Exception as e:
         logger.error(f"Error getting detailed products by brand {brand_name}: {str(e)}")
@@ -883,65 +911,44 @@ def get_products_by_brand_and_category(brand_name):
                 'error': 'Бренд не найден'
             }), 404
         
-        # Получаем параметры фильтрации
         category_id = request.args.get('category_id', type=int)
-        
-        # Базовый запрос
-        query = Product.query.filter(
+        page = request.args.get('page', 1, type=int)
+        page_size = request.args.get('page_size', 20, type=int)
+
+        query = Product.query.options(
+            joinedload(Product.brand_info),
+            joinedload(Product.status_info),
+            joinedload(Product.category),
+            joinedload(Product.media)
+        ).filter(
             Product.brand_id == brand_obj.id,
-            Product.is_visible == True,
-            Product.is_draft == False
+            Product.is_visible.is_(True),
+            Product.is_draft.is_(False)
         )
-        
-        # Добавляем фильтр по категории, если указан
+
         if category_id:
             query = query.filter(Product.category_id == category_id)
-        
-        products = query.all()
-        
-        result = []
-        for p in products:
-            first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-                .order_by(ProductMedia.order).first()
-            
-            # Получаем информацию о бренде
-            brand_info = None
-            if p.brand_id and p.brand_info:
-                brand_info = {
-                    'id': p.brand_info.id,
-                    'name': p.brand_info.name,
-                    'country': p.brand_info.country,
-                    'description': p.brand_info.description,
-                    'image_url': p.brand_info.image_url
-                }
-            
-            result.append({
-                'id': p.id,
-                'name': p.name,
-                'slug': p.slug,
-                'article': p.article,
-                'price': p.price,
-                'wholesale_price': p.wholesale_price,
-                'quantity': p.quantity,
-                'status': 'no' if p.status is None else str(p.status),
-                'is_visible': p.is_visible,
-                'country': p.country,
-                'brand_id': p.brand_id,
-                'brand_info': brand_info,  # Добавляем brand_info
-                'description': p.description,
-                'category_id': p.category_id,
-                'image': first_image.url if first_image else None
-            })
-        
+
+        products_data, total_count, total_pages, current_page, normalized_page_size = paginate_brand_products(
+            query,
+            page,
+            page_size
+        )
+
         return jsonify({
             'brand': {
                 'id': brand_obj.id,
                 'name': brand_obj.name,
-                'country': brand_obj.country
+                'country': brand_obj.country,
+                'description': brand_obj.description,
+                'image_url': brand_obj.image_url
             },
             'category_id': category_id,
-            'products': result,
-            'total_count': len(result)
+            'products': products_data,
+            'total_count': total_count,
+            'page': current_page,
+            'page_size': normalized_page_size,
+            'total_pages': total_pages
         })
     except Exception as e:
         logger.error(f"Error filtering products by brand {brand_name}: {str(e)}")
