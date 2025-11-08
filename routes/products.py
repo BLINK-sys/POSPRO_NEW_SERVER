@@ -321,7 +321,6 @@ def get_products():
         per_page = request.args.get('per_page', type=int)
         search = request.args.get('search', type=str, default='').strip()
         category_param = request.args.get('category_id')
-        category_id_value = None
         status_param = request.args.get('status')
         brand_param = request.args.get('brand')
         supplier_param = request.args.get('supplier')
@@ -336,12 +335,10 @@ def get_products():
         if category_param:
             if category_param == 'no-category':
                 query = query.filter(Product.category_id.is_(None))
-                category_id_value = None
             else:
                 try:
                     category_id_int = int(category_param)
                     query = query.filter(Product.category_id == category_id_int)
-                    category_id_value = category_id_int
                 except (TypeError, ValueError):
                     pass
 
@@ -1060,6 +1057,7 @@ def get_products_by_brand_and_category(brand_name):
         
         # Получаем параметры фильтрации
         category_param = request.args.get('category_id')
+        category_id_value = None
         page = request.args.get('page', default=1, type=int) or 1
         per_page = request.args.get('per_page', default=20, type=int) or 20
         per_page = max(1, min(per_page, 100))
@@ -1075,10 +1073,12 @@ def get_products_by_brand_and_category(brand_name):
         if category_param:
             if category_param == 'no-category':
                 query = query.filter(Product.category_id.is_(None))
+                category_id_value = None
             else:
                 try:
                     category_id_int = int(category_param)
                     query = query.filter(Product.category_id == category_id_int)
+                    category_id_value = category_id_int
                 except (TypeError, ValueError):
                     pass
         
