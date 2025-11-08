@@ -1,5 +1,6 @@
 from extensions import db
 from models.brand import Brand
+from models.supplier import Supplier
 
 
 class Product(db.Model):
@@ -15,6 +16,8 @@ class Product(db.Model):
     country = db.Column(db.String(100))
     brand_id = db.Column(db.Integer, db.ForeignKey('brand.id'), nullable=True)
     brand_info = db.relationship('Brand', backref='products', lazy='joined')
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
+    supplier = db.relationship('Supplier', backref='products', lazy='joined')
     description = db.Column(db.Text)
     status = db.Column(db.Integer, db.ForeignKey('status.id'))
     status_info = db.relationship('Status', backref='products', lazy='joined')

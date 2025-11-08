@@ -10,6 +10,7 @@ from models import ProductDocument, ProductCharacteristic
 from models.product import Product
 from models.media import ProductMedia
 from models.brand import Brand
+from models.supplier import Supplier
 from models.product_availability_status import ProductAvailabilityStatus
 
 products_bp = Blueprint('products', __name__)
@@ -275,6 +276,13 @@ def serialize_product(product, availability_status=None):
             'image_url': product.brand_info.image_url
         }
 
+    supplier_info = None
+    if getattr(product, 'supplier', None):
+        supplier_info = {
+            'id': product.supplier.id,
+            'name': product.supplier.name
+        }
+
     status_value = 'no' if product.status is None else str(product.status)
 
     if availability_status is None:
@@ -294,16 +302,14 @@ def serialize_product(product, availability_status=None):
         'country': product.country,
         'brand_id': product.brand_id,
         'brand_info': brand_info,
+        'supplier_id': getattr(product, 'supplier_id', None),
+        'supplier': supplier_info,
         'description': product.description,
         'category_id': product.category_id,
         'category': product.category.name if product.category else None,
         'image': first_image.url if first_image else None,
         'availability_status': availability_status
     }
-
-    supplier_column = getattr(Product, 'supplier_id', None)
-    if supplier_column is not None:
-        product_data['supplier_id'] = getattr(product, 'supplier_id', None)
 
     return product_data
 
@@ -314,7 +320,8 @@ def get_products():
         page = request.args.get('page', type=int)
         per_page = request.args.get('per_page', type=int)
         search = request.args.get('search', type=str, default='').strip()
-        category_id = request.args.get('category_id', type=int)
+        category_param = request.args.get('category_id')
+        category_id_value = None
         status_param = request.args.get('status')
         brand_param = request.args.get('brand')
         supplier_param = request.args.get('supplier')
@@ -326,8 +333,17 @@ def get_products():
         if search:
             query = query.filter(Product.name.ilike(f'%{search}%'))
 
-        if category_id:
-            query = query.filter(Product.category_id == category_id)
+        if category_param:
+            if category_param == 'no-category':
+                query = query.filter(Product.category_id.is_(None))
+                category_id_value = None
+            else:
+                try:
+                    category_id_int = int(category_param)
+                    query = query.filter(Product.category_id == category_id_int)
+                    category_id_value = category_id_int
+                except (TypeError, ValueError):
+                    pass
 
         if status_param:
             if status_param == 'no-status':
@@ -530,6 +546,19 @@ def create_product():
             if not brand_obj:
                 return jsonify({'error': f'Бренд с ID {brand_id} не найден'}), 400
 
+        supplier_id = data.get('supplier_id')
+        if supplier_id in (None, '', 'no-supplier'):
+            supplier_id = None
+        elif supplier_id is not None:
+            try:
+                supplier_id = int(supplier_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Некорректный идентификатор поставщика'}), 400
+            if supplier_id:
+                supplier_obj = Supplier.query.get(supplier_id)
+                if not supplier_obj:
+                    return jsonify({'error': f'Поставщик с ID {supplier_id} не найден'}), 400
+
         name = data.get('name', '')
         logger.info(f"Создание slug для товара: '{name}'")
         
@@ -551,6 +580,7 @@ def create_product():
             is_visible=data.get('is_visible', True),
             country=data.get('country', ''),
             brand_id=brand_id,
+            supplier_id=supplier_id,
             description=data.get('description', ''),
             category_id=data.get('category_id'),
             is_draft=False
@@ -595,6 +625,19 @@ def update_product(product_id):
         elif brand_id == '' or brand_id == 'no':
             brand_id = None
 
+        supplier_id = data.get('supplier_id', getattr(product, 'supplier_id', None))
+        if supplier_id in ('', 'no-supplier'):
+            supplier_id = None
+        elif supplier_id is not None:
+            try:
+                supplier_id = int(supplier_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Некорректный идентификатор поставщика'}), 400
+            if supplier_id:
+                supplier_obj = Supplier.query.get(supplier_id)
+                if not supplier_obj:
+                    return jsonify({'error': f'Поставщик с ID {supplier_id} не найден'}), 400
+
         new_name = data.get('name', product.name)
         if new_name != product.name:
             logger.info(f"Изменение названия товара: '{product.name}' -> '{new_name}'")
@@ -612,6 +655,8 @@ def update_product(product_id):
         product.quantity = data.get('quantity', product.quantity)
         product.status = status
         product.brand_id = brand_id
+        if hasattr(product, 'supplier_id'):
+            product.supplier_id = supplier_id
         product.is_visible = data.get('is_visible', product.is_visible)
         product.country = data.get('country', product.country)
         product.description = data.get('description', product.description)
@@ -1014,7 +1059,7 @@ def get_products_by_brand_and_category(brand_name):
             }), 404
         
         # Получаем параметры фильтрации
-        category_id = request.args.get('category_id', type=int)
+        category_param = request.args.get('category_id')
         page = request.args.get('page', default=1, type=int) or 1
         per_page = request.args.get('per_page', default=20, type=int) or 20
         per_page = max(1, min(per_page, 100))
@@ -1027,8 +1072,15 @@ def get_products_by_brand_and_category(brand_name):
         )
         
         # Добавляем фильтр по категории, если указан
-        if category_id:
-            query = query.filter(Product.category_id == category_id)
+        if category_param:
+            if category_param == 'no-category':
+                query = query.filter(Product.category_id.is_(None))
+            else:
+                try:
+                    category_id_int = int(category_param)
+                    query = query.filter(Product.category_id == category_id_int)
+                except (TypeError, ValueError):
+                    pass
         
         query = query.order_by(Product.id.desc())
 
@@ -1098,7 +1150,7 @@ def get_products_by_brand_and_category(brand_name):
                 'name': brand_obj.name,
                 'country': brand_obj.country
             },
-            'category_id': category_id,
+            'category_id': category_id_value,
             'products': result,
             'total_count': total_count,
             'page': page,
