@@ -1,6 +1,8 @@
 from flask import Blueprint, jsonify
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
+from extensions import db
 from models import ProductMedia
 from models.banner import Banner
 from models.category import Category
@@ -251,6 +253,19 @@ def get_public_categories():
         # Если поле show_in_menu еще не существует в БД, возвращаем все категории
         all_categories = Category.query.order_by(Category.parent_id, Category.order).all()
     
+    category_ids = [c.id for c in all_categories]
+    product_counts = {}
+
+    if category_ids:
+        counts_query = (
+            db.session.query(Product.category_id, func.count(Product.id))
+            .filter(Product.category_id.in_(category_ids))
+            .filter(Product.is_visible.is_(True))
+            .group_by(Product.category_id)
+            .all()
+        )
+        product_counts = {category_id: count for category_id, count in counts_query}
+
     # Создаем словарь для быстрого доступа
     categories_dict = {c.id: {
         'id': c.id,
@@ -287,6 +302,19 @@ def get_public_categories():
                 sort_children(cat['children'])
     
     sort_children(root_categories)
+
+    def apply_product_counts(category):
+        direct_count = product_counts.get(category['id'], 0)
+        children_total = 0
+        for child in category['children']:
+            children_total += apply_product_counts(child)
+        total_count = direct_count + children_total
+        category['direct_product_count'] = direct_count
+        category['product_count'] = total_count
+        return total_count
+
+    for root in root_categories:
+        apply_product_counts(root)
     
     return jsonify(root_categories)
 
