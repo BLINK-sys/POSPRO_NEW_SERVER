@@ -1,5 +1,21 @@
+from flask import g
 from extensions import db
 from datetime import datetime
+
+from models.product_availability_status import ProductAvailabilityStatus
+
+
+def _get_availability_status(quantity: int):
+    """Возвращает статус наличия на основе таблицы product_availability_statuses"""
+    statuses = getattr(g, '_product_availability_statuses_cache', None)
+    if statuses is None:
+        statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+        g._product_availability_statuses_cache = statuses
+
+    for status in statuses:
+        if status.check_condition(quantity):
+            return status.to_dict()
+    return None
 
 
 class Favorite(db.Model):
@@ -42,7 +58,8 @@ class Favorite(db.Model):
                 'status': self.product.status_info.to_dict() if self.product.status_info else None,
                 'category': self.product.category.to_dict() if getattr(self.product, 'category', None) and hasattr(self.product.category, 'to_dict') else None,
                 'brand_id': self.product.brand_id,
-                'brand_info': brand_info
+                'brand_info': brand_info,
+                'availability_status': _get_availability_status(self.product.quantity or 0)
             }
 
         return {

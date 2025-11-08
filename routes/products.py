@@ -10,9 +10,23 @@ from models import ProductDocument, ProductCharacteristic
 from models.product import Product
 from models.media import ProductMedia
 from models.brand import Brand
+from models.product_availability_status import ProductAvailabilityStatus
 
 products_bp = Blueprint('products', __name__)
 logger = logging.getLogger(__name__)
+
+
+def get_availability_status_for_quantity(quantity: int, statuses_cache=None):
+    """Возвращает статус наличия на основе таблицы product_availability_statuses."""
+    statuses = statuses_cache
+    if statuses is None:
+        statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+
+    for status in statuses:
+        if status.check_condition(quantity):
+            return status.to_dict()
+
+    return None
 
 def safe_slugify(text):
     """
@@ -708,7 +722,8 @@ def get_products_by_brand_detailed(brand_name):
             page = 1
 
         products = query.offset((page - 1) * per_page).limit(per_page).all()
-        
+        availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+
         result = []
         for p in products:
             # Получаем первое изображение
@@ -751,20 +766,8 @@ def get_products_by_brand_detailed(brand_name):
                         'image_url': category_obj.image_url
                     }
             
-            # Получаем статус наличия
-            availability_status = None
-            if p.quantity > 0:
-                availability_status = {
-                    'status_name': 'Есть в наличии',
-                    'background_color': '#10b981',
-                    'text_color': '#ffffff'
-                }
-            else:
-                availability_status = {
-                    'status_name': 'Нет в наличии',
-                    'background_color': '#ef4444',
-                    'text_color': '#ffffff'
-                }
+            # Получаем статус наличия на основе таблицы
+            availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
             
             result.append({
                 'id': p.id,
@@ -930,7 +933,8 @@ def get_products_by_brand_and_category(brand_name):
             page = 1
 
         products = query.offset((page - 1) * per_page).limit(per_page).all()
-        
+        availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+
         result = []
         from models.status import Status
 
@@ -959,12 +963,7 @@ def get_products_by_brand_and_category(brand_name):
                         'background_color': status_obj.background_color,
                         'text_color': status_obj.text_color
                     }
-            
-            availability_status = {
-                'status_name': 'Есть в наличии' if p.quantity > 0 else 'Нет в наличии',
-                'background_color': '#10b981' if p.quantity > 0 else '#ef4444',
-                'text_color': '#ffffff'
-            }
+            availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
             
             result.append({
                 'id': p.id,
