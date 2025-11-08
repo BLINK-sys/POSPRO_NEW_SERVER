@@ -314,6 +314,36 @@ def serialize_product(product, availability_status=None):
     return product_data
 
 
+@products_bp.route('/bulk', methods=['GET'])
+def get_products_bulk():
+    ids_param = request.args.get('ids', '')
+    if not ids_param:
+        return jsonify([])
+
+    try:
+        id_list = [int(id_str) for id_str in ids_param.split(',') if id_str.strip()]
+    except ValueError:
+        return jsonify({'error': 'Некорректный список идентификаторов'}), 400
+
+    if not id_list:
+        return jsonify([])
+
+    products = Product.query.filter(Product.id.in_(id_list)).all()
+    availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+    index_map = {product_id: index for index, product_id in enumerate(id_list)}
+
+    serialized_items = []
+    for product in products:
+        availability_status = get_availability_status_for_quantity(product.quantity or 0, availability_statuses)
+        serialized_items.append((
+            index_map.get(product.id, len(id_list)),
+            serialize_product(product, availability_status)
+        ))
+
+    serialized_items.sort(key=lambda item: item[0])
+    return jsonify([item[1] for item in serialized_items])
+
+
 @products_bp.route('/', methods=['GET'])
 def get_products():
     try:
