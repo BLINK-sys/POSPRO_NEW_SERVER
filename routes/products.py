@@ -261,46 +261,154 @@ def finalize_product(product_id):
         return jsonify({'error': 'Ошибка при финализации товара'}), 500
 
 
-# 🔹 Получить все товары
+def serialize_product(product, availability_status=None):
+    first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
+        .order_by(ProductMedia.order).first()
+
+    brand_info = None
+    if product.brand_id and product.brand_info:
+        brand_info = {
+            'id': product.brand_info.id,
+            'name': product.brand_info.name,
+            'country': product.brand_info.country,
+            'description': product.brand_info.description,
+            'image_url': product.brand_info.image_url
+        }
+
+    status_value = 'no' if product.status is None else str(product.status)
+
+    if availability_status is None:
+        availability_status = get_availability_status_for_quantity(product.quantity or 0)
+
+    product_data = {
+        'id': product.id,
+        'name': product.name,
+        'slug': product.slug,
+        'article': product.article,
+        'price': product.price,
+        'wholesale_price': product.wholesale_price,
+        'quantity': product.quantity,
+        'status': status_value,
+        'is_visible': product.is_visible,
+        'is_draft': product.is_draft,
+        'country': product.country,
+        'brand_id': product.brand_id,
+        'brand_info': brand_info,
+        'description': product.description,
+        'category_id': product.category_id,
+        'category': product.category.name if product.category else None,
+        'image': first_image.url if first_image else None,
+        'availability_status': availability_status
+    }
+
+    supplier_column = getattr(Product, 'supplier_id', None)
+    if supplier_column is not None:
+        product_data['supplier_id'] = getattr(product, 'supplier_id', None)
+
+    return product_data
+
+
 @products_bp.route('/', methods=['GET'])
 def get_products():
-    products = Product.query.all()
-    result = []
+    try:
+        page = request.args.get('page', type=int)
+        per_page = request.args.get('per_page', type=int)
+        search = request.args.get('search', type=str, default='').strip()
+        category_id = request.args.get('category_id', type=int)
+        status_param = request.args.get('status')
+        brand_param = request.args.get('brand')
+        supplier_param = request.args.get('supplier')
+        visibility_param = request.args.get('visibility')
+        quantity_param = request.args.get('quantity')
 
-    for p in products:
-        first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-            .order_by(ProductMedia.order).first()
+        query = Product.query
 
-        # Получаем информацию о бренде
-        brand_info = None
-        if p.brand_id and p.brand_info:
-            brand_info = {
-                'id': p.brand_info.id,
-                'name': p.brand_info.name,
-                'country': p.brand_info.country,
-                'description': p.brand_info.description,
-                'image_url': p.brand_info.image_url
-            }
+        if search:
+            query = query.filter(Product.name.ilike(f'%{search}%'))
 
-        result.append({
-            'id': p.id,
-            'name': p.name,
-            'slug': p.slug,
-            'article': p.article,
-            'price': p.price,
-            'wholesale_price': p.wholesale_price,
-            'quantity': p.quantity,
-            'status': 'no' if p.status is None else str(p.status),
-            'is_visible': p.is_visible,
-            'country': p.country,
-            'brand_id': p.brand_id,
-            'brand_info': brand_info,  # Полная информация о бренде
-            'description': p.description,
-            'category_id': p.category_id,
-            'image': first_image.url if first_image else None
-        })
+        if category_id:
+            query = query.filter(Product.category_id == category_id)
 
-    return jsonify(result)
+        if status_param:
+            if status_param == 'no-status':
+                query = query.filter(Product.status.is_(None))
+            else:
+                try:
+                    status_id = int(status_param)
+                    query = query.filter(Product.status == status_id)
+                except (TypeError, ValueError):
+                    pass
+
+        if brand_param:
+            if brand_param in ('no', 'no-brand'):
+                query = query.filter(Product.brand_id.is_(None))
+            else:
+                brand_id = None
+                try:
+                    brand_id = int(brand_param)
+                except (TypeError, ValueError):
+                    brand_obj = Brand.query.filter_by(name=brand_param).first()
+                    if brand_obj:
+                        brand_id = brand_obj.id
+                if brand_id:
+                    query = query.filter(Product.brand_id == brand_id)
+
+        supplier_column = getattr(Product, 'supplier_id', None)
+        if supplier_param and supplier_column is not None:
+            if supplier_param == 'no-supplier':
+                query = query.filter(Product.supplier_id.is_(None))
+            else:
+                try:
+                    supplier_id = int(supplier_param)
+                    query = query.filter(Product.supplier_id == supplier_id)
+                except (TypeError, ValueError):
+                    pass
+
+        if visibility_param == 'true':
+            query = query.filter(Product.is_visible.is_(True))
+        elif visibility_param == 'false':
+            query = query.filter(Product.is_visible.is_(False))
+
+        if quantity_param == 'true':
+            query = query.filter(Product.quantity > 0)
+        elif quantity_param == 'false':
+            query = query.filter(Product.quantity <= 0)
+
+        query = query.order_by(Product.id.desc())
+
+        if per_page:
+            per_page = max(1, min(per_page, 200))
+            current_page = max(1, page or 1)
+            total_count = query.count()
+            total_pages = math.ceil(total_count / per_page) if total_count else 1
+            if current_page > total_pages and total_pages > 0:
+                current_page = total_pages
+            pagination = query.paginate(page=current_page, per_page=per_page, error_out=False)
+            products = pagination.items
+            total_count = pagination.total
+            total_pages = pagination.pages if pagination.pages else 1
+            availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+            result = [
+                serialize_product(
+                    product,
+                    availability_status=get_availability_status_for_quantity(product.quantity or 0, availability_statuses)
+                ) for product in products
+            ]
+            return jsonify({
+                'products': result,
+                'page': current_page,
+                'per_page': per_page,
+                'total_pages': total_pages,
+                'total_count': total_count
+            })
+
+        products = query.all()
+        result = [serialize_product(product) for product in products]
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error getting products list: {str(e)}")
+        return jsonify({'error': 'Ошибка получения товаров'}), 500
 
 
 # 🔹 Получить товар по slug
