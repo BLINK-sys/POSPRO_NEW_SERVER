@@ -123,7 +123,8 @@ def login():
                 'email': user.email,
                 'name': name,
                 'phone': user.phone,
-                'role': 'client'
+                'role': 'client',
+                'is_wholesale': bool(user.is_wholesale)
             }
         })
 
@@ -161,7 +162,8 @@ def get_current_user():
             'email': user.email,
             'name': name,
             'phone': user.phone,
-            'role': 'client'
+            'role': 'client',
+            'is_wholesale': bool(user.is_wholesale)
         })
 
     return jsonify({'error': 'Неизвестная роль'}), 400
