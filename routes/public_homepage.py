@@ -275,7 +275,8 @@ def get_catalog_categories():
         'description': c.description,
         'parent_id': c.parent_id,
         'order': c.order,
-        'children': []
+                        'children': [],
+                        'product_count': product_counts.get(c.id, 0)
     } for c in all_categories}
     
     # Строим иерархию
