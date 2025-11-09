@@ -242,9 +242,9 @@ def get_homepage_data():
     })
 
 
-@public_homepage_bp.route('/public/categories', methods=['GET'])
-def get_public_categories():
-    """Получить все категории с show_in_menu=True для каталога (с иерархией)"""
+@public_homepage_bp.route('/public/catalog/categories', methods=['GET'])
+def get_catalog_categories():
+    """Получить категории для каталожных панелей (с иерархией, изображениями и количеством товаров)"""
     # Получаем все категории с show_in_menu=True (если поле существует в БД)
     # Если поле еще не добавлено в БД, возвращаем все категории
     try:
