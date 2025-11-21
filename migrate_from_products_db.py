@@ -828,15 +828,7 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
     if name in products_cache:
         existing_id = products_cache[name]
         print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id})")
-        
-        # Проверяем изображение существующего товара
-        image_url = product_data.get('img') or product_data.get('image') or product_data.get('image_url')
-        if image_url:
-            image_url = str(image_url).strip()
-            # Добавляем изображение если его еще нет или если оно внешнее и нужно скачать
-            add_product_image(existing_id, image_url, api_url)
-            time.sleep(0.1)
-        
+        # Изображение будет обработано в основном цикле миграции
         return existing_id
     
     # Получаем новый brand_id по старому ID
