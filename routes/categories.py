@@ -86,7 +86,12 @@ def update_category(category_id):
     category.name = data['name']
     category.slug = data['slug']
     category.description = data.get('description')
-    category.image_url = data.get('image_url')
+    
+    # Обновляем image_url только если он явно передан в запросе
+    # Это предотвращает случайное удаление изображения при обновлении других полей
+    if 'image_url' in data:
+        category.image_url = data.get('image_url')
+    
     category.parent_id = data.get('parent_id')
     
     if 'show_in_menu' in data:

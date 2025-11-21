@@ -324,16 +324,58 @@ def load_existing_categories(api_url):
         print(f"  ✗ Ошибка при загрузке существующих категорий: {e}")
 
 
+def get_category_info(category_id, api_url):
+    """Получает информацию о категории через API"""
+    try:
+        category_url = normalize_url(api_url, f'categories/{category_id}')
+        response = requests.get(
+            category_url,
+            headers=get_auth_headers(),
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        print(f"  ⚠ Ошибка при получении информации о категории {category_id}: {e}")
+        return None
+
+
 def upload_category_image_from_url(category_id, image_url, api_url):
-    """Загружает изображение категории по URL"""
+    """Загружает изображение категории по URL, если у категории еще нет изображения"""
     if not image_url or not category_id:
         return False
     
+    # Проверяем есть ли уже изображение у категории
+    category_info = get_category_info(category_id, api_url)
+    if category_info:
+        existing_image_url = category_info.get('image_url')
+        if existing_image_url and existing_image_url.strip():
+            # У категории уже есть изображение
+            print(f"  ℹ У категории {category_id} уже есть изображение: {existing_image_url}, пропускаем загрузку")
+            return True
+    
+    # Проверяем тип URL изображения
+    image_url = str(image_url).strip()
+    
+    # Если это локальное изображение (уже на сервере), просто пропускаем
+    if image_url.startswith('/uploads/categories/'):
+        print(f"  ℹ Локальное изображение категории, пропускаем: {image_url}")
+        return True
+    
+    # Если это внешнее изображение - скачиваем и загружаем
+    if not (image_url.startswith('http://') or image_url.startswith('https://')):
+        print(f"  ⚠ Неизвестный формат URL изображения категории: {image_url}")
+        return False
+    
     try:
+        print(f"  🔄 Скачивание и загрузка изображения категории: {image_url}")
         # Скачиваем изображение
         img_response = requests.get(image_url, timeout=30, stream=True)
         if img_response.status_code != 200:
-            print(f"  ⚠ Не удалось скачать изображение {image_url}")
+            print(f"  ⚠ Не удалось скачать изображение {image_url}: {img_response.status_code}")
             return False
         
         # Определяем имя файла
@@ -377,8 +419,8 @@ def create_category(name, parent_id=None, image_url=None, api_url=None):
     cache_key = (name, parent_id)
     if cache_key in categories_cache:
         existing_id = categories_cache[cache_key]
-        print(f"  ✓ Категория '{name}' уже существует (ID: {existing_id}), пропускаем")
-        # Если есть изображение, попробуем загрузить его
+        print(f"  ✓ Категория '{name}' уже существует (ID: {existing_id})")
+        # Если есть изображение, проверяем и загружаем только если его еще нет
         if image_url:
             upload_category_image_from_url(existing_id, image_url, api_url)
         return existing_id
@@ -423,7 +465,7 @@ def create_category(name, parent_id=None, image_url=None, api_url=None):
 
 
 def load_existing_products(api_url):
-    """Загружает все существующие товары в кеш (по имени для проверки дубликатов)"""
+    """Загружает все существующие товары в кеш порционно (по имени для проверки дубликатов)"""
     global existing_products_loaded, products_cache
     
     if existing_products_loaded:
@@ -433,52 +475,310 @@ def load_existing_products(api_url):
     products_cache = {}  # {name: product_id} для быстрого поиска
     
     products_url = normalize_url(api_url, 'products/')
-    print(f"  Загрузка существующих товаров с {products_url}...")
+    print(f"  Загрузка существующих товаров с {products_url} (порционно)...")
+    
+    per_page = 200  # Максимальное количество товаров за запрос
+    page = 1
+    total_loaded = 0
+    
     try:
-        response = requests.get(products_url, timeout=60)
-        if response.status_code == 200:
-            existing_products = response.json()
-            for product in existing_products:
-                name = product.get('name', '').strip()
-                if name:
-                    products_cache[name] = product['id']
+        while True:
+            params = {
+                'per_page': per_page,
+                'page': page
+            }
             
-            existing_products_loaded = True
-            print(f"  ✓ Загружено {len(existing_products)} существующих товаров в кеш")
-        else:
-            print(f"  ⚠ Ошибка загрузки товаров: {response.status_code}")
+            response = requests.get(
+                products_url, 
+                params=params,
+                headers=get_auth_headers(),
+                timeout=120
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Проверяем формат ответа
+                if isinstance(data, list):
+                    # Без пагинации - возвращается список
+                    existing_products = data
+                    has_more = len(existing_products) == per_page
+                elif isinstance(data, dict) and 'products' in data:
+                    # С пагинацией - возвращается объект с полем products
+                    existing_products = data.get('products', [])
+                    total_pages = data.get('total_pages', 1)
+                    has_more = page < total_pages
+                else:
+                    print(f"  ⚠ Неожиданный формат ответа API")
+                    break
+                
+                # Добавляем товары в кеш
+                for product in existing_products:
+                    name = product.get('name', '').strip()
+                    if name:
+                        products_cache[name] = product['id']
+                
+                loaded_count = len(existing_products)
+                total_loaded += loaded_count
+                
+                print(f"  Загружено страница {page}: {loaded_count} товаров (всего в кеше: {len(products_cache)})")
+                
+                # Если товаров меньше чем per_page, значит это последняя страница
+                if not has_more or loaded_count < per_page:
+                    break
+                
+                page += 1
+                time.sleep(0.2)  # Небольшая задержка между запросами
+            else:
+                print(f"  ⚠ Ошибка загрузки товаров: {response.status_code}")
+                break
+                
+        existing_products_loaded = True
+        print(f"  ✓ Загружено {total_loaded} существующих товаров в кеш (уникальных имен: {len(products_cache)})")
+        
     except requests.exceptions.Timeout:
         print(f"  ⚠ Таймаут при загрузке товаров (сервер может быть в режиме сна)")
     except Exception as e:
         print(f"  ✗ Ошибка при загрузке существующих товаров: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def is_external_url(url):
+    """Проверяет, является ли URL внешним (начинается с http:// или https://)"""
+    if not url or not isinstance(url, str):
+        return False
+    url = url.strip()
+    return url.startswith('http://') or url.startswith('https://')
+
+
+def is_local_url(url):
+    """Проверяет, является ли URL локальным (начинается с /uploads/products/)"""
+    if not url or not isinstance(url, str):
+        return False
+    url = url.strip()
+    return url.startswith('/uploads/products/')
+
+
+def sanitize_filename(filename):
+    """Очищает имя файла от опасных символов"""
+    if not filename:
+        return 'image.jpg'
+    
+    # Получаем имя файла из URL
+    parsed = urlparse(filename)
+    filename = os.path.basename(parsed.path) or 'image.jpg'
+    
+    # Убираем query параметры если есть
+    if '?' in filename:
+        filename = filename.split('?')[0]
+    if '#' in filename:
+        filename = filename.split('#')[0]
+    
+    # Заменяем пробелы на подчеркивания
+    filename = filename.replace(' ', '_')
+    
+    # Убираем опасные символы, но оставляем кириллицу и латиницу
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    
+    # Если имя файла пустое или нет расширения, добавляем .jpg
+    if not filename or '.' not in filename:
+        # Генерируем уникальное имя на основе timestamp
+        timestamp = int(time.time() * 1000) % 1000000
+        filename = f'image_{timestamp}.jpg'
+    else:
+        # Проверяем расширение - должно быть изображение
+        ext = filename.lower().split('.')[-1]
+        allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+        if ext not in allowed_extensions:
+            # Если расширение не подходит, заменяем на .jpg
+            base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
+            # Очищаем базовое имя от опасных символов еще раз
+            base_name = re.sub(r'[<>:"/\\|?*]', '', base_name)
+            if not base_name:
+                base_name = 'image'
+            filename = f'{base_name}.jpg'
+    
+    return filename
+
+
+def is_valid_image(content):
+    """Проверяет что содержимое является валидным изображением по сигнатуре"""
+    if not content or len(content) < 4:
+        return False
+    
+    # Проверяем сигнатуры популярных форматов изображений
+    signatures = {
+        b'\xFF\xD8\xFF': 'jpg',  # JPEG
+        b'\x89\x50\x4E\x47': 'png',  # PNG
+        b'GIF87a': 'gif',  # GIF87a
+        b'GIF89a': 'gif',  # GIF89a
+        b'RIFF': 'webp',  # WebP (нужна дополнительная проверка)
+    }
+    
+    # Проверяем первые байты
+    for sig, fmt in signatures.items():
+        if content.startswith(sig):
+            return True
+    
+    # Для WebP проверяем что после RIFF идет WEBP
+    if content.startswith(b'RIFF') and b'WEBP' in content[:12]:
+        return True
+    
+    return False
+
+
+def download_image(image_url):
+    """Скачивает изображение по URL и возвращает содержимое и имя файла"""
+    try:
+        print(f"    Скачивание изображения: {image_url}")
+        response = requests.get(image_url, timeout=30, stream=True)
+        
+        if response.status_code != 200:
+            print(f"    ⚠ Не удалось скачать изображение: {response.status_code}")
+            return None, None
+        
+        # Читаем содержимое
+        content = response.content
+        
+        # Проверяем размер (максимум 20MB)
+        if len(content) > 20 * 1024 * 1024:
+            print(f"    ⚠ Изображение слишком большое: {len(content)} bytes")
+            return None, None
+        
+        # Проверяем что это действительно изображение
+        if not is_valid_image(content):
+            print(f"    ⚠ Скачанный файл не является валидным изображением")
+            return None, None
+        
+        # Определяем имя файла
+        content_disposition = response.headers.get('Content-Disposition', '')
+        if 'filename=' in content_disposition:
+            filename = content_disposition.split('filename=')[1].strip('"\'')
+        else:
+            filename = sanitize_filename(image_url)
+        
+        print(f"    ✓ Изображение скачано: {len(content)} bytes, имя: {filename}")
+        return content, filename
+        
+    except requests.exceptions.Timeout:
+        print(f"    ⚠ Таймаут при скачивании изображения")
+        return None, None
+    except Exception as e:
+        print(f"    ⚠ Ошибка при скачивании изображения: {e}")
+        return None, None
+
+
+def get_content_type_from_filename(filename):
+    """Определяет Content-Type на основе расширения файла"""
+    ext = filename.lower().split('.')[-1] if '.' in filename else ''
+    content_types = {
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'webp': 'image/webp'
+    }
+    return content_types.get(ext, 'image/jpeg')
+
+
+def upload_product_image_file(product_id, image_content, filename, api_url):
+    """Загружает изображение товара на сервер через API как файл"""
+    try:
+        upload_url = normalize_url(api_url, 'upload/upload_product')
+        
+        # Определяем Content-Type на основе расширения
+        content_type = get_content_type_from_filename(filename)
+        
+        # Подготавливаем multipart/form-data
+        files = {
+            'file': (filename, image_content, content_type)
+        }
+        data = {
+            'product_id': str(product_id)
+        }
+        
+        headers = {}
+        if JWT_TOKEN:
+            headers['Authorization'] = f'Bearer {JWT_TOKEN}'
+        
+        response = requests.post(
+            upload_url,
+            files=files,
+            data=data,
+            headers=headers,
+            timeout=120  # Увеличенный таймаут для больших файлов
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            new_url = result.get('url')
+            media_id = result.get('id')
+            print(f"  ✓ Изображение загружено на сервер: {new_url}")
+            return True
+        else:
+            print(f"  ✗ Ошибка загрузки изображения: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"  ✗ Ошибка при загрузке изображения: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def add_product_image(product_id, image_url, api_url):
-    """Добавляет изображение товара по URL"""
+    """Добавляет изображение товара по URL. Если URL внешний - скачивает и загружает на сервер"""
     if not image_url or not product_id:
         return False
     
-    try:
-        upload_url = normalize_url(api_url, f'upload/media/{product_id}')
-        data = {
-            'url': image_url,
-            'media_type': 'image'
-        }
-        response = requests.post(
-            upload_url,
-            json=data,
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {JWT_TOKEN}'} if JWT_TOKEN else {'Content-Type': 'application/json'},
-            timeout=60
-        )
-        
-        if response.status_code == 201:
-            print(f"  ✓ Добавлено изображение для товара {product_id}")
-            return True
-        else:
-            print(f"  ⚠ Ошибка добавления изображения: {response.status_code} - {response.text}")
+    image_url = str(image_url).strip()
+    
+    # Проверяем тип URL
+    if is_local_url(image_url):
+        # Локальное изображение - просто добавляем URL в БД
+        print(f"  ℹ Локальное изображение, добавляем URL: {image_url}")
+        try:
+            upload_url = normalize_url(api_url, f'upload/media/{product_id}')
+            data = {
+                'url': image_url,
+                'media_type': 'image'
+            }
+            response = requests.post(
+                upload_url,
+                json=data,
+                headers=get_auth_headers(),
+                timeout=60
+            )
+            
+            if response.status_code == 201:
+                print(f"  ✓ Добавлено локальное изображение для товара {product_id}")
+                return True
+            else:
+                print(f"  ⚠ Ошибка добавления локального изображения: {response.status_code} - {response.text}")
+                return False
+        except Exception as e:
+            print(f"  ⚠ Ошибка при добавлении локального изображения: {e}")
             return False
-    except Exception as e:
-        print(f"  ⚠ Ошибка при добавлении изображения товара: {e}")
+    
+    elif is_external_url(image_url):
+        # Внешнее изображение - скачиваем и загружаем на сервер
+        print(f"  🔄 Внешнее изображение, скачиваем и загружаем: {image_url}")
+        
+        # Скачиваем изображение
+        image_content, filename = download_image(image_url)
+        
+        if not image_content or not filename:
+            print(f"  ✗ Не удалось скачать изображение")
+            return False
+        
+        # Загружаем на сервер
+        success = upload_product_image_file(product_id, image_content, filename, api_url)
+        return success
+    
+    else:
+        # Неизвестный формат URL
+        print(f"  ⚠ Неизвестный формат URL изображения: {image_url}")
         return False
 
 
@@ -527,7 +827,16 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
     # Проверяем на дубликат по имени
     if name in products_cache:
         existing_id = products_cache[name]
-        print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id}), пропускаем")
+        print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id})")
+        
+        # Проверяем изображение существующего товара
+        image_url = product_data.get('img') or product_data.get('image') or product_data.get('image_url')
+        if image_url:
+            image_url = str(image_url).strip()
+            # Добавляем изображение если его еще нет или если оно внешнее и нужно скачать
+            add_product_image(existing_id, image_url, api_url)
+            time.sleep(0.1)
+        
         return existing_id
     
     # Получаем новый brand_id по старому ID
