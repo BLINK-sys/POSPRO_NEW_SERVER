@@ -55,17 +55,23 @@ def sync_media_from_filesystem(product_id):
     """
     Синхронизирует медиафайлы из файловой системы с базой данных.
     Создает записи в БД для файлов, которые существуют на диске, но отсутствуют в БД.
-    Удаляет записи из БД для файлов, которые отсутствуют на диске.
+    Удаляет записи из БД ТОЛЬКО для файлов, которые физически отсутствуют на диске.
     """
     print(f"Syncing media files from filesystem for product {product_id}")
     media_folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
     print(f"Media folder path: {media_folder}")
     
+    # Получаем все записи медиа для этого товара из БД СНАЧАЛА
+    db_media = ProductMedia.query.filter_by(product_id=product_id).all()
+    print(f"Media records in DB: {len(db_media)}")
+    
+    # Если папка не существует, НЕ удаляем записи - возможно файлы еще не загружены
+    # или находятся в другом месте (например внешние URL)
     if not os.path.exists(media_folder):
         print(f"Media folder does not exist: {media_folder}")
-        # Удаляем все записи медиа для этого товара, так как папки нет
-        ProductMedia.query.filter_by(product_id=product_id).delete()
-        db.session.commit()
+        print("Keeping existing DB records - files may not be uploaded yet or stored elsewhere")
+        # Не удаляем записи, просто возвращаемся
+        # Это позволяет сохранить записи с внешними URL или файлами которые еще не загружены
         return
     
     # Получаем список файлов в папке (исключаем папки documents и drivers)
@@ -81,26 +87,60 @@ def sync_media_from_filesystem(product_id):
         print(f"Ошибка при чтении папки медиа: {e}")
         return
     
-    # Получаем все записи медиа для этого товара из БД
-    db_media = ProductMedia.query.filter_by(product_id=product_id).all()
-    print(f"Media records in DB: {len(db_media)}")
-    
     # Создаем множество URL файлов на диске
     disk_urls = {f'/uploads/products/{product_id}/{filename}' for filename in files}
     print(f"Disk URLs: {disk_urls}")
     
-    # Удаляем записи из БД для файлов, которых нет на диске
+    # Удаляем записи из БД ТОЛЬКО для локальных файлов, которых физически нет на диске
     # НЕ удаляем записи с внешними URL (http/https) - они не хранятся локально
+    # ВАЖНО: Проверяем физическое существование файла перед удалением записи
+    media_to_delete = []
     for media in db_media:
+        # Пропускаем внешние URL - они не хранятся локально
+        if media.url.startswith(('http://', 'https://')):
+            print(f"Keeping external URL (not stored locally): {media.url}")
+            continue
+        
+        # Проверяем что это локальный URL правильного формата
+        if not media.url.startswith('/uploads/products/'):
+            print(f"Keeping non-standard URL: {media.url}")
+            continue
+        
+        # Если URL не в списке файлов на диске, проверяем физическое существование
         if media.url not in disk_urls:
-            # Проверяем, является ли URL внешним (начинается с http/https)
-            if media.url.startswith(('http://', 'https://')):
-                print(f"Keeping external URL (not stored locally): {media.url}")
-            else:
-                print(f"Removing DB record for missing local file: {media.url}")
-                db.session.delete(media)
+            # Извлекаем путь к файлу из URL
+            # URL формат: /uploads/products/{product_id}/{filename}
+            try:
+                # Убираем /uploads/ префикс и получаем относительный путь
+                relative_path = media.url[9:]  # Remove '/uploads/' prefix
+                file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], relative_path)
+                
+                # Проверяем физическое существование файла
+                if os.path.exists(file_path) and os.path.isfile(file_path):
+                    print(f"File exists but not in list (may be in subfolder): {media.url}")
+                    continue
+                else:
+                    print(f"Removing DB record for missing local file: {media.url} (file not found at {file_path})")
+                    media_to_delete.append(media)
+            except Exception as e:
+                print(f"Error checking file existence for {media.url}: {e}")
+                # В случае ошибки не удаляем запись - лучше сохранить
+                continue
+    
+    # Удаляем записи которые точно отсутствуют на диске
+    deleted_count = 0
+    for media in media_to_delete:
+        try:
+            db.session.delete(media)
+            deleted_count += 1
+        except Exception as e:
+            print(f"Error deleting media record {media.id}: {e}")
+    
+    if deleted_count > 0:
+        print(f"Deleted {deleted_count} media records for missing files")
     
     # Создаем записи в БД для файлов, которых нет в БД
+    created_count = 0
     for filename in files:
         file_url = f'/uploads/products/{product_id}/{filename}'
         
@@ -123,10 +163,14 @@ def sync_media_from_filesystem(product_id):
             
             try:
                 db.session.add(new_media)
+                created_count += 1
                 print(f"Создана запись в БД для медиафайла: {filename}")
             except Exception as e:
                 print(f"Ошибка при создании записи для медиафайла {filename}: {e}")
                 db.session.rollback()
+    
+    if created_count > 0:
+        print(f"Created {created_count} new media records")
     
     # Сохраняем все изменения
     try:
