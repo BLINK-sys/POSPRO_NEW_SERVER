@@ -12,6 +12,9 @@ from models.media import ProductMedia
 from models.brand import Brand
 from models.supplier import Supplier
 from models.product_availability_status import ProductAvailabilityStatus
+from models.favorite import Favorite
+from models.cart import Cart
+from models.order import OrderItem
 
 products_bp = Blueprint('products', __name__)
 logger = logging.getLogger(__name__)
@@ -716,7 +719,10 @@ def delete_product(product_id):
         media_deleted = ProductMedia.query.filter_by(product_id=product_id).delete(synchronize_session=False)
         documents_deleted = ProductDocument.query.filter_by(product_id=product_id).delete(synchronize_session=False)
         characteristics_deleted = ProductCharacteristic.query.filter_by(product_id=product_id).delete(synchronize_session=False)
-        print(f"Удалено медиа: {media_deleted}, документов: {documents_deleted}, характеристик: {characteristics_deleted}")
+        favorites_deleted = Favorite.query.filter_by(product_id=product_id).delete(synchronize_session=False)
+        cart_deleted = Cart.query.filter_by(product_id=product_id).delete(synchronize_session=False)
+        order_items_deleted = OrderItem.query.filter_by(product_id=product_id).delete(synchronize_session=False)
+        print(f"Удалено медиа: {media_deleted}, документов: {documents_deleted}, характеристик: {characteristics_deleted}, избранного: {favorites_deleted}, корзины: {cart_deleted}, заказов: {order_items_deleted}")
 
         # Удаляем папку с файлами
         folder_path = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
