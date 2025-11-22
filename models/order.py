@@ -87,7 +87,7 @@ class OrderItem(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     order_id = db.Column(db.Integer, db.ForeignKey('orders.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)  # Nullable для сохранения истории при удалении товара
     
     # Информация о товаре на момент заказа (для истории)
     product_name = db.Column(db.String(255), nullable=False)

@@ -721,8 +721,14 @@ def delete_product(product_id):
         characteristics_deleted = ProductCharacteristic.query.filter_by(product_id=product_id).delete(synchronize_session=False)
         favorites_deleted = Favorite.query.filter_by(product_id=product_id).delete(synchronize_session=False)
         cart_deleted = Cart.query.filter_by(product_id=product_id).delete(synchronize_session=False)
-        order_items_deleted = OrderItem.query.filter_by(product_id=product_id).delete(synchronize_session=False)
-        print(f"Удалено медиа: {media_deleted}, документов: {documents_deleted}, характеристик: {characteristics_deleted}, избранного: {favorites_deleted}, корзины: {cart_deleted}, заказов: {order_items_deleted}")
+        
+        # Для заказов не удаляем записи, а устанавливаем product_id в NULL
+        # Это сохраняет историю заказов (название, цена, артикул уже сохранены в OrderItem)
+        order_items_updated = OrderItem.query.filter_by(product_id=product_id).update(
+            {OrderItem.product_id: None},
+            synchronize_session=False
+        )
+        print(f"Удалено медиа: {media_deleted}, документов: {documents_deleted}, характеристик: {characteristics_deleted}, избранного: {favorites_deleted}, корзины: {cart_deleted}, обновлено заказов: {order_items_updated}")
 
         # Удаляем папку с файлами
         folder_path = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
