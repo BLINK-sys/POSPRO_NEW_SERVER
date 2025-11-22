@@ -194,6 +194,7 @@ def get_homepage_data():
                         'name': pr.name,
                         'slug': pr.slug,
                         'price': pr.price,
+                        'wholesale_price': pr.wholesale_price,  # Оптовая цена для админов и оптовиков
                         'category_id': pr.category_id,
                         'category': category_data,
                         'status': status_data,
