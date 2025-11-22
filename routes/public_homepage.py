@@ -373,6 +373,7 @@ def get_category_with_children_and_products(slug):
             'name': p.name,
             'slug': p.slug,
             'price': p.price,
+            'wholesale_price': p.wholesale_price,  # Оптовая цена для админов и оптовиков
             'status': status_data,
             'brand_id': p.brand_id,
             'brand_info': brand_data,  # Используем brand_info вместо brand
