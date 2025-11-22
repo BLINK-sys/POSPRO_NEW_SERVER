@@ -877,10 +877,43 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
         print(f"  ⚠ Товар без имени, пропускаем")
         return None
     
+    # Получаем остальные данные для обновления
+    in_stock = product_data.get('inStock', 0)
+    # Обрабатываем inStock - может быть число или строка
+    try:
+        quantity = int(in_stock) if in_stock else 0
+    except (ValueError, TypeError):
+        quantity = 0
+    
+    description = product_data.get('description', '') or ''
+    price = product_data.get('price', 0) or 0
+    
     # Проверяем на дубликат по имени
     if name in products_cache:
         existing_id = products_cache[name]
-        print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id})")
+        print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id}), обновляем цену и остатки")
+        
+        # Обновляем цену и остатки для существующего товара
+        try:
+            update_data = {
+                'price': float(price) if price else 0,
+                'quantity': quantity
+            }
+            products_url = normalize_url(api_url, f'products/{existing_id}')
+            response = requests.put(
+                products_url,
+                json=update_data,
+                headers=get_auth_headers(),
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                print(f"  ✓ Обновлены цена и остатки для товара '{name}' (ID: {existing_id})")
+            else:
+                print(f"  ⚠ Не удалось обновить товар '{name}': {response.status_code} - {response.text[:200]}")
+        except Exception as e:
+            print(f"  ⚠ Ошибка при обновлении товара '{name}': {e}")
+        
         # Изображение будет обработано в основном цикле миграции
         return existing_id
     
@@ -893,17 +926,6 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
     new_category_id = None
     if old_category_id and old_category_id in categories_map:
         new_category_id = categories_map[old_category_id]
-    
-    # Получаем остальные данные
-    in_stock = product_data.get('inStock', 0)
-    # Обрабатываем inStock - может быть число или строка
-    try:
-        quantity = int(in_stock) if in_stock else 0
-    except (ValueError, TypeError):
-        quantity = 0
-    
-    description = product_data.get('description', '') or ''
-    price = product_data.get('price', 0) or 0
     
     # Генерируем артикул на основе имени
     import hashlib
@@ -1043,127 +1065,122 @@ def migrate_data(api_base_url=None, db_path=None):
     print("НАЧАЛО МИГРАЦИИ")
     print("="*60)
     
-    # ВРЕМЕННО ПРОПУСКАЕМ: ШАГ 1-3 (характеристики, категории, бренды)
-    # Будем обрабатывать только товары
-    print("\n[ПРОПУСК] Шаги 1-3 временно отключены (характеристики, категории, бренды)")
-    print("          Обрабатываем только товары с изображениями")
+    # ШАГ 1: Создание характеристик из справочника
+    print("\n[ШАГ 1] Создание характеристик из справочника...")
+    if product_properties_table:
+        properties_columns = structure[product_properties_table]
+        # Получаем уникальные имена характеристик
+        if 'property_name' in properties_columns:
+            cursor.execute(f"SELECT DISTINCT property_name FROM {product_properties_table} WHERE property_name IS NOT NULL AND property_name != ''")
+            unique_properties = [row[0] for row in cursor.fetchall()]
+            print(f"Найдено уникальных характеристик: {len(unique_properties)}")
+            
+            for prop_name in unique_properties:
+                if prop_name and prop_name.strip():
+                    create_characteristic(prop_name.strip(), api_url)
+                    time.sleep(0.2)  # Небольшая задержка между запросами
+        else:
+            print(f"  ⚠ В таблице {product_properties_table} не найдено поле property_name")
+    else:
+        print(f"  ⚠ Таблица product_properties не найдена")
     
-    # # ШАГ 1: Создание характеристик из справочника
-    # print("\n[ШАГ 1] Создание характеристик из справочника...")
-    # if product_properties_table:
-    #     properties_columns = structure[product_properties_table]
-    #     # Получаем уникальные имена характеристик
-    #     if 'property_name' in properties_columns:
-    #         cursor.execute(f"SELECT DISTINCT property_name FROM {product_properties_table} WHERE property_name IS NOT NULL AND property_name != ''")
-    #         unique_properties = [row[0] for row in cursor.fetchall()]
-    #         print(f"Найдено уникальных характеристик: {len(unique_properties)}")
-    #         
-    #         for prop_name in unique_properties:
-    #             if prop_name and prop_name.strip():
-    #                 create_characteristic(prop_name.strip(), api_url)
-    #                 time.sleep(0.2)  # Небольшая задержка между запросами
-    #     else:
-    #         print(f"  ⚠ В таблице {product_properties_table} не найдено поле property_name")
-    # else:
-    #     print(f"  ⚠ Таблица product_properties не найдена")
-    # 
-    # # ШАГ 2: Создание категорий с учетом иерархии
-    # print("\n[ШАГ 2] Создание категорий с учетом иерархии...")
-    # if categories_table:
-    #     category_columns = structure[categories_table]
-    #     
-    #     # Сначала получаем все категории
-    #     cursor.execute(f"SELECT * FROM {categories_table} ORDER BY id")
-    #     all_categories = cursor.fetchall()
-    #     
-    #     print(f"Найдено категорий в старой БД: {len(all_categories)}")
-    #     
-    #     # Создаем словарь категорий по ID
-    #     categories_dict = {}
-    #     for cat_row in all_categories:
-    #         cat_dict = dict(zip(category_columns, cat_row))
-    #         old_id = cat_dict.get('id')
-    #         categories_dict[old_id] = cat_dict
-    #     
-    #     # Функция для рекурсивного создания категорий
-    #     processed_count = [0]  # Используем список для изменения в замыкании
-    #     
-    #     def create_category_recursive(old_cat_id, parent_new_id=None):
-    #         if old_cat_id not in categories_dict:
-    #             return None
-    #         
-    #         cat_dict = categories_dict[old_cat_id]
-    #         name = cat_dict.get('name', '').strip()
-    #         if not name:
-    #             return None
-    #         
-    #         # Проверяем, не обработана ли уже категория с этим old_id
-    #         if old_cat_id in categories_map:
-    #             # Категория уже была обработана, используем сохраненный ID
-    #             new_category_id = categories_map[old_cat_id]
-    #             # Не выводим сообщение для уже обработанных, чтобы не засорять лог
-    #         else:
-    #             processed_count[0] += 1
-    #             # Получаем изображение
-    #             image_url = cat_dict.get('img') or cat_dict.get('image') or cat_dict.get('image_url')
-    #             
-    #             # Создаем категорию (функция create_category сама проверяет кеш и выводит сообщения)
-    #             new_category_id = create_category(name, parent_new_id, image_url, api_url)
-    #             if new_category_id:
-    #                 categories_map[old_cat_id] = new_category_id
-    #                 time.sleep(0.2)
-    #             else:
-    #                 # Если категория уже существовала в кеше, create_category вернет её ID
-    #                 # Но нужно сохранить маппинг для old_id
-    #                 cache_key = (name, parent_new_id)
-    #                 if cache_key in categories_cache:
-    #                     new_category_id = categories_cache[cache_key]
-    #                     categories_map[old_cat_id] = new_category_id
-    #         
-    #         # Рекурсивно создаем дочерние категории (даже если категория уже существовала)
-    #         if new_category_id:
-    #             for child_old_id, child_dict in categories_dict.items():
-    #                 if child_dict.get('parent_id') == old_cat_id:
-    #                     create_category_recursive(child_old_id, new_category_id)
-    #         
-    #         return new_category_id
-    #     
-    #     # Создаем категории без родителя (основные)
-    #     root_categories_count = 0
-    #     for old_id, cat_dict in categories_dict.items():
-    #         if not cat_dict.get('parent_id'):
-    #             root_categories_count += 1
-    #             create_category_recursive(old_id, None)
-    #     
-    #     print(f"Обработано корневых категорий: {root_categories_count}")
-    #     print(f"Всего обработано категорий: {processed_count[0]}")
-    #     print(f"Создано/найдено категорий: {len(categories_map)}")
-    # else:
-    #     print(f"  ⚠ Таблица categories не найдена")
-    # 
-    # # ШАГ 3: Создание брендов
-    # print("\n[ШАГ 3] Создание брендов...")
-    # if brands_table:
-    #     brand_columns = structure[brands_table]
-    #     cursor.execute(f"SELECT * FROM {brands_table}")
-    #     brands = cursor.fetchall()
-    #     
-    #     for brand_row in brands:
-    #         brand_dict = dict(zip(brand_columns, brand_row))
-    #         name = brand_dict.get('brand') or brand_dict.get('name') or ''
-    #         country = brand_dict.get('country') or ''
-    #         
-    #         if name and name.strip():
-    #             old_id = brand_dict.get('id')
-    #             new_id = create_brand(name.strip(), country, api_url)
-    #             if new_id and old_id:
-    #                 brands_map[old_id] = new_id
-    #             time.sleep(0.2)
-    # else:
-    #     print(f"  ⚠ Таблица brands не найдена")
+    # ШАГ 2: Создание категорий с учетом иерархии
+    print("\n[ШАГ 2] Создание категорий с учетом иерархии...")
+    if categories_table:
+        category_columns = structure[categories_table]
+        
+        # Сначала получаем все категории
+        cursor.execute(f"SELECT * FROM {categories_table} ORDER BY id")
+        all_categories = cursor.fetchall()
+        
+        print(f"Найдено категорий в старой БД: {len(all_categories)}")
+        
+        # Создаем словарь категорий по ID
+        categories_dict = {}
+        for cat_row in all_categories:
+            cat_dict = dict(zip(category_columns, cat_row))
+            old_id = cat_dict.get('id')
+            categories_dict[old_id] = cat_dict
+        
+        # Функция для рекурсивного создания категорий
+        processed_count = [0]  # Используем список для изменения в замыкании
+        
+        def create_category_recursive(old_cat_id, parent_new_id=None):
+            if old_cat_id not in categories_dict:
+                return None
+            
+            cat_dict = categories_dict[old_cat_id]
+            name = cat_dict.get('name', '').strip()
+            if not name:
+                return None
+            
+            # Проверяем, не обработана ли уже категория с этим old_id
+            if old_cat_id in categories_map:
+                # Категория уже была обработана, используем сохраненный ID
+                new_category_id = categories_map[old_cat_id]
+                # Не выводим сообщение для уже обработанных, чтобы не засорять лог
+            else:
+                processed_count[0] += 1
+                # Получаем изображение
+                image_url = cat_dict.get('img') or cat_dict.get('image') or cat_dict.get('image_url')
+                
+                # Создаем категорию (функция create_category сама проверяет кеш и выводит сообщения)
+                new_category_id = create_category(name, parent_new_id, image_url, api_url)
+                if new_category_id:
+                    categories_map[old_cat_id] = new_category_id
+                    time.sleep(0.2)
+                else:
+                    # Если категория уже существовала в кеше, create_category вернет её ID
+                    # Но нужно сохранить маппинг для old_id
+                    cache_key = (name, parent_new_id)
+                    if cache_key in categories_cache:
+                        new_category_id = categories_cache[cache_key]
+                        categories_map[old_cat_id] = new_category_id
+            
+            # Рекурсивно создаем дочерние категории (даже если категория уже существовала)
+            if new_category_id:
+                for child_old_id, child_dict in categories_dict.items():
+                    if child_dict.get('parent_id') == old_cat_id:
+                        create_category_recursive(child_old_id, new_category_id)
+            
+            return new_category_id
+        
+        # Создаем категории без родителя (основные)
+        root_categories_count = 0
+        for old_id, cat_dict in categories_dict.items():
+            if not cat_dict.get('parent_id'):
+                root_categories_count += 1
+                create_category_recursive(old_id, None)
+        
+        print(f"Обработано корневых категорий: {root_categories_count}")
+        print(f"Всего обработано категорий: {processed_count[0]}")
+        print(f"Создано/найдено категорий: {len(categories_map)}")
+    else:
+        print(f"  ⚠ Таблица categories не найдена")
     
-    # ШАГ 1 (было 4): Создание товаров
-    print("\n[ШАГ 1] Создание товаров с изображениями...")
+    # ШАГ 3: Создание брендов
+    print("\n[ШАГ 3] Создание брендов...")
+    if brands_table:
+        brand_columns = structure[brands_table]
+        cursor.execute(f"SELECT * FROM {brands_table}")
+        brands = cursor.fetchall()
+        
+        for brand_row in brands:
+            brand_dict = dict(zip(brand_columns, brand_row))
+            name = brand_dict.get('brand') or brand_dict.get('name') or ''
+            country = brand_dict.get('country') or ''
+            
+            if name and name.strip():
+                old_id = brand_dict.get('id')
+                new_id = create_brand(name.strip(), country, api_url)
+                if new_id and old_id:
+                    brands_map[old_id] = new_id
+                time.sleep(0.2)
+    else:
+        print(f"  ⚠ Таблица brands не найдена")
+    
+    # ШАГ 4: Создание товаров
+    print("\n[ШАГ 4] Создание товаров с изображениями...")
     products_table = None
     for table in structure.keys():
         table_lower = table.lower()
@@ -1195,22 +1212,21 @@ def migrate_data(api_base_url=None, db_path=None):
                     add_product_image(product_id, str(image_url), api_url)
                     time.sleep(0.1)
                 
-                # ВРЕМЕННО ПРОПУСКАЕМ: Добавление характеристик
-                # # Добавляем характеристики из product_properties
-                # if product_properties_table:
-                #     properties_columns = structure[product_properties_table]
-                #     cursor.execute(f"SELECT * FROM {product_properties_table} WHERE product_id = ?", (product_dict.get('id'),))
-                #     properties = cursor.fetchall()
-                #     
-                #     for prop_row in properties:
-                #         prop_dict = dict(zip(properties_columns, prop_row))
-                #         property_name = prop_dict.get('property_name', '').strip()
-                #         property_value = prop_dict.get('property_value', '')
-                #         
-                #         if property_name and property_name in characteristics_cache:
-                #             characteristic_id = characteristics_cache[property_name]
-                #             add_product_characteristic(product_id, characteristic_id, property_value, api_url)
-                #             time.sleep(0.1)
+                # Добавляем характеристики из product_properties
+                if product_properties_table:
+                    properties_columns = structure[product_properties_table]
+                    cursor.execute(f"SELECT * FROM {product_properties_table} WHERE product_id = ?", (product_dict.get('id'),))
+                    properties = cursor.fetchall()
+                    
+                    for prop_row in properties:
+                        prop_dict = dict(zip(properties_columns, prop_row))
+                        property_name = prop_dict.get('property_name', '').strip()
+                        property_value = prop_dict.get('property_value', '')
+                        
+                        if property_name and property_name in characteristics_cache:
+                            characteristic_id = characteristics_cache[property_name]
+                            add_product_characteristic(product_id, characteristic_id, property_value, api_url)
+                            time.sleep(0.1)
             
             time.sleep(0.2)  # Задержка между товарами
     else:
@@ -1220,9 +1236,9 @@ def migrate_data(api_base_url=None, db_path=None):
     print("\n" + "="*60)
     print("МИГРАЦИЯ ЗАВЕРШЕНА")
     print("="*60)
-    print(f"Характеристики: пропущено (временно отключено)")
-    print(f"Категории: пропущено (временно отключено)")
-    print(f"Бренды: пропущено (временно отключено)")
+    print(f"Характеристики: {len(characteristics_cache)}")
+    print(f"Категории: {len(categories_map)}")
+    print(f"Бренды: {len(brands_map)}")
     print(f"Обработано товаров: {len(products_cache)}")
 
 
