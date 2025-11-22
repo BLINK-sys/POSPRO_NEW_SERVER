@@ -280,11 +280,21 @@ def serialize_product(product, availability_status=None):
         }
 
     supplier_info = None
-    if getattr(product, 'supplier', None):
-        supplier_info = {
-            'id': product.supplier.id,
-            'name': product.supplier.name
-        }
+    # Проверяем supplier_id и наличие объекта supplier
+    # Используем прямой доступ к supplier через relationship, если он загружен
+    if product.supplier_id:
+        try:
+            # Пытаемся получить supplier через relationship
+            supplier_obj = getattr(product, 'supplier', None)
+            if supplier_obj:
+                supplier_info = {
+                    'id': supplier_obj.id,
+                    'name': supplier_obj.name
+                }
+        except Exception:
+            # Если relationship не загружен, просто не добавляем supplier_info
+            # но supplier_id всё равно будет в результате
+            pass
 
     status_value = 'no' if product.status is None else str(product.status)
 
@@ -305,7 +315,7 @@ def serialize_product(product, availability_status=None):
         'country': product.country,
         'brand_id': product.brand_id,
         'brand_info': brand_info,
-        'supplier_id': getattr(product, 'supplier_id', None),
+        'supplier_id': product.supplier_id,  # Прямое обращение к полю supplier_id
         'supplier': supplier_info,
         'description': product.description,
         'category_id': product.category_id,
@@ -527,6 +537,23 @@ def get_product_by_slug(slug):
             'image_url': product.brand_info.image_url
         }
 
+    # Получаем информацию о поставщике
+    supplier_info = None
+    # Проверяем supplier_id и наличие объекта supplier
+    if product.supplier_id:
+        try:
+            # Пытаемся получить supplier через relationship
+            supplier_obj = getattr(product, 'supplier', None)
+            if supplier_obj:
+                supplier_info = {
+                    'id': supplier_obj.id,
+                    'name': supplier_obj.name
+                }
+        except Exception:
+            # Если relationship не загружен, просто не добавляем supplier_info
+            # но supplier_id всё равно будет в результате
+            pass
+
     result = {
         'id': product.id,
         'name': product.name,
@@ -540,6 +567,8 @@ def get_product_by_slug(slug):
         'country': product.country,
         'brand_id': product.brand_id,
         'brand_info': brand_info,  # Полная информация о бренде
+        'supplier_id': product.supplier_id,  # ID поставщика
+        'supplier': supplier_info,  # Полная информация о поставщике
         'description': product.description,
         'category_id': product.category_id,
         'image': first_image.url if first_image else None,
@@ -780,7 +809,7 @@ def search_products():
         Product.name.ilike(f'%{query}%'),  # Регистронезависимый поиск подстроки в названии
         Product.is_visible == True,         # Только видимые товары (не скрытые админами)
         Product.is_draft == False           # Только не черновики
-    ).limit(20).all()  # Увеличен лимит до 20 результатов
+    ).limit(50).all()  # Лимит до 50 результатов для расширенного поиска
     
     result = []
     for p in products:
