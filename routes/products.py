@@ -704,22 +704,45 @@ def update_product(product_id):
 # 🔹 Удалить товар + папку
 @products_bp.route('/<int:product_id>', methods=['DELETE'])
 def delete_product(product_id):
-    product = Product.query.get_or_404(product_id)
-
-    ProductMedia.query.filter_by(product_id=product_id).delete()
-    ProductDocument.query.filter_by(product_id=product_id).delete()
-
-    folder_path = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
     try:
-        if os.path.exists(folder_path):
-            shutil.rmtree(folder_path)
-            print(f"Папка {folder_path} удалена при удалении товара.")
-    except Exception as e:
-        print(f"Ошибка при удалении папки: {e}")
+        print(f"Начало удаления товара ID: {product_id}")
+        
+        product = Product.query.get_or_404(product_id)
+        print(f"Товар найден: {product.name} (ID: {product.id})")
 
-    db.session.delete(product)
-    db.session.commit()
-    return jsonify({'message': 'Product deleted'})
+        # Удаляем связанные записи
+        print(f"Удаление связанных записей для товара ID: {product_id}")
+        
+        media_deleted = ProductMedia.query.filter_by(product_id=product_id).delete(synchronize_session=False)
+        documents_deleted = ProductDocument.query.filter_by(product_id=product_id).delete(synchronize_session=False)
+        characteristics_deleted = ProductCharacteristic.query.filter_by(product_id=product_id).delete(synchronize_session=False)
+        print(f"Удалено медиа: {media_deleted}, документов: {documents_deleted}, характеристик: {characteristics_deleted}")
+
+        # Удаляем папку с файлами
+        folder_path = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
+        try:
+            if os.path.exists(folder_path):
+                shutil.rmtree(folder_path)
+                print(f"Папка {folder_path} успешно удалена.")
+            else:
+                print(f"Папка {folder_path} не существует.")
+        except Exception as e:
+            print(f"Ошибка при удалении папки {folder_path}: {e}")
+
+        # Удаляем сам товар
+        print(f"Удаление товара из БД: {product.id}")
+        db.session.delete(product)
+        db.session.commit()
+        
+        print(f"Товар ID: {product_id} успешно удален из БД")
+        return jsonify({'message': 'Product deleted'})
+        
+    except Exception as e:
+        print(f"Ошибка при удалении товара ID {product_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        db.session.rollback()
+        return jsonify({'error': f'Error deleting product: {str(e)}'}), 500
 
 @products_bp.route('/search', methods=['GET'])
 def search_products():
