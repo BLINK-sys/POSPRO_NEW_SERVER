@@ -758,18 +758,29 @@ def delete_product(product_id):
 
 @products_bp.route('/search', methods=['GET'])
 def search_products():
-    """Поиск товаров по названию"""
+    """
+    Поиск товаров по названию
+    
+    Принцип работы:
+    - Регистронезависимый поиск (Стол = стол = СтОл)
+    - Поиск подстроки в любом месте названия (%{query}%)
+    - Поиск только по полю name (название товара)
+    - Отображаются только видимые товары (is_visible = True)
+    """
     query = request.args.get('q', '').strip()
     
     if not query:
         return jsonify([])
     
-    # Поиск товаров, название которых содержит введенный текст (регистронезависимо)
+    # Поиск товаров, название которых содержит введенный текст
+    # ilike - регистронезависимый поиск (case-insensitive)
+    # %{query}% - поиск подстроки в любом месте (начало, середина, конец)
+    # Поиск только по полю name (название товара)
     products = Product.query.filter(
-        Product.name.ilike(f'%{query}%'),
-        Product.is_visible == True,
-        Product.is_draft == False
-    ).limit(10).all()
+        Product.name.ilike(f'%{query}%'),  # Регистронезависимый поиск подстроки в названии
+        Product.is_visible == True,         # Только видимые товары (не скрытые админами)
+        Product.is_draft == False           # Только не черновики
+    ).limit(20).all()  # Увеличен лимит до 20 результатов
     
     result = []
     for p in products:
