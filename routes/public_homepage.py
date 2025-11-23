@@ -1,6 +1,7 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
+import math
 
 from extensions import db
 from models import ProductMedia
@@ -40,8 +41,22 @@ def get_homepage_data():
 
     blocks = HomepageBlock.query.filter_by(active=True).order_by(HomepageBlock.order).all()
 
-    # Загружаем элементы для блоков и собираем ID, которые понадобятся далее
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем все элементы блоков одним запросом
+    block_ids = [block.id for block in blocks]
+    all_block_items = []
+    if block_ids:
+        all_block_items = HomepageBlockItem.query.filter(
+            HomepageBlockItem.block_id.in_(block_ids)
+        ).order_by(HomepageBlockItem.block_id, HomepageBlockItem.order).all()
+    
+    # Группируем элементы по block_id
     block_items_map = {}
+    for item in all_block_items:
+        if item.block_id not in block_items_map:
+            block_items_map[item.block_id] = []
+        block_items_map[item.block_id].append(item)
+
+    # Собираем ID, которые понадобятся далее
     category_ids = set()
     brand_ids = set()
     benefit_ids = set()
@@ -49,8 +64,7 @@ def get_homepage_data():
     small_banner_ids = set()
 
     for block in blocks:
-        block_items = HomepageBlockItem.query.filter_by(block_id=block.id).order_by(HomepageBlockItem.order).all()
-        block_items_map[block.id] = block_items
+        block_items = block_items_map.get(block.id, [])
 
         for item in block_items:
             if not item.item_id:
@@ -336,14 +350,60 @@ def get_category_with_children_and_products(slug):
         'parent_id': c.parent_id
     } for c in child_categories]
 
-    # ✅ ОПТИМИЗАЦИЯ: Загружаем товары с relationships одним запросом
-    products = Product.query.options(
+    # ✅ ПАГИНАЦИЯ: Получаем параметры пагинации и фильтрации
+    page = request.args.get('page', default=1, type=int) or 1
+    per_page = request.args.get('per_page', default=20, type=int) or 20
+    per_page = max(1, min(per_page, 100))  # Ограничиваем до 100 товаров на страницу
+    
+    # Фильтры
+    search_query = request.args.get('search', default='', type=str).strip()
+    brand_filter = request.args.get('brand', default=None, type=str)
+    sort_by = request.args.get('sort', default='name', type=str)
+
+    # ✅ ОПТИМИЗАЦИЯ: Базовый запрос с relationships
+    query = Product.query.options(
         joinedload(Product.brand_info),
         joinedload(Product.status_info),
         joinedload(Product.category)
-    ).filter_by(category_id=category.id, is_visible=True).all()
+    ).filter_by(category_id=category.id, is_visible=True)
     
-    # ✅ ОПТИМИЗАЦИЯ: Загружаем ВСЕ изображения одним запросом
+    # Применяем фильтр по поиску
+    if search_query:
+        query = query.filter(
+            Product.name.ilike(f'%{search_query}%')
+        )
+    
+    # Применяем фильтр по бренду
+    if brand_filter and brand_filter != 'all':
+        # Пытаемся найти бренд по имени
+        brand_obj = Brand.query.filter_by(name=brand_filter).first()
+        if brand_obj:
+            query = query.filter(Product.brand_id == brand_obj.id)
+    
+    # Применяем сортировку
+    if sort_by == 'name':
+        query = query.order_by(Product.name.asc())
+    elif sort_by == 'price_asc':
+        query = query.order_by(Product.price.asc())
+    elif sort_by == 'price_desc':
+        query = query.order_by(Product.price.desc())
+    else:
+        query = query.order_by(Product.name.asc())
+    
+    # Получаем общее количество товаров (до пагинации)
+    total_count = query.count()
+    total_pages = math.ceil(total_count / per_page) if total_count else 0
+    
+    # Корректируем номер страницы
+    if total_pages and page > total_pages:
+        page = total_pages
+    if page < 1:
+        page = 1
+    
+    # ✅ ПАГИНАЦИЯ: Применяем пагинацию
+    products = query.offset((page - 1) * per_page).limit(per_page).all()
+    
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем изображения одним запросом только для товаров на странице
     product_ids = [p.id for p in products]
     media_items = []
     if product_ids:
@@ -361,7 +421,26 @@ def get_category_with_children_and_products(slug):
         if media.product_id not in product_images:
             product_images[media.product_id] = media
     
-    # ✅ ОПТИМИЗАЦИЯ: Собираем уникальные бренды из уже загруженных данных
+    # ✅ ОПТИМИЗАЦИЯ: Для получения всех уникальных брендов категории делаем отдельный запрос
+    # (не только из товаров на текущей странице, а из всех товаров категории)
+    all_category_products = Product.query.filter_by(
+        category_id=category.id, 
+        is_visible=True
+    ).with_entities(Product.brand_id).distinct().all()
+    
+    brand_ids = [p.brand_id for p in all_category_products if p.brand_id]
+    all_brands = {}
+    if brand_ids:
+        brands_list = Brand.query.filter(Brand.id.in_(brand_ids)).all()
+        all_brands = {b.id: {
+            'id': b.id,
+            'name': b.name,
+            'country': b.country,
+            'description': b.description,
+            'image_url': b.image_url
+        } for b in brands_list}
+    
+    # ✅ ОПТИМИЗАЦИЯ: Собираем данные товаров на странице
     unique_brands = {}
     products_data = []
     
@@ -404,8 +483,8 @@ def get_category_with_children_and_products(slug):
             'image_url': first_image.url if first_image else None
         })
 
-    # ✅ ОПТИМИЗАЦИЯ: Бренды уже собраны, просто конвертируем в список
-    brands_data = list(unique_brands.values())
+    # ✅ ОПТИМИЗАЦИЯ: Возвращаем все уникальные бренды категории (не только со страницы)
+    brands_data = list(all_brands.values())
 
     return jsonify({
         'category': {
@@ -418,5 +497,11 @@ def get_category_with_children_and_products(slug):
         },
         'children': children_data,
         'products': products_data,
-        'brands': brands_data
+        'brands': brands_data,
+        'pagination': {
+            'page': page,
+            'per_page': per_page,
+            'total_count': total_count,
+            'total_pages': total_pages
+        }
     })

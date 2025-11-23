@@ -266,9 +266,23 @@ def finalize_product(product_id):
         return jsonify({'error': 'Ошибка при финализации товара'}), 500
 
 
-def serialize_product(product, availability_status=None):
-    first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
-        .order_by(ProductMedia.order).first()
+def serialize_product(product, availability_status=None, product_images=None):
+    """
+    Сериализует товар в словарь.
+    
+    Args:
+        product: Объект Product
+        availability_status: Статус наличия (опционально)
+        product_images: Словарь {product_id: first_image} для оптимизации (опционально)
+    """
+    # ✅ ОПТИМИЗАЦИЯ: Используем предзагруженное изображение, если доступно
+    first_image = None
+    if product_images is not None:
+        first_image = product_images.get(product.id)
+    else:
+        # Fallback: загружаем изображение только если словарь не передан
+        first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
+            .order_by(ProductMedia.order).first()
 
     brand_info = None
     if product.brand_id and product.brand_info:
@@ -342,7 +356,32 @@ def get_products_bulk():
     if not id_list:
         return jsonify([])
 
-    products = Product.query.filter(Product.id.in_(id_list)).all()
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем товары с relationships
+    products = Product.query.options(
+        joinedload(Product.brand_info),
+        joinedload(Product.status_info),
+        joinedload(Product.category),
+        joinedload(Product.supplier)
+    ).filter(Product.id.in_(id_list)).all()
+    
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
+    product_ids = [p.id for p in products]
+    media_items = []
+    if product_ids:
+        media_items = ProductMedia.query \
+            .filter(
+                ProductMedia.product_id.in_(product_ids),
+                ProductMedia.media_type == 'image'
+            ) \
+            .order_by(ProductMedia.product_id, ProductMedia.order) \
+            .all()
+    
+    # Создаем словарь {product_id: first_image}
+    product_images = {}
+    for media in media_items:
+        if media.product_id not in product_images:
+            product_images[media.product_id] = media
+    
     availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
     index_map = {product_id: index for index, product_id in enumerate(id_list)}
 
@@ -351,7 +390,7 @@ def get_products_bulk():
         availability_status = get_availability_status_for_quantity(product.quantity or 0, availability_statuses)
         serialized_items.append((
             index_map.get(product.id, len(id_list)),
-            serialize_product(product, availability_status)
+            serialize_product(product, availability_status, product_images)
         ))
 
     serialized_items.sort(key=lambda item: item[0])
@@ -431,7 +470,13 @@ def get_products():
         elif quantity_param == 'false':
             query = query.filter(Product.quantity <= 0)
 
-        query = query.order_by(Product.id.desc())
+        # ✅ ОПТИМИЗАЦИЯ: Добавляем joinedload для relationships
+        query = query.options(
+            joinedload(Product.brand_info),
+            joinedload(Product.status_info),
+            joinedload(Product.category),
+            joinedload(Product.supplier)
+        ).order_by(Product.id.desc())
 
         if per_page:
             per_page = max(1, min(per_page, 200))
@@ -444,11 +489,31 @@ def get_products():
             products = pagination.items
             total_count = pagination.total
             total_pages = pagination.pages if pagination.pages else 1
+            
+            # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
+            product_ids = [p.id for p in products]
+            media_items = []
+            if product_ids:
+                media_items = ProductMedia.query \
+                    .filter(
+                        ProductMedia.product_id.in_(product_ids),
+                        ProductMedia.media_type == 'image'
+                    ) \
+                    .order_by(ProductMedia.product_id, ProductMedia.order) \
+                    .all()
+            
+            # Создаем словарь {product_id: first_image}
+            product_images = {}
+            for media in media_items:
+                if media.product_id not in product_images:
+                    product_images[media.product_id] = media
+            
             availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
             result = [
                 serialize_product(
                     product,
-                    availability_status=get_availability_status_for_quantity(product.quantity or 0, availability_statuses)
+                    availability_status=get_availability_status_for_quantity(product.quantity or 0, availability_statuses),
+                    product_images=product_images
                 ) for product in products
             ]
             return jsonify({
@@ -460,7 +525,26 @@ def get_products():
             })
 
         products = query.all()
-        result = [serialize_product(product) for product in products]
+        
+        # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом для всех товаров
+        product_ids = [p.id for p in products]
+        media_items = []
+        if product_ids:
+            media_items = ProductMedia.query \
+                .filter(
+                    ProductMedia.product_id.in_(product_ids),
+                    ProductMedia.media_type == 'image'
+                ) \
+                .order_by(ProductMedia.product_id, ProductMedia.order) \
+                .all()
+        
+        # Создаем словарь {product_id: first_image}
+        product_images = {}
+        for media in media_items:
+            if media.product_id not in product_images:
+                product_images[media.product_id] = media
+        
+        result = [serialize_product(product, product_images=product_images) for product in products]
         return jsonify(result)
 
     except Exception as e:
@@ -471,13 +555,36 @@ def get_products():
 # 🔹 Получить товар по slug
 @products_bp.route('/<string:slug>', methods=['GET'])
 def get_product_by_slug(slug):
-    product = Product.query.filter_by(slug=slug).first_or_404()
+    product = Product.query.options(
+        joinedload(Product.brand_info),
+        joinedload(Product.status_info),
+        joinedload(Product.category),
+        joinedload(Product.supplier)
+    ).filter_by(slug=slug).first_or_404()
 
     first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
         .order_by(ProductMedia.order).first()
 
-    # 🧩 Все характеристики
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем все характеристики одним запросом
     characteristics = ProductCharacteristic.query.filter_by(product_id=product.id).all()
+    
+    # Собираем все ID характеристик из справочника
+    characteristic_ids = []
+    for c in characteristics:
+        try:
+            characteristic_id = int(c.key) if c.key else None
+            if characteristic_id:
+                characteristic_ids.append(characteristic_id)
+        except (ValueError, TypeError):
+            pass
+    
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем все характеристики из справочника одним запросом
+    characteristics_map = {}
+    if characteristic_ids:
+        from models.characteristics_list import CharacteristicsList
+        characteristics_list = CharacteristicsList.query.filter(CharacteristicsList.id.in_(characteristic_ids)).all()
+        characteristics_map = {ch.id: ch for ch in characteristics_list}
+    
     characteristics_data = []
     for c in characteristics:
         # Получаем данные из справочника характеристик по ID из поля key
@@ -487,8 +594,7 @@ def get_product_by_slug(slug):
             characteristic_id = None
             
         if characteristic_id:
-            from models.characteristics_list import CharacteristicsList
-            characteristic_info = CharacteristicsList.query.get(characteristic_id)
+            characteristic_info = characteristics_map.get(characteristic_id)
             if characteristic_info:
                 characteristics_data.append({
                     'id': c.id,
