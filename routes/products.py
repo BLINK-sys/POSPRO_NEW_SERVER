@@ -5,6 +5,7 @@ import unicodedata
 import math
 from flask import Blueprint, request, jsonify, current_app
 import logging
+from sqlalchemy.orm import joinedload
 from extensions import db
 from models import ProductDocument, ProductCharacteristic
 from models.product import Product
@@ -801,20 +802,41 @@ def search_products():
     if not query:
         return jsonify([])
     
-    # Поиск товаров, название которых содержит введенный текст
+    # ✅ ОПТИМИЗАЦИЯ: Поиск товаров с relationships
     # ilike - регистронезависимый поиск (case-insensitive)
     # %{query}% - поиск подстроки в любом месте (начало, середина, конец)
     # Поиск только по полю name (название товара)
-    products = Product.query.filter(
+    products = Product.query.options(
+        joinedload(Product.brand_info),
+        joinedload(Product.status_info),
+        joinedload(Product.category)
+    ).filter(
         Product.name.ilike(f'%{query}%'),  # Регистронезависимый поиск подстроки в названии
         Product.is_visible == True,         # Только видимые товары (не скрытые админами)
         Product.is_draft == False           # Только не черновики
     ).limit(50).all()  # Лимит до 50 результатов для расширенного поиска
     
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
+    product_ids = [p.id for p in products]
+    media_items = []
+    if product_ids:
+        media_items = ProductMedia.query \
+            .filter(
+                ProductMedia.product_id.in_(product_ids),
+                ProductMedia.media_type == 'image'
+            ) \
+            .order_by(ProductMedia.product_id, ProductMedia.order) \
+            .all()
+    
+    # Создаем словарь {product_id: first_image}
+    product_images = {}
+    for media in media_items:
+        if media.product_id not in product_images:
+            product_images[media.product_id] = media
+    
     result = []
     for p in products:
-        first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-            .order_by(ProductMedia.order).first()
+        first_image = product_images.get(p.id)
         
         # Получаем информацию о бренде
         brand_info = None
@@ -871,17 +893,38 @@ def get_products_by_brand(brand_name):
                 'error': 'Бренд не найден'
             }), 404
         
-        # Получаем товары по brand_id
-        products = Product.query.filter(
+        # ✅ ОПТИМИЗАЦИЯ: Загружаем товары с relationships
+        products = Product.query.options(
+            joinedload(Product.brand_info),
+            joinedload(Product.status_info),
+            joinedload(Product.category)
+        ).filter(
             Product.brand_id == brand_obj.id,
             Product.is_visible == True,
             Product.is_draft == False
         ).all()
         
+        # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
+        product_ids = [p.id for p in products]
+        media_items = []
+        if product_ids:
+            media_items = ProductMedia.query \
+                .filter(
+                    ProductMedia.product_id.in_(product_ids),
+                    ProductMedia.media_type == 'image'
+                ) \
+                .order_by(ProductMedia.product_id, ProductMedia.order) \
+                .all()
+        
+        # Создаем словарь {product_id: first_image}
+        product_images = {}
+        for media in media_items:
+            if media.product_id not in product_images:
+                product_images[media.product_id] = media
+        
         result = []
         for p in products:
-            first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-                .order_by(ProductMedia.order).first()
+            first_image = product_images.get(p.id)
             
             # Получаем информацию о бренде
             brand_info = None
@@ -962,7 +1005,12 @@ def get_products_by_brand_detailed(brand_name):
         per_page = request.args.get('per_page', default=20, type=int) or 20
         per_page = max(1, min(per_page, 100))
 
-        query = Product.query.filter(
+        # ✅ ОПТИМИЗАЦИЯ: Загружаем товары с relationships
+        query = Product.query.options(
+            joinedload(Product.brand_info),
+            joinedload(Product.status_info),
+            joinedload(Product.category)
+        ).filter(
             Product.brand_id == brand_obj.id,
             Product.is_visible == True,
             Product.is_draft == False
@@ -979,23 +1027,37 @@ def get_products_by_brand_detailed(brand_name):
         products = query.offset((page - 1) * per_page).limit(per_page).all()
         availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
 
+        # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
+        product_ids = [p.id for p in products]
+        media_items = []
+        if product_ids:
+            media_items = ProductMedia.query \
+                .filter(
+                    ProductMedia.product_id.in_(product_ids),
+                    ProductMedia.media_type == 'image'
+                ) \
+                .order_by(ProductMedia.product_id, ProductMedia.order) \
+                .all()
+        
+        # Создаем словарь {product_id: first_image}
+        product_images = {}
+        for media in media_items:
+            if media.product_id not in product_images:
+                product_images[media.product_id] = media
+
         result = []
         for p in products:
-            # Получаем первое изображение
-            first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-                .order_by(ProductMedia.order).first()
+            first_image = product_images.get(p.id)
             
             # Получаем информацию о статусе
             status_info = None
-            if p.status:
-                status_obj = Status.query.get(p.status)
-                if status_obj:
-                    status_info = {
-                        'id': status_obj.id,
-                        'name': status_obj.name,
-                        'background_color': status_obj.background_color,
-                        'text_color': status_obj.text_color
-                    }
+            if p.status and p.status_info:
+                status_info = {
+                    'id': p.status_info.id,
+                    'name': p.status_info.name,
+                    'background_color': p.status_info.background_color,
+                    'text_color': p.status_info.text_color
+                }
             
             # Получаем информацию о бренде из relationship
             brand_info = None
@@ -1010,16 +1072,14 @@ def get_products_by_brand_detailed(brand_name):
             
             # Получаем информацию о категории
             category_info = None
-            if p.category_id:
-                category_obj = Category.query.get(p.category_id)
-                if category_obj:
-                    category_info = {
-                        'id': category_obj.id,
-                        'name': category_obj.name,
-                        'slug': category_obj.slug,
-                        'description': category_obj.description,
-                        'image_url': category_obj.image_url
-                    }
+            if p.category_id and p.category:
+                category_info = {
+                    'id': p.category.id,
+                    'name': p.category.name,
+                    'slug': p.category.slug,
+                    'description': p.category.description,
+                    'image_url': p.category.image_url
+                }
             
             # Получаем статус наличия на основе таблицы
             availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
@@ -1167,8 +1227,12 @@ def get_products_by_brand_and_category(brand_name):
         per_page = request.args.get('per_page', default=20, type=int) or 20
         per_page = max(1, min(per_page, 100))
         
-        # Базовый запрос
-        query = Product.query.filter(
+        # ✅ ОПТИМИЗАЦИЯ: Базовый запрос с relationships
+        query = Product.query.options(
+            joinedload(Product.brand_info),
+            joinedload(Product.status_info),
+            joinedload(Product.category)
+        ).filter(
             Product.brand_id == brand_obj.id,
             Product.is_visible == True,
             Product.is_draft == False
@@ -1200,12 +1264,29 @@ def get_products_by_brand_and_category(brand_name):
         products = query.offset((page - 1) * per_page).limit(per_page).all()
         availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
 
+        # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
+        product_ids = [p.id for p in products]
+        media_items = []
+        if product_ids:
+            media_items = ProductMedia.query \
+                .filter(
+                    ProductMedia.product_id.in_(product_ids),
+                    ProductMedia.media_type == 'image'
+                ) \
+                .order_by(ProductMedia.product_id, ProductMedia.order) \
+                .all()
+        
+        # Создаем словарь {product_id: first_image}
+        product_images = {}
+        for media in media_items:
+            if media.product_id not in product_images:
+                product_images[media.product_id] = media
+
         result = []
         from models.status import Status
 
         for p in products:
-            first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-                .order_by(ProductMedia.order).first()
+            first_image = product_images.get(p.id)
             
             # Получаем информацию о бренде
             brand_info = None
@@ -1219,15 +1300,13 @@ def get_products_by_brand_and_category(brand_name):
                 }
             
             status_info = None
-            if p.status:
-                status_obj = Status.query.get(p.status)
-                if status_obj:
-                    status_info = {
-                        'id': status_obj.id,
-                        'name': status_obj.name,
-                        'background_color': status_obj.background_color,
-                        'text_color': status_obj.text_color
-                    }
+            if p.status and p.status_info:
+                status_info = {
+                    'id': p.status_info.id,
+                    'name': p.status_info.name,
+                    'background_color': p.status_info.background_color,
+                    'text_color': p.status_info.text_color
+                }
             availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
             
             result.append({
