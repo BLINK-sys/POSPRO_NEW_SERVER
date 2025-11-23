@@ -336,16 +336,38 @@ def get_category_with_children_and_products(slug):
         'parent_id': c.parent_id
     } for c in child_categories]
 
-    # 🔹 Товары в текущей категории
-    products = Product.query.filter_by(category_id=category.id, is_visible=True).all()
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем товары с relationships одним запросом
+    products = Product.query.options(
+        joinedload(Product.brand_info),
+        joinedload(Product.status_info),
+        joinedload(Product.category)
+    ).filter_by(category_id=category.id, is_visible=True).all()
+    
+    # ✅ ОПТИМИЗАЦИЯ: Загружаем ВСЕ изображения одним запросом
+    product_ids = [p.id for p in products]
+    media_items = []
+    if product_ids:
+        media_items = ProductMedia.query \
+            .filter(
+                ProductMedia.product_id.in_(product_ids),
+                ProductMedia.media_type == 'image'
+            ) \
+            .order_by(ProductMedia.product_id, ProductMedia.order) \
+            .all()
+    
+    # Создаем словарь {product_id: first_image}
+    product_images = {}
+    for media in media_items:
+        if media.product_id not in product_images:
+            product_images[media.product_id] = media
+    
+    # ✅ ОПТИМИЗАЦИЯ: Собираем уникальные бренды из уже загруженных данных
+    unique_brands = {}
     products_data = []
     
-    # 🔹 Собираем уникальные бренды из товаров
-    unique_brands = set()
     for p in products:
-        first_image = ProductMedia.query.filter_by(product_id=p.id, media_type='image') \
-            .order_by(ProductMedia.order).first()
-
+        first_image = product_images.get(p.id)
+        
         status_data = None
         if p.status_info:
             status_data = {
@@ -365,8 +387,8 @@ def get_category_with_children_and_products(slug):
                 'description': p.brand_info.description,
                 'image_url': p.brand_info.image_url
             }
-            # Добавляем бренд в уникальный список
-            unique_brands.add(p.brand_info.id)
+            # Сохраняем бренд в словарь (избегаем дубликатов и дополнительных запросов)
+            unique_brands[p.brand_info.id] = brand_data
 
         products_data.append({
             'id': p.id,
@@ -382,24 +404,8 @@ def get_category_with_children_and_products(slug):
             'image_url': first_image.url if first_image else None
         })
 
-    # 🔹 Формируем список уникальных брендов
-    brands_data = []
-    print(f"📋 Уникальные ID брендов: {unique_brands}")
-    for brand_id in unique_brands:
-        brand = Brand.query.get(brand_id)
-        if brand:
-            print(f"✅ Добавляем бренд в список: {brand.name}")
-            brands_data.append({
-                'id': brand.id,
-                'name': brand.name,
-                'country': brand.country,
-                'description': brand.description,
-                'image_url': brand.image_url
-            })
-        else:
-            print(f"❌ Бренд с ID {brand_id} не найден")
-    
-    print(f"📊 Итого брендов в ответе: {len(brands_data)}")
+    # ✅ ОПТИМИЗАЦИЯ: Бренды уже собраны, просто конвертируем в список
+    brands_data = list(unique_brands.values())
 
     return jsonify({
         'category': {

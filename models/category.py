@@ -1,4 +1,5 @@
 from extensions import db
+from sqlalchemy import Index
 
 
 class Category(db.Model):
@@ -10,6 +11,13 @@ class Category(db.Model):
     image_url = db.Column(db.String(255), nullable=True)
     order = db.Column(db.Integer, nullable=False, default=0)
     show_in_menu = db.Column(db.Boolean, nullable=False, default=True)
+
+    # ✅ Индексы для оптимизации запросов
+    __table_args__ = (
+        Index('idx_category_slug', 'slug'),
+        Index('idx_category_parent', 'parent_id'),
+        Index('idx_category_menu', 'show_in_menu', 'parent_id'),
+    )
     
     def to_dict(self):
         return {

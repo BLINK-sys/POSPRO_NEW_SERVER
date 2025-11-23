@@ -1,4 +1,5 @@
 from extensions import db
+from sqlalchemy import Index
 
 
 class Brand(db.Model):
@@ -7,3 +8,8 @@ class Brand(db.Model):
     country = db.Column(db.String(255))
     description = db.Column(db.Text)
     image_url = db.Column(db.String(512))  # ссылка или путь
+
+    # ✅ Индекс для оптимизации поиска по имени бренда
+    __table_args__ = (
+        Index('idx_brand_name', 'name'),
+    )

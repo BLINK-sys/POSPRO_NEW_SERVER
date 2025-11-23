@@ -1,6 +1,7 @@
 from extensions import db
 from models.brand import Brand
 from models.supplier import Supplier
+from sqlalchemy import Index
 
 
 class Product(db.Model):
@@ -28,6 +29,14 @@ class Product(db.Model):
     characteristics = db.relationship('ProductCharacteristic', backref='product', cascade='all, delete-orphan')
     media = db.relationship('ProductMedia', backref='product', cascade='all, delete-orphan')
     documents = db.relationship('ProductDocument', backref='product', cascade='all, delete-orphan')
+
+    # ✅ Индексы для оптимизации запросов
+    __table_args__ = (
+        Index('idx_product_visible_draft', 'is_visible', 'is_draft'),
+        Index('idx_product_brand_visible', 'brand_id', 'is_visible', 'is_draft'),
+        Index('idx_product_category_visible', 'category_id', 'is_visible', 'is_draft'),
+        Index('idx_product_slug', 'slug'),
+    )
 
     def get_main_image_url(self):
         # Получаем первое изображение по порядку (order)
