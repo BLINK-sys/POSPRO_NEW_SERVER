@@ -1,4 +1,4 @@
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, send_file
 from flask_cors import CORS
 from config import Config
 from extensions import db, jwt
@@ -205,7 +205,7 @@ def serve_product_document(product_id, filename):
         print(f"Document not found: {full_path}")
         return "Document not found", 404
     
-    return send_from_directory(folder, filename)
+    return send_file(full_path, as_attachment=True, download_name=filename)
 
 
 @app.route('/uploads/products/<int:product_id>/drivers/<filename>')
@@ -222,7 +222,7 @@ def serve_product_driver(product_id, filename):
         print(f"Driver not found: {full_path}")
         return "Driver not found", 404
     
-    return send_from_directory(folder, filename)
+    return send_file(full_path, as_attachment=True, download_name=filename)
 
 
 @app.route('/uploads/brands/<int:brand_id>/<filename>')
