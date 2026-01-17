@@ -281,8 +281,8 @@ def serialize_product(product, availability_status=None, product_images=None):
         first_image = product_images.get(product.id)
     else:
         # Fallback: загружаем изображение только если словарь не передан
-    first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
-        .order_by(ProductMedia.order).first()
+        first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
+            .order_by(ProductMedia.order).first()
 
     brand_info = None
     if product.brand_id and product.brand_info:
