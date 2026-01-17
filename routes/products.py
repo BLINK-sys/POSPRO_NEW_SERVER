@@ -281,8 +281,8 @@ def serialize_product(product, availability_status=None, product_images=None):
         first_image = product_images.get(product.id)
     else:
         # Fallback: загружаем изображение только если словарь не передан
-        first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
-            .order_by(ProductMedia.order).first()
+    first_image = ProductMedia.query.filter_by(product_id=product.id, media_type='image') \
+        .order_by(ProductMedia.order).first()
 
     brand_info = None
     if product.brand_id and product.brand_info:
@@ -1158,12 +1158,12 @@ def get_products_by_brand_detailed(brand_name):
             # Получаем информацию о статусе
             status_info = None
             if p.status and p.status_info:
-                status_info = {
+                    status_info = {
                     'id': p.status_info.id,
                     'name': p.status_info.name,
                     'background_color': p.status_info.background_color,
                     'text_color': p.status_info.text_color
-                }
+                    }
             
             # Получаем информацию о бренде из relationship
             brand_info = None
@@ -1179,13 +1179,13 @@ def get_products_by_brand_detailed(brand_name):
             # Получаем информацию о категории
             category_info = None
             if p.category_id and p.category:
-                category_info = {
+                    category_info = {
                     'id': p.category.id,
                     'name': p.category.name,
                     'slug': p.category.slug,
                     'description': p.category.description,
                     'image_url': p.category.image_url
-                }
+                    }
             
             # Получаем статус наличия на основе таблицы
             availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
@@ -1407,12 +1407,12 @@ def get_products_by_brand_and_category(brand_name):
             
             status_info = None
             if p.status and p.status_info:
-                status_info = {
+                    status_info = {
                     'id': p.status_info.id,
                     'name': p.status_info.name,
                     'background_color': p.status_info.background_color,
                     'text_color': p.status_info.text_color
-                }
+                    }
             availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
             
             result.append({

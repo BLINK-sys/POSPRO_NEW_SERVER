@@ -18,11 +18,16 @@ from urllib.parse import quote, urlparse
 from io import BytesIO
 import unicodedata
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Настройки API
 # По умолчанию используем Render сервер, можно переопределить через переменную окружения или аргумент
 API_BASE_URL = os.getenv('API_BASE_URL', 'https://pospro-new-server.onrender.com/api')
 OLD_DB_PATH = os.path.join(os.path.dirname(__file__), 'products.db')
+
+# ID поставщика по умолчанию для всех мигрируемых товаров
+DEFAULT_SUPPLIER_ID = 2
 
 # JWT токен для авторизации
 JWT_TOKEN = None
@@ -33,11 +38,12 @@ categories_map = {}  # {old_category_id: new_category_id}
 brands_cache = {}  # {(name, country): brand_id} для быстрого поиска
 categories_cache = {}  # {(name, parent_id): category_id} для быстрого поиска
 characteristics_cache = {}  # {characteristic_key: characteristic_id} для быстрого поиска
-products_cache = {}  # {name: product_id} для быстрого поиска товаров
+products_cache = {}  # {name: {'id': product_id, 'supplier_id': supplier_id}} для быстрого поиска товаров
 existing_brands_loaded = False  # Флаг загрузки существующих брендов
 existing_categories_loaded = False  # Флаг загрузки существующих категорий
 existing_characteristics_loaded = False  # Флаг загрузки существующих характеристик
 existing_products_loaded = False  # Флаг загрузки существующих товаров
+products_cache_lock = threading.Lock()  # Lock для синхронизации products_cache
 
 
 def get_auth_headers():
@@ -468,14 +474,25 @@ def load_existing_products(api_url):
     """Загружает все существующие товары в кеш порционно (по имени для проверки дубликатов)"""
     global existing_products_loaded, products_cache
     
+    # Двойная проверка с синхронизацией (double-checked locking pattern)
     if existing_products_loaded:
         return
     
-    # Инициализируем кеш только при первой загрузке
-    products_cache = {}  # {name: product_id} для быстрого поиска
+    # Используем lock для синхронизации между потоками
+    with products_cache_lock:
+        # Проверяем еще раз внутри lock (на случай если другой поток уже начал загрузку)
+        if existing_products_loaded:
+            return
+        
+        # Устанавливаем флаг сразу, чтобы другие потоки ждали завершения загрузки
+        # Это предотвращает параллельную загрузку из нескольких потоков
+        existing_products_loaded = True
+        
+        # Инициализируем кеш только при первой загрузке
+        products_cache = {}  # {name: {'id': product_id, 'supplier_id': supplier_id}} для быстрого поиска
     
     products_url = normalize_url(api_url, 'products/')
-    print(f"  Загрузка существующих товаров с {products_url} (порционно)...")
+    print(f"  Загрузка существующих товаров с {products_url} (порционно, только supplier_id={DEFAULT_SUPPLIER_ID})...")
     
     per_page = 200  # Максимальное количество товаров за запрос
     page = 1
@@ -512,11 +529,18 @@ def load_existing_products(api_url):
                     print(f"  ⚠ Неожиданный формат ответа API")
                     break
                 
-                # Добавляем товары в кеш
-                for product in existing_products:
-                    name = product.get('name', '').strip()
-                    if name:
-                        products_cache[name] = product['id']
+                # Добавляем товары в кеш (с синхронизацией) - только с supplier_id = 2
+                with products_cache_lock:
+                    for product in existing_products:
+                        supplier_id = product.get('supplier_id')
+                        # Загружаем только товары с поставщиком 2 (проверяем на None и на значение)
+                        if supplier_id is not None and supplier_id == DEFAULT_SUPPLIER_ID:
+                            name = product.get('name', '').strip()
+                            if name:
+                                products_cache[name] = {
+                                    'id': product['id'],
+                                    'supplier_id': supplier_id
+                                }
                 
                 loaded_count = len(existing_products)
                 total_loaded += loaded_count
@@ -533,8 +557,8 @@ def load_existing_products(api_url):
                 print(f"  ⚠ Ошибка загрузки товаров: {response.status_code}")
                 break
                 
-        existing_products_loaded = True
-        print(f"  ✓ Загружено {total_loaded} существующих товаров в кеш (уникальных имен: {len(products_cache)})")
+        # Флаг уже установлен в начале функции
+        print(f"  ✓ Загружено {total_loaded} товаров с сервера, из них {len(products_cache)} с supplier_id={DEFAULT_SUPPLIER_ID} добавлено в кеш")
         
     except requests.exceptions.Timeout:
         print(f"  ⚠ Таймаут при загрузке товаров (сервер может быть в режиме сна)")
@@ -542,6 +566,83 @@ def load_existing_products(api_url):
         print(f"  ✗ Ошибка при загрузке существующих товаров: {e}")
         import traceback
         traceback.print_exc()
+
+
+def deactivate_missing_products(local_product_names, api_url):
+    """
+    Деактивирует товары на сервере, которых нет в локальной базе.
+    Устанавливает is_visible=False и quantity=0 для таких товаров.
+    
+    Args:
+        local_product_names: множество нормализованных имен товаров из локальной базы (lowercase, stripped)
+        api_url: URL API сервера
+    """
+    if not local_product_names:
+        print("  ⚠ Список локальных товаров пуст, пропускаем деактивацию")
+        return
+    
+    print("\n" + "="*60)
+    print(f"ДЕАКТИВАЦИЯ ОТСУТСТВУЮЩИХ ТОВАРОВ (только supplier_id={DEFAULT_SUPPLIER_ID})")
+    print("="*60)
+    
+    # Убеждаемся, что кеш товаров загружен
+    if not existing_products_loaded:
+        load_existing_products(api_url)
+    
+    # Находим товары на сервере, которых нет в локальной базе (только с supplier_id = 2)
+    products_to_deactivate = []
+    
+    with products_cache_lock:
+        for server_name, product_info in products_cache.items():
+            # Проверяем, что товар с поставщиком 2
+            if product_info.get('supplier_id') == DEFAULT_SUPPLIER_ID:
+                # Нормализуем имя для сравнения (lowercase, strip)
+                normalized_name = server_name.strip().lower()
+                if normalized_name not in local_product_names:
+                    products_to_deactivate.append((product_info['id'], server_name))
+    
+    if not products_to_deactivate:
+        print(f"  ✓ Все товары с supplier_id={DEFAULT_SUPPLIER_ID} на сервере присутствуют в локальной базе, деактивация не требуется")
+        return
+    
+    print(f"  Найдено товаров с supplier_id={DEFAULT_SUPPLIER_ID} для деактивации: {len(products_to_deactivate)}")
+    print(f"  Начинаем деактивацию...")
+    
+    deactivated_count = 0
+    error_count = 0
+    
+    for product_id, product_name in products_to_deactivate:
+        try:
+            products_url = normalize_url(api_url, f'products/{product_id}')
+            update_data = {
+                'is_visible': False,
+                'quantity': 0
+            }
+            
+            response = requests.put(
+                products_url,
+                json=update_data,
+                headers=get_auth_headers(),
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                deactivated_count += 1
+                if deactivated_count % 50 == 0:
+                    print(f"    Обработано: {deactivated_count}/{len(products_to_deactivate)}")
+            else:
+                error_count += 1
+                print(f"    ⚠ Ошибка деактивации товара '{product_name}' (ID: {product_id}): {response.status_code} - {response.text[:200]}")
+            
+            time.sleep(0.05)  # Небольшая задержка между запросами
+            
+        except Exception as e:
+            error_count += 1
+            print(f"    ✗ Ошибка при деактивации товара '{product_name}' (ID: {product_id}): {e}")
+    
+    print(f"\n  ✓ Деактивация завершена:")
+    print(f"    - Деактивировано: {deactivated_count}")
+    print(f"    - Ошибок: {error_count}")
 
 
 def is_external_url(url):
@@ -752,24 +853,42 @@ def get_product_media(product_id, api_url):
         return []
 
 
+def get_product_characteristics(product_id, api_url):
+    """Получает все характеристики товара через API"""
+    try:
+        characteristics_url = normalize_url(api_url, f'characteristics/{product_id}')
+        
+        response = requests.get(
+            characteristics_url,
+            headers=get_auth_headers(),
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            characteristics_list = response.json()
+            if isinstance(characteristics_list, list):
+                # Возвращаем множество ID характеристик для быстрой проверки
+                return {char.get('characteristic_id') for char in characteristics_list if char.get('characteristic_id')}
+            else:
+                return set()
+        else:
+            return set()
+            
+    except Exception as e:
+        print(f"  ⚠ Ошибка при получении характеристик товара {product_id}: {e}")
+        return set()
+
+
 def add_product_image(product_id, image_url, api_url):
-    """Добавляет изображение товара по URL. Если URL внешний - скачивает и загружает на сервер"""
+    """Добавляет изображение товара по URL. Если URL внешний - скачивает и загружает на сервер.
+    Примечание: проверка на наличие локального изображения уже выполнена в основном цикле миграции."""
     if not image_url or not product_id:
         return False
     
     image_url = str(image_url).strip()
     
-    # Проверяем существующие медиа товара
-    existing_media = get_product_media(product_id, api_url)
-    existing_urls = {m.get('url', '').strip() for m in existing_media if m.get('media_type') == 'image'}
-    
     # Проверяем тип URL
     if is_local_url(image_url):
-        # Проверяем, не существует ли уже это изображение
-        if image_url in existing_urls:
-            print(f"  ℹ Локальное изображение уже существует для товара {product_id}: {image_url}")
-            return True
-            
         # Локальное изображение - просто добавляем URL в БД
         print(f"  ℹ Локальное изображение, добавляем URL: {image_url}")
         try:
@@ -799,17 +918,8 @@ def add_product_image(product_id, image_url, api_url):
             return False
     
     elif is_external_url(image_url):
-        # Для внешних URL определяем имя файла и проверяем, не загружено ли уже изображение с таким именем
-        # После скачивания URL изменится на локальный, поэтому проверяем по имени файла
-        filename = sanitize_filename(image_url)
-        expected_local_url = f'/uploads/products/{product_id}/{filename}'
-        
-        # Проверяем, не существует ли уже локальное изображение с таким именем
-        if expected_local_url in existing_urls:
-            print(f"  ℹ Изображение уже загружено для товара {product_id}: {expected_local_url}")
-            return True
-        
         # Внешнее изображение - скачиваем и загружаем на сервер
+        # (В старой БД всегда будут внешние URL)
         print(f"  🔄 Внешнее изображение, скачиваем и загружаем: {image_url}")
         
         # Скачиваем изображение
@@ -818,12 +928,6 @@ def add_product_image(product_id, image_url, api_url):
         if not image_content or not filename:
             print(f"  ✗ Не удалось скачать изображение")
             return False
-        
-        # Проверяем еще раз после получения реального имени файла
-        final_local_url = f'/uploads/products/{product_id}/{filename}'
-        if final_local_url in existing_urls:
-            print(f"  ℹ Изображение уже загружено для товара {product_id}: {final_local_url}")
-            return True
         
         # Загружаем на сервер
         success = upload_product_image_file(product_id, image_content, filename, api_url)
@@ -855,8 +959,13 @@ def add_product_characteristic(product_id, characteristic_id, value, api_url):
         
         if response.status_code == 201:
             return True
+        elif response.status_code == 400 or response.status_code == 409:
+            # Характеристика уже существует или другая ошибка валидации
+            # Не выводим предупреждение, так как это нормальная ситуация при повторной миграции
+            return False
         else:
-            print(f"  ⚠ Ошибка добавления характеристики: {response.status_code} - {response.text}")
+            # Другие ошибки - выводим предупреждение
+            print(f"  ⚠ Ошибка добавления характеристики: {response.status_code} - {response.text[:200]}")
             return False
     except Exception as e:
         print(f"  ⚠ Ошибка при добавлении характеристики товара: {e}")
@@ -868,8 +977,10 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
     if api_url is None:
         api_url = globals().get('API_BASE_URL', 'https://pospro-new-server.onrender.com/api')
     
-    # Загружаем существующие товары при первом вызове
-    load_existing_products(api_url)
+    # Кеш товаров уже должен быть загружен до запуска потоков
+    # Если по какой-то причине не загружен - загружаем (fallback)
+    if not existing_products_loaded:
+        load_existing_products(api_url)
     
     # Получаем данные товара
     name = product_data.get('name') or product_data.get('fullName', '').strip()
@@ -888,16 +999,27 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
     description = product_data.get('description', '') or ''
     price = product_data.get('price', 0) or 0
     
-    # Проверяем на дубликат по имени
+    # Проверяем на дубликат по имени (только для товаров с supplier_id = 2)
     if name in products_cache:
-        existing_id = products_cache[name]
-        print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id}), обновляем цену и остатки")
+        product_info = products_cache[name]
+        # Проверяем, что это товар с поставщиком 2
+        if product_info.get('supplier_id') == DEFAULT_SUPPLIER_ID:
+            existing_id = product_info['id']
+            print(f"  ✓ Товар '{name}' уже существует (ID: {existing_id}), обновляем цену и остатки")
+        else:
+            # Товар с другим поставщиком - создаем новый
+            existing_id = None
+    else:
+        existing_id = None
+    
+    if existing_id:
         
-        # Обновляем цену и остатки для существующего товара
+        # Обновляем цену, остатки и поставщика для существующего товара
         try:
             update_data = {
                 'price': float(price) if price else 0,
-                'quantity': quantity
+                'quantity': quantity,
+                'supplier_id': DEFAULT_SUPPLIER_ID
             }
             products_url = normalize_url(api_url, f'products/{existing_id}')
             response = requests.put(
@@ -908,7 +1030,7 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
             )
             
             if response.status_code == 200:
-                print(f"  ✓ Обновлены цена и остатки для товара '{name}' (ID: {existing_id})")
+                print(f"  ✓ Обновлены цена, остатки и поставщик для товара '{name}' (ID: {existing_id})")
             else:
                 print(f"  ⚠ Не удалось обновить товар '{name}': {response.status_code} - {response.text[:200]}")
         except Exception as e:
@@ -917,6 +1039,7 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
         # Изображение будет обработано в основном цикле миграции
         return existing_id
     
+    # Товар не найден или с другим поставщиком - создаем новый
     # Получаем новый brand_id по старому ID
     new_brand_id = None
     if old_brand_id and old_brand_id in brands_map:
@@ -945,7 +1068,8 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
             'country': '',
             'brand_id': new_brand_id,  # Используем только brand_id
             'description': description,
-            'category_id': new_category_id
+            'category_id': new_category_id,
+            'supplier_id': DEFAULT_SUPPLIER_ID
         }
         products_url = normalize_url(api_url, 'products/')
         response = requests.post(
@@ -958,7 +1082,11 @@ def create_product(product_data, old_brand_id, old_category_id, api_url=None):
         if response.status_code == 201:
             result = response.json()
             product_id = result.get('id')
-            products_cache[name] = product_id
+            with products_cache_lock:
+                products_cache[name] = {
+                    'id': product_id,
+                    'supplier_id': DEFAULT_SUPPLIER_ID
+                }
             print(f"✓ Создан товар: {name} (ID: {product_id})")
             return product_id
         else:
@@ -1021,225 +1149,393 @@ def migrate_data(api_base_url=None, db_path=None):
         api_base_url: URL API сервера
         db_path: Путь к файлу products.db
     """
-    # Используем переданные параметры или глобальные
-    api_url = api_base_url or API_BASE_URL
-    db_path_local = db_path or OLD_DB_PATH
-    
-    if not os.path.exists(db_path_local):
-        print(f"✗ Файл базы данных не найден: {db_path_local}")
-        return
-    
-    # Авторизация
-    print("\n" + "="*60)
-    print("АВТОРИЗАЦИЯ")
-    print("="*60)
-    if not login(api_url):
-        print("✗ Не удалось авторизоваться. Миграция прервана.")
-        return
-    
-    print(f"Подключение к базе данных: {db_path_local}")
-    conn = sqlite3.connect(db_path_local)
-    cursor = conn.cursor()
-    
-    # Проверяем структуру базы
-    print("\n" + "="*60)
-    print("ПРОВЕРКА СТРУКТУРЫ БАЗЫ ДАННЫХ")
-    print("="*60)
-    structure = check_db_structure(conn)
-    
-    # Определяем имена таблиц
-    brands_table = None
-    categories_table = None
-    product_properties_table = None
-    
-    for table in structure.keys():
-        table_lower = table.lower()
-        if 'brand' in table_lower:
-            brands_table = table
-        elif 'categor' in table_lower:
-            categories_table = table
-        elif 'product_propert' in table_lower or 'property' in table_lower:
-            product_properties_table = table
-    
-    print("\n" + "="*60)
-    print("НАЧАЛО МИГРАЦИИ")
-    print("="*60)
-    
-    # ШАГ 1: Создание характеристик из справочника
-    print("\n[ШАГ 1] Создание характеристик из справочника...")
-    if product_properties_table:
-        properties_columns = structure[product_properties_table]
-        # Получаем уникальные имена характеристик
-        if 'property_name' in properties_columns:
-            cursor.execute(f"SELECT DISTINCT property_name FROM {product_properties_table} WHERE property_name IS NOT NULL AND property_name != ''")
-            unique_properties = [row[0] for row in cursor.fetchall()]
-            print(f"Найдено уникальных характеристик: {len(unique_properties)}")
-            
-            for prop_name in unique_properties:
-                if prop_name and prop_name.strip():
-                    create_characteristic(prop_name.strip(), api_url)
-                    time.sleep(0.2)  # Небольшая задержка между запросами
-        else:
-            print(f"  ⚠ В таблице {product_properties_table} не найдено поле property_name")
-    else:
-        print(f"  ⚠ Таблица product_properties не найдена")
-    
-    # ШАГ 2: Создание категорий с учетом иерархии
-    print("\n[ШАГ 2] Создание категорий с учетом иерархии...")
-    if categories_table:
-        category_columns = structure[categories_table]
+    try:
+        # Используем переданные параметры или глобальные
+        api_url = api_base_url or API_BASE_URL
+        db_path_local = db_path or OLD_DB_PATH
         
-        # Сначала получаем все категории
-        cursor.execute(f"SELECT * FROM {categories_table} ORDER BY id")
-        all_categories = cursor.fetchall()
+        if not os.path.exists(db_path_local):
+            print(f"✗ Файл базы данных не найден: {db_path_local}")
+            return
         
-        print(f"Найдено категорий в старой БД: {len(all_categories)}")
+        # Авторизация
+        print("\n" + "="*60)
+        print("АВТОРИЗАЦИЯ")
+        print("="*60)
+        if not login(api_url):
+            print("✗ Не удалось авторизоваться. Миграция прервана.")
+            return
         
-        # Создаем словарь категорий по ID
-        categories_dict = {}
-        for cat_row in all_categories:
-            cat_dict = dict(zip(category_columns, cat_row))
-            old_id = cat_dict.get('id')
-            categories_dict[old_id] = cat_dict
+        print(f"Подключение к базе данных: {db_path_local}")
+        conn = sqlite3.connect(db_path_local)
+        cursor = conn.cursor()
         
-        # Функция для рекурсивного создания категорий
-        processed_count = [0]  # Используем список для изменения в замыкании
+        # Проверяем структуру базы
+        print("\n" + "="*60)
+        print("ПРОВЕРКА СТРУКТУРЫ БАЗЫ ДАННЫХ")
+        print("="*60)
+        structure = check_db_structure(conn)
         
-        def create_category_recursive(old_cat_id, parent_new_id=None):
-            if old_cat_id not in categories_dict:
-                return None
-            
-            cat_dict = categories_dict[old_cat_id]
-            name = cat_dict.get('name', '').strip()
-            if not name:
-                return None
-            
-            # Проверяем, не обработана ли уже категория с этим old_id
-            if old_cat_id in categories_map:
-                # Категория уже была обработана, используем сохраненный ID
-                new_category_id = categories_map[old_cat_id]
-                # Не выводим сообщение для уже обработанных, чтобы не засорять лог
+        # Определяем имена таблиц
+        brands_table = None
+        categories_table = None
+        product_properties_table = None
+        
+        for table in structure.keys():
+            table_lower = table.lower()
+            if 'brand' in table_lower:
+                brands_table = table
+            elif 'categor' in table_lower:
+                categories_table = table
+            elif 'product_propert' in table_lower or 'property' in table_lower:
+                product_properties_table = table
+        
+        print("\n" + "="*60)
+        print("НАЧАЛО МИГРАЦИИ")
+        print("="*60)
+        
+        # ШАГ 1: Создание характеристик из справочника
+        print("\n[ШАГ 1] Создание характеристик из справочника...")
+        if product_properties_table:
+            properties_columns = structure[product_properties_table]
+            # Получаем уникальные имена характеристик
+            if 'property_name' in properties_columns:
+                cursor.execute(f"SELECT DISTINCT property_name FROM {product_properties_table} WHERE property_name IS NOT NULL AND property_name != ''")
+                unique_properties = [row[0] for row in cursor.fetchall()]
+                print(f"Найдено уникальных характеристик: {len(unique_properties)}")
+                
+                for prop_name in unique_properties:
+                    if prop_name and prop_name.strip():
+                        create_characteristic(prop_name.strip(), api_url)
+                        time.sleep(0.2)  # Небольшая задержка между запросами
             else:
-                processed_count[0] += 1
-                # Получаем изображение
-                image_url = cat_dict.get('img') or cat_dict.get('image') or cat_dict.get('image_url')
+                print(f"  ⚠ В таблице {product_properties_table} не найдено поле property_name")
+        else:
+            print(f"  ⚠ Таблица product_properties не найдена")
+        
+        # ШАГ 2: Создание категорий с учетом иерархии
+        print("\n[ШАГ 2] Создание категорий с учетом иерархии...")
+        if categories_table:
+            category_columns = structure[categories_table]
+            
+            # Сначала получаем все категории
+            cursor.execute(f"SELECT * FROM {categories_table} ORDER BY id")
+            all_categories = cursor.fetchall()
+            
+            print(f"Найдено категорий в старой БД: {len(all_categories)}")
+            
+            # Создаем словарь категорий по ID
+            categories_dict = {}
+            for cat_row in all_categories:
+                cat_dict = dict(zip(category_columns, cat_row))
+                old_id = cat_dict.get('id')
+                categories_dict[old_id] = cat_dict
+            
+            # Функция для рекурсивного создания категорий
+            processed_count = [0]  # Используем список для изменения в замыкании
+            
+            def create_category_recursive(old_cat_id, parent_new_id=None):
+                if old_cat_id not in categories_dict:
+                    return None
                 
-                # Создаем категорию (функция create_category сама проверяет кеш и выводит сообщения)
-                new_category_id = create_category(name, parent_new_id, image_url, api_url)
-                if new_category_id:
-                    categories_map[old_cat_id] = new_category_id
-                    time.sleep(0.2)
+                cat_dict = categories_dict[old_cat_id]
+                name = cat_dict.get('name', '').strip()
+                if not name:
+                    return None
+                
+                # Проверяем, не обработана ли уже категория с этим old_id
+                if old_cat_id in categories_map:
+                    # Категория уже была обработана, используем сохраненный ID
+                    new_category_id = categories_map[old_cat_id]
+                    # Не выводим сообщение для уже обработанных, чтобы не засорять лог
                 else:
-                    # Если категория уже существовала в кеше, create_category вернет её ID
-                    # Но нужно сохранить маппинг для old_id
-                    cache_key = (name, parent_new_id)
-                    if cache_key in categories_cache:
-                        new_category_id = categories_cache[cache_key]
-                        categories_map[old_cat_id] = new_category_id
-            
-            # Рекурсивно создаем дочерние категории (даже если категория уже существовала)
-            if new_category_id:
-                for child_old_id, child_dict in categories_dict.items():
-                    if child_dict.get('parent_id') == old_cat_id:
-                        create_category_recursive(child_old_id, new_category_id)
-            
-            return new_category_id
-        
-        # Создаем категории без родителя (основные)
-        root_categories_count = 0
-        for old_id, cat_dict in categories_dict.items():
-            if not cat_dict.get('parent_id'):
-                root_categories_count += 1
-                create_category_recursive(old_id, None)
-        
-        print(f"Обработано корневых категорий: {root_categories_count}")
-        print(f"Всего обработано категорий: {processed_count[0]}")
-        print(f"Создано/найдено категорий: {len(categories_map)}")
-    else:
-        print(f"  ⚠ Таблица categories не найдена")
-    
-    # ШАГ 3: Создание брендов
-    print("\n[ШАГ 3] Создание брендов...")
-    if brands_table:
-        brand_columns = structure[brands_table]
-        cursor.execute(f"SELECT * FROM {brands_table}")
-        brands = cursor.fetchall()
-        
-        for brand_row in brands:
-            brand_dict = dict(zip(brand_columns, brand_row))
-            name = brand_dict.get('brand') or brand_dict.get('name') or ''
-            country = brand_dict.get('country') or ''
-            
-            if name and name.strip():
-                old_id = brand_dict.get('id')
-                new_id = create_brand(name.strip(), country, api_url)
-                if new_id and old_id:
-                    brands_map[old_id] = new_id
-                time.sleep(0.2)
-    else:
-        print(f"  ⚠ Таблица brands не найдена")
-    
-    # ШАГ 4: Создание товаров
-    print("\n[ШАГ 4] Создание товаров с изображениями...")
-    products_table = None
-    for table in structure.keys():
-        table_lower = table.lower()
-        if 'product' in table_lower and 'property' not in table_lower:
-            products_table = table
-            break
-    
-    if products_table:
-        products_columns = structure[products_table]
-        cursor.execute(f"SELECT * FROM {products_table}")
-        products = cursor.fetchall()
-        
-        print(f"Найдено товаров для миграции: {len(products)}")
-        
-        for product_row in products:
-            product_dict = dict(zip(products_columns, product_row))
-            
-            # Получаем старые ID
-            old_brand_id = product_dict.get('brand_id')
-            old_category_id = product_dict.get('category_id')
-            
-            # Создаем товар
-            product_id = create_product(product_dict, old_brand_id, old_category_id, api_url)
-            
-            if product_id:
-                # Добавляем изображение
-                image_url = product_dict.get('img') or product_dict.get('image') or product_dict.get('image_url')
-                if image_url:
-                    add_product_image(product_id, str(image_url), api_url)
-                    time.sleep(0.1)
-                
-                # Добавляем характеристики из product_properties
-                if product_properties_table:
-                    properties_columns = structure[product_properties_table]
-                    cursor.execute(f"SELECT * FROM {product_properties_table} WHERE product_id = ?", (product_dict.get('id'),))
-                    properties = cursor.fetchall()
+                    processed_count[0] += 1
+                    # Получаем изображение
+                    image_url = cat_dict.get('img') or cat_dict.get('image') or cat_dict.get('image_url')
                     
-                    for prop_row in properties:
-                        prop_dict = dict(zip(properties_columns, prop_row))
-                        property_name = prop_dict.get('property_name', '').strip()
-                        property_value = prop_dict.get('property_value', '')
-                        
-                        if property_name and property_name in characteristics_cache:
-                            characteristic_id = characteristics_cache[property_name]
-                            add_product_characteristic(product_id, characteristic_id, property_value, api_url)
-                            time.sleep(0.1)
+                    # Создаем категорию (функция create_category сама проверяет кеш и выводит сообщения)
+                    new_category_id = create_category(name, parent_new_id, image_url, api_url)
+                    if new_category_id:
+                        categories_map[old_cat_id] = new_category_id
+                        time.sleep(0.2)
+                    else:
+                        # Если категория уже существовала в кеше, create_category вернет её ID
+                        # Но нужно сохранить маппинг для old_id
+                        cache_key = (name, parent_new_id)
+                        if cache_key in categories_cache:
+                            new_category_id = categories_cache[cache_key]
+                            categories_map[old_cat_id] = new_category_id
+                
+                # Рекурсивно создаем дочерние категории (даже если категория уже существовала)
+                if new_category_id:
+                    for child_old_id, child_dict in categories_dict.items():
+                        if child_dict.get('parent_id') == old_cat_id:
+                            create_category_recursive(child_old_id, new_category_id)
+                
+                return new_category_id
             
-            time.sleep(0.2)  # Задержка между товарами
-    else:
-        print(f"  ⚠ Таблица products не найдена")
-    
-    conn.close()
-    print("\n" + "="*60)
-    print("МИГРАЦИЯ ЗАВЕРШЕНА")
-    print("="*60)
-    print(f"Характеристики: {len(characteristics_cache)}")
-    print(f"Категории: {len(categories_map)}")
-    print(f"Бренды: {len(brands_map)}")
-    print(f"Обработано товаров: {len(products_cache)}")
+            # Создаем категории без родителя (основные)
+            root_categories_count = 0
+            for old_id, cat_dict in categories_dict.items():
+                if not cat_dict.get('parent_id'):
+                    root_categories_count += 1
+                    create_category_recursive(old_id, None)
+            
+            print(f"Обработано корневых категорий: {root_categories_count}")
+            print(f"Всего обработано категорий: {processed_count[0]}")
+            print(f"Создано/найдено категорий: {len(categories_map)}")
+        else:
+            print(f"  ⚠ Таблица categories не найдена")
+        
+        # ШАГ 3: Создание брендов
+        print("\n[ШАГ 3] Создание брендов...")
+        if brands_table:
+            brand_columns = structure[brands_table]
+            cursor.execute(f"SELECT * FROM {brands_table}")
+            brands = cursor.fetchall()
+            
+            for brand_row in brands:
+                brand_dict = dict(zip(brand_columns, brand_row))
+                name = brand_dict.get('brand') or brand_dict.get('name') or ''
+                country = brand_dict.get('country') or ''
+                
+                if name and name.strip():
+                    old_id = brand_dict.get('id')
+                    new_id = create_brand(name.strip(), country, api_url)
+                    if new_id and old_id:
+                        brands_map[old_id] = new_id
+                    time.sleep(0.2)
+        else:
+            print(f"  ⚠ Таблица brands не найдена")
+        
+        # ШАГ 4: Создание товаров (параллельная обработка в 5 потоков)
+        print("\n[ШАГ 4] Создание товаров с изображениями...")
+        products_table = None
+        local_product_names = set()  # Множество имен товаров из локальной БД для деактивации отсутствующих
+        for table in structure.keys():
+            table_lower = table.lower()
+            if 'product' in table_lower and 'property' not in table_lower:
+                products_table = table
+                break
+        
+        if products_table:
+            products_columns = structure[products_table]
+            
+            # Выгружаем все товары в список
+            print(f"Загрузка товаров из старой БД в память...")
+            cursor.execute(f"SELECT * FROM {products_table}")
+            all_products = cursor.fetchall()
+            print(f"Найдено товаров для миграции: {len(all_products)}")
+            
+            # Собираем множество имен товаров из локальной базы для последующей деактивации отсутствующих
+            for product_row in all_products:
+                product_dict = dict(zip(products_columns, product_row))
+                name = product_dict.get('name') or product_dict.get('fullName', '').strip()
+                if name:
+                    # Нормализуем имя для сравнения (lowercase, strip)
+                    local_product_names.add(name.strip().lower())
+            print(f"Собрано уникальных имен товаров из локальной БД: {len(local_product_names)}")
+            
+            # Выгружаем все характеристики товаров в словарь
+            products_properties_dict = {}
+            if product_properties_table:
+                print(f"Загрузка характеристик товаров в память...")
+                properties_columns = structure[product_properties_table]
+                cursor.execute(f"SELECT * FROM {product_properties_table}")
+                all_properties = cursor.fetchall()
+                
+                for prop_row in all_properties:
+                    prop_dict = dict(zip(properties_columns, prop_row))
+                    product_id_old = prop_dict.get('product_id')
+                    if product_id_old:
+                        if product_id_old not in products_properties_dict:
+                            products_properties_dict[product_id_old] = []
+                        products_properties_dict[product_id_old].append(prop_dict)
+                print(f"Загружено характеристик для {len(products_properties_dict)} товаров")
+            
+            # Закрываем соединение с SQLite - больше не нужно
+            conn.close()
+            print(f"Соединение с SQLite закрыто...")
+            
+            # Загружаем существующие товары ДО запуска потоков (один раз)
+            print(f"Загрузка существующих товаров с сервера...")
+            load_existing_products(api_url)
+            print(f"Загрузка завершена, запускаем параллельную обработку...")
+            
+            # Функция для обработки одного товара
+            def process_single_product(product_row, products_columns, products_properties_dict, product_properties_table, api_url):
+                """Обрабатывает один товар"""
+                try:
+                    product_dict = dict(zip(products_columns, product_row))
+                    
+                    # Получаем старые ID
+                    old_brand_id = product_dict.get('brand_id')
+                    old_category_id = product_dict.get('category_id')
+                    old_product_id = product_dict.get('id')
+                    
+                    # Создаем товар
+                    product_id = create_product(product_dict, old_brand_id, old_category_id, api_url)
+                    
+                    if product_id:
+                        product_name = product_dict.get('name') or product_dict.get('fullName', '').strip()
+                        
+                        # Обрабатываем изображение на основе медиа с сервера
+                        image_url = product_dict.get('img') or product_dict.get('image') or product_dict.get('image_url')
+                        if image_url:
+                            # Получаем существующие медиа товара с сервера
+                            existing_media = get_product_media(product_id, api_url)
+                            
+                            # Проверяем, есть ли уже локальное изображение
+                            has_local_image = False
+                            local_image_url = None
+                            for media in existing_media:
+                                if media.get('media_type') == 'image':
+                                    url = media.get('url', '').strip()
+                                    if url.startswith('/uploads/products/'):
+                                        has_local_image = True
+                                        local_image_url = url
+                                        break
+                            
+                            # Если есть локальное изображение - пропускаем загрузку
+                            if has_local_image:
+                                print(f"  ℹ Товар '{product_name}' (ID: {product_id}) уже имеет локальное изображение: {local_image_url}, пропускаем загрузку")
+                            else:
+                                # Если нет локального изображения - загружаем из старой БД
+                                if existing_media:
+                                    external_urls = [m.get('url', '') for m in existing_media if m.get('media_type') == 'image' and m.get('url', '').startswith('http')]
+                                    if external_urls:
+                                        print(f"  🔄 Товар '{product_name}' (ID: {product_id}) имеет внешнее изображение на сервере, заменяем локальным из старой БД")
+                                    else:
+                                        print(f"  🔄 Товар '{product_name}' (ID: {product_id}) имеет изображение на сервере, но не локальное, загружаем из старой БД")
+                                else:
+                                    print(f"  🔄 Товар '{product_name}' (ID: {product_id}) не имеет изображения на сервере, загружаем из старой БД")
+                                
+                                # В старой БД всегда будет внешний URL (http)
+                                # Скачиваем и загружаем на сервер
+                                add_product_image(product_id, str(image_url), api_url)
+                                time.sleep(0.1)
+                        else:
+                            # Товар не имеет изображения в старой БД
+                            print(f"  ℹ Товар '{product_name}' (ID: {product_id}) не имеет изображения в старой БД, пропускаем")
+                        
+                        # Добавляем характеристики из словаря с проверкой на дубликаты
+                        if old_product_id and old_product_id in products_properties_dict:
+                            # Получаем существующие характеристики товара
+                            existing_characteristics = get_product_characteristics(product_id, api_url)
+                            
+                            added_count = 0
+                            skipped_count = 0
+                            
+                            for prop_dict in products_properties_dict[old_product_id]:
+                                property_name = prop_dict.get('property_name', '').strip()
+                                property_value = prop_dict.get('property_value', '')
+                                
+                                if property_name and property_name in characteristics_cache:
+                                    characteristic_id = characteristics_cache[property_name]
+                                    
+                                    # Проверяем, есть ли уже такая характеристика у товара
+                                    if characteristic_id in existing_characteristics:
+                                        skipped_count += 1
+                                        # Не выводим сообщение для каждой пропущенной характеристики, чтобы не засорять лог
+                                    else:
+                                        # Добавляем только если характеристики еще нет
+                                        if add_product_characteristic(product_id, characteristic_id, property_value, api_url):
+                                            added_count += 1
+                                    time.sleep(0.1)
+                            
+                            if added_count > 0 or skipped_count > 0:
+                                print(f"  ✓ Характеристики для товара '{product_name}' (ID: {product_id}): добавлено {added_count}, пропущено {skipped_count} (уже существуют)")
+                    
+                    return product_id
+                except Exception as e:
+                    print(f"  ✗ Ошибка обработки товара: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return None
+            
+            # Параллельная обработка в 5 потоков
+            print(f"Запуск параллельной обработки в 5 потоков...")
+            print(f"Для остановки нажмите Ctrl+C")
+            processed_count = 0
+            total_count = len(all_products)
+            
+            try:
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    # Запускаем все задачи
+                    futures = {
+                        executor.submit(
+                            process_single_product,
+                            product_row,
+                            products_columns,
+                            products_properties_dict,
+                            product_properties_table,
+                            api_url
+                        ): product_row for product_row in all_products
+                    }
+                    
+                    # Обрабатываем результаты по мере завершения
+                    try:
+                        for future in as_completed(futures):
+                            try:
+                                result = future.result()
+                                processed_count += 1
+                                if processed_count % 100 == 0:
+                                    print(f"  Обработано товаров: {processed_count}/{total_count}")
+                            except Exception as e:
+                                print(f"  ✗ Ошибка в потоке: {e}")
+                                processed_count += 1
+                    except KeyboardInterrupt:
+                        print(f"\n\n⚠ Прерывание миграции по запросу пользователя (Ctrl+C)")
+                        print(f"Обработано товаров до остановки: {processed_count}/{total_count}")
+                        print(f"Отмена оставшихся задач...")
+                        
+                        # Отменяем все незавершенные задачи
+                        for future in futures:
+                            future.cancel()
+                        
+                        # Ждем завершения уже запущенных задач (с таймаутом)
+                        import concurrent.futures
+                        for future in concurrent.futures.as_completed(list(futures.keys()), timeout=10):
+                            try:
+                                future.result(timeout=1)
+                            except:
+                                pass
+                        
+                        print(f"Миграция остановлена пользователем")
+                        raise  # Пробрасываем KeyboardInterrupt дальше
+            
+            except KeyboardInterrupt:
+                print(f"\n⚠ Миграция прервана пользователем")
+                print(f"Обработано товаров: {processed_count}/{total_count}")
+                raise
+            
+            print(f"Обработка товаров завершена: {processed_count}/{total_count}")
+            
+            # ШАГ 5: Деактивация товаров, отсутствующих в локальной базе
+            if local_product_names:
+                deactivate_missing_products(local_product_names, api_url)
+        else:
+            print(f"  ⚠ Таблица products не найдена")
+            conn.close()
+        
+        # Финальная статистика при успешном завершении
+        print("\n" + "="*60)
+        print("МИГРАЦИЯ ЗАВЕРШЕНА")
+        print("="*60)
+        print(f"Характеристики: {len(characteristics_cache)}")
+        print(f"Категории: {len(categories_map)}")
+        print(f"Бренды: {len(brands_map)}")
+        print(f"Обработано товаров: {len(products_cache)}")
+        
+    except KeyboardInterrupt:
+        print("\n\n" + "="*60)
+        print("МИГРАЦИЯ ПРЕРВАНА ПОЛЬЗОВАТЕЛЕМ (Ctrl+C)")
+        print("="*60)
+        print(f"Характеристики: {len(characteristics_cache)}")
+        print(f"Категории: {len(categories_map)}")
+        print(f"Бренды: {len(brands_map)}")
+        print(f"Обработано товаров: {len(products_cache)}")
+        raise  # Пробрасываем исключение для корректного выхода
 
 
 if __name__ == '__main__':
@@ -1285,12 +1581,22 @@ if __name__ == '__main__':
         sys.exit(0)
     
     # Запуск миграции
-    if args.yes:
-        migrate_data(API_BASE_URL, OLD_DB_PATH)
-    else:
-        response = input("\nНачать миграцию? (yes/no): ")
-        if response.lower() in ['yes', 'y', 'да', 'д']:
+    try:
+        if args.yes:
             migrate_data(API_BASE_URL, OLD_DB_PATH)
         else:
-            print("Миграция отменена.")
+            response = input("\nНачать миграцию? (yes/no): ")
+            if response.lower() in ['yes', 'y', 'да', 'д']:
+                migrate_data(API_BASE_URL, OLD_DB_PATH)
+            else:
+                print("Миграция отменена.")
+    except KeyboardInterrupt:
+        print("\n\n⚠ Миграция прервана пользователем (Ctrl+C)")
+        print("Процесс остановлен корректно.")
+        sys.exit(0)  # Выход с кодом 0, так как это ожидаемое прерывание
+    except Exception as e:
+        print(f"\n\n✗ Ошибка миграции: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 

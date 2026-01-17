@@ -446,7 +446,7 @@ def get_category_with_children_and_products(slug):
     
     for p in products:
         first_image = product_images.get(p.id)
-        
+
         status_data = None
         if p.status_info:
             status_data = {
