@@ -1,0 +1,2 @@
+# Нормализация переводов строк: в репо храним LF, на Windows Git конвертирует при checkout
+* text=auto eol=lf
