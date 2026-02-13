@@ -22,6 +22,25 @@ def get_public_info():
     return {"message": "Public API", "status": "ok"}
 
 
+@public_homepage_bp.route('/public/sitemap-slugs', methods=['GET'])
+def get_sitemap_slugs():
+    """Список slug товаров и категорий для генерации sitemap на фронте."""
+    product_slugs = [
+        row[0] for row in
+        Product.query.filter_by(is_visible=True, is_draft=False)
+        .with_entities(Product.slug)
+        .all()
+    ]
+    category_slugs = [
+        row[0] for row in
+        Category.query.with_entities(Category.slug).all()
+    ]
+    return jsonify({
+        "products": product_slugs,
+        "categories": category_slugs,
+    })
+
+
 @public_homepage_bp.route('/public/homepage', methods=['GET'])
 def get_homepage_data():
     banners = Banner.query.filter_by(active=True).order_by(Banner.order).all()
