@@ -904,10 +904,14 @@ def search_products():
     - Отображаются только видимые товары (is_visible = True)
     """
     query = request.args.get('q', '').strip()
-    
+    limit = request.args.get('limit', 500, type=int)
+
     if not query:
         return jsonify([])
-    
+
+    # Ограничиваем максимальный лимит
+    limit = min(limit, 1000)
+
     # ✅ ОПТИМИЗАЦИЯ: Поиск товаров с relationships
     # ilike - регистронезависимый поиск (case-insensitive)
     # %{query}% - поиск подстроки в любом месте (начало, середина, конец)
@@ -920,7 +924,7 @@ def search_products():
         Product.name.ilike(f'%{query}%'),  # Регистронезависимый поиск подстроки в названии
         Product.is_visible == True,         # Только видимые товары (не скрытые админами)
         Product.is_draft == False           # Только не черновики
-    ).limit(50).all()  # Лимит до 50 результатов для расширенного поиска
+    ).limit(limit).all()
     
     # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
     product_ids = [p.id for p in products]
@@ -952,7 +956,16 @@ def search_products():
                 'name': p.brand_info.name,
                 'country': p.brand_info.country
             }
-        
+
+        # Получаем информацию о категории
+        category_info = None
+        if p.category_id and p.category:
+            category_info = {
+                'id': p.category.id,
+                'name': p.category.name,
+                'slug': getattr(p.category, 'slug', None)
+            }
+
         result.append({
             'id': p.id,
             'name': p.name,
@@ -968,9 +981,10 @@ def search_products():
             'brand_info': brand_info,
             'description': p.description,
             'category_id': p.category_id,
+            'category': category_info,
             'image': first_image.url if first_image else None
         })
-    
+
     return jsonify(result)
 
 @products_bp.route('/brand/<string:brand_name>', methods=['GET'])
