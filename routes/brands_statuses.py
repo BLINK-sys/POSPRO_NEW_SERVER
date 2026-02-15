@@ -1,9 +1,11 @@
 from flask import Blueprint, request, jsonify, current_app
 from extensions import db
 from models.brand import Brand
+from models.product import Product
 from models.status import Status
 import os
 from werkzeug.utils import secure_filename
+from sqlalchemy import func
 
 bp = Blueprint('brands_statuses', __name__)
 
@@ -11,13 +13,25 @@ bp = Blueprint('brands_statuses', __name__)
 # ✅ Получить все бренды
 @bp.route('/brands', methods=['GET'])
 def get_brands():
+    # Подсчёт видимых товаров для каждого бренда
+    counts = db.session.query(
+        Product.brand_id,
+        func.count(Product.id).label('cnt')
+    ).filter(
+        Product.is_visible == True,
+        Product.is_draft == False
+    ).group_by(Product.brand_id).all()
+
+    count_map = {row.brand_id: row.cnt for row in counts}
+
     brands = Brand.query.all()
     return jsonify([{
         'id': b.id,
         'name': b.name,
         'country': b.country,
         'description': b.description,
-        'image_url': b.image_url
+        'image_url': b.image_url,
+        'products_count': count_map.get(b.id, 0)
     } for b in brands])
 
 
