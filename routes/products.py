@@ -904,13 +904,13 @@ def search_products():
     - Отображаются только видимые товары (is_visible = True)
     """
     query = request.args.get('q', '').strip()
-    limit = request.args.get('limit', 500, type=int)
+    limit = request.args.get('limit', 5000, type=int)
 
     if not query:
         return jsonify([])
 
     # Ограничиваем максимальный лимит
-    limit = min(limit, 1000)
+    limit = min(limit, 5000)
 
     # ✅ ОПТИМИЗАЦИЯ: Поиск товаров с relationships
     # ilike - регистронезависимый поиск (case-insensitive)
