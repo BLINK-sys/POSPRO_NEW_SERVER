@@ -944,10 +944,20 @@ def search_products():
         if media.product_id not in product_images:
             product_images[media.product_id] = media
     
+    # ✅ Загружаем все правила статусов наличия ОДИН раз (вместо HTTP-вызова на каждый товар)
+    availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+
+    def compute_availability_status(quantity):
+        """Вычисляет статус наличия по количеству (in-memory, без HTTP)"""
+        for status in availability_statuses:
+            if status.check_condition(quantity):
+                return status.to_dict()
+        return None
+
     result = []
     for p in products:
         first_image = product_images.get(p.id)
-        
+
         # Получаем информацию о бренде
         brand_info = None
         if p.brand_id and p.brand_info:
@@ -966,6 +976,11 @@ def search_products():
                 'slug': getattr(p.category, 'slug', None)
             }
 
+        # Получаем статус товара (объект с name, background_color, text_color)
+        status_dict = None
+        if p.status_info:
+            status_dict = p.status_info.to_dict()
+
         result.append({
             'id': p.id,
             'name': p.name,
@@ -974,7 +989,7 @@ def search_products():
             'price': p.price,
             'wholesale_price': p.wholesale_price,
             'quantity': p.quantity,
-            'status': 'no' if p.status is None else str(p.status),
+            'status': status_dict,
             'is_visible': p.is_visible,
             'country': p.country,
             'brand_id': p.brand_id,
@@ -982,7 +997,8 @@ def search_products():
             'description': p.description,
             'category_id': p.category_id,
             'category': category_info,
-            'image': first_image.url if first_image else None
+            'image': first_image.url if first_image else None,
+            'availability_status': compute_availability_status(p.quantity or 0)
         })
 
     return jsonify(result)
