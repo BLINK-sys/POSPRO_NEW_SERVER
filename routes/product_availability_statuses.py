@@ -69,6 +69,11 @@ def create_product_availability_status():
         # Получаем следующий порядок
         max_order = db.session.query(db.func.max(ProductAvailabilityStatus.order)).scalar() or 0
         
+        # Валидация supplier_id (если указан)
+        supplier_id = data.get('supplier_id')
+        if supplier_id is not None:
+            supplier_id = int(supplier_id) if supplier_id else None
+
         new_status = ProductAvailabilityStatus(
             status_name=data['status_name'],
             condition_operator=data['condition_operator'],
@@ -76,7 +81,8 @@ def create_product_availability_status():
             background_color=data.get('background_color', '#ffffff'),
             text_color=data.get('text_color', '#000000'),
             order=max_order + 1,
-            active=data.get('active', True)
+            active=data.get('active', True),
+            supplier_id=supplier_id
         )
         
         db.session.add(new_status)
@@ -141,6 +147,8 @@ def update_product_availability_status(status_id):
             status.text_color = data['text_color']
         if 'active' in data:
             status.active = data['active']
+        if 'supplier_id' in data:
+            status.supplier_id = int(data['supplier_id']) if data['supplier_id'] else None
         
         db.session.commit()
         

@@ -12,6 +12,9 @@ class ProductAvailabilityStatus(db.Model):
     text_color = db.Column(db.String(7), nullable=False, default='#000000')  # Цвет текста в HEX
     order = db.Column(db.Integer, default=0)  # Порядок сортировки
     active = db.Column(db.Boolean, default=True)  # Активен ли статус
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id', ondelete='SET NULL'), nullable=True)  # Поставщик
+
+    supplier = db.relationship('Supplier', backref='availability_statuses', lazy=True)
 
     def to_dict(self):
         return {
@@ -22,7 +25,9 @@ class ProductAvailabilityStatus(db.Model):
             'background_color': self.background_color,
             'text_color': self.text_color,
             'order': self.order,
-            'active': self.active
+            'active': self.active,
+            'supplier_id': self.supplier_id,
+            'supplier_name': self.supplier.name if self.supplier else None
         }
 
     def get_formula_display(self):

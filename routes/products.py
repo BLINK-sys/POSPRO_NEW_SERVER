@@ -21,14 +21,22 @@ products_bp = Blueprint('products', __name__)
 logger = logging.getLogger(__name__)
 
 
-def get_availability_status_for_quantity(quantity: int, statuses_cache=None):
-    """Возвращает статус наличия на основе таблицы product_availability_statuses."""
+def get_availability_status_for_quantity(quantity: int, statuses_cache=None, supplier_id=None):
+    """Возвращает статус наличия на основе таблицы product_availability_statuses.
+    Сначала проверяет статусы привязанные к поставщику, потом глобальные (без поставщика)."""
     statuses = statuses_cache
     if statuses is None:
         statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
 
+    # Сначала проверяем статусы с привязкой к поставщику товара
+    if supplier_id:
+        for status in statuses:
+            if status.supplier_id == supplier_id and status.check_condition(quantity):
+                return status.to_dict()
+
+    # Затем проверяем глобальные статусы (без поставщика)
     for status in statuses:
-        if status.check_condition(quantity):
+        if status.supplier_id is None and status.check_condition(quantity):
             return status.to_dict()
 
     return None
@@ -314,7 +322,7 @@ def serialize_product(product, availability_status=None, product_images=None):
     status_value = 'no' if product.status is None else str(product.status)
 
     if availability_status is None:
-        availability_status = get_availability_status_for_quantity(product.quantity or 0)
+        availability_status = get_availability_status_for_quantity(product.quantity or 0, supplier_id=product.supplier_id)
 
     product_data = {
         'id': product.id,
@@ -387,7 +395,7 @@ def get_products_bulk():
 
     serialized_items = []
     for product in products:
-        availability_status = get_availability_status_for_quantity(product.quantity or 0, availability_statuses)
+        availability_status = get_availability_status_for_quantity(product.quantity or 0, availability_statuses, supplier_id=product.supplier_id)
         serialized_items.append((
             index_map.get(product.id, len(id_list)),
             serialize_product(product, availability_status, product_images)
@@ -512,7 +520,7 @@ def get_products():
             result = [
                 serialize_product(
                     product,
-                    availability_status=get_availability_status_for_quantity(product.quantity or 0, availability_statuses),
+                    availability_status=get_availability_status_for_quantity(product.quantity or 0, availability_statuses, supplier_id=product.supplier_id),
                     product_images=product_images
                 ) for product in products
             ]
@@ -1218,8 +1226,8 @@ def get_products_by_brand_detailed(brand_name):
                     }
             
             # Получаем статус наличия на основе таблицы
-            availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
-            
+            availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses, supplier_id=p.supplier_id)
+
             result.append({
                 'id': p.id,
                 'name': p.name,
@@ -1443,8 +1451,8 @@ def get_products_by_brand_and_category(brand_name):
                     'background_color': p.status_info.background_color,
                     'text_color': p.status_info.text_color
                     }
-            availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses)
-            
+            availability_status = get_availability_status_for_quantity(p.quantity or 0, availability_statuses, supplier_id=p.supplier_id)
+
             result.append({
                 'id': p.id,
                 'name': p.name,
