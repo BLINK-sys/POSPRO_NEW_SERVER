@@ -1092,6 +1092,7 @@ def get_products_by_brand(brand_name):
                 'brand_id': p.brand_id,
                 'brand_info': brand_info,  # Добавляем brand_info
                 'brand': brand_info,
+                'supplier_id': p.supplier_id,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
