@@ -53,6 +53,7 @@ def get_profile():
             'email': user.email,
             'phone': user.phone,
             'deliveryAddress': user.delivery_address,
+            'is_wholesale': bool(user.is_wholesale),
         }
 
         if user.organization_type == 'individual':
