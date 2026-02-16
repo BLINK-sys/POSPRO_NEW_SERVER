@@ -955,12 +955,9 @@ def search_products():
     # ✅ Загружаем все правила статусов наличия ОДИН раз (вместо HTTP-вызова на каждый товар)
     availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
 
-    def compute_availability_status(quantity):
+    def compute_availability_status(quantity, supplier_id=None):
         """Вычисляет статус наличия по количеству (in-memory, без HTTP)"""
-        for status in availability_statuses:
-            if status.check_condition(quantity):
-                return status.to_dict()
-        return None
+        return get_availability_status_for_quantity(quantity, availability_statuses, supplier_id=supplier_id)
 
     result = []
     for p in products:
@@ -1006,7 +1003,7 @@ def search_products():
             'category_id': p.category_id,
             'category': category_info,
             'image': first_image.url if first_image else None,
-            'availability_status': compute_availability_status(p.quantity or 0)
+            'availability_status': compute_availability_status(p.quantity or 0, supplier_id=p.supplier_id)
         })
 
     return jsonify(result)
