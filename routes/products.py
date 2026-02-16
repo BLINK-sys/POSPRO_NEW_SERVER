@@ -1000,6 +1000,8 @@ def search_products():
             'country': p.country,
             'brand_id': p.brand_id,
             'brand_info': brand_info,
+            'supplier_id': p.supplier_id,
+            'supplier_name': p.supplier.name if p.supplier else None,
             'description': p.description,
             'category_id': p.category_id,
             'category': category_info,
@@ -1242,8 +1244,10 @@ def get_products_by_brand_detailed(brand_name):
                 'image_url': first_image.url if first_image else None,
                 'status': status_info,
                 'brand_id': p.brand_id,
-                'brand_info': brand_info,  # Используем brand_info вместо brand
-                'brand': brand_info,  # Для обратной совместимости
+                'brand_info': brand_info,
+                'brand': brand_info,
+                'supplier_id': p.supplier_id,
+                'supplier_name': p.supplier.name if p.supplier else None,
                 'category': category_info,
                 'availability_status': availability_status
             })
@@ -1465,7 +1469,9 @@ def get_products_by_brand_and_category(brand_name):
                 'is_visible': p.is_visible,
                 'country': p.country,
                 'brand_id': p.brand_id,
-                'brand_info': brand_info,  # Добавляем brand_info
+                'brand_info': brand_info,
+                'supplier_id': p.supplier_id,
+                'supplier_name': p.supplier.name if p.supplier else None,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None,
