@@ -236,6 +236,7 @@ def get_homepage_data():
                         'brand': brand_data,  # Для обратной совместимости
                         'quantity': pr.quantity,
                         'supplier_id': pr.supplier_id,
+                        'supplier_name': pr.supplier.name if pr.supplier else None,
                         'image_url': first_image.url if first_image else None
                     })
             elif block.type in ['small_banner', 'small_banners', 'info_cards']:
@@ -501,6 +502,7 @@ def get_category_with_children_and_products(slug):
             'brand': brand_data,  # Для обратной совместимости
             'quantity': p.quantity,
             'supplier_id': p.supplier_id,
+            'supplier_name': p.supplier.name if p.supplier else None,
             'image_url': first_image.url if first_image else None
         })
 

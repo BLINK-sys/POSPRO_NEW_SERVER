@@ -338,7 +338,8 @@ def serialize_product(product, availability_status=None, product_images=None):
         'country': product.country,
         'brand_id': product.brand_id,
         'brand_info': brand_info,
-        'supplier_id': product.supplier_id,  # Прямое обращение к полю supplier_id
+        'supplier_id': product.supplier_id,
+        'supplier_name': supplier_info.get('name') if supplier_info else None,
         'supplier': supplier_info,
         'description': product.description,
         'category_id': product.category_id,
@@ -1093,11 +1094,12 @@ def get_products_by_brand(brand_name):
                 'brand_info': brand_info,  # Добавляем brand_info
                 'brand': brand_info,
                 'supplier_id': p.supplier_id,
+                'supplier_name': p.supplier.name if p.supplier else None,
                 'description': p.description,
                 'category_id': p.category_id,
                 'image': first_image.url if first_image else None
             })
-        
+
         return jsonify({
             'brand': {
                 'id': brand_obj.id,
