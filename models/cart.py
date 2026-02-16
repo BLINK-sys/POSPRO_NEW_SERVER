@@ -20,7 +20,15 @@ class Cart(db.Model):
     user = db.relationship('User', backref='cart_items', lazy=True)
     product = db.relationship('Product', backref='in_carts', lazy=True)
 
-    def to_dict(self):
+    def to_dict(self, is_wholesale=False):
+        # Определяем эффективную цену: оптовая (если есть и пользователь оптовик), иначе розничная
+        effective_price = 0
+        if self.product:
+            if is_wholesale and self.product.wholesale_price and self.product.wholesale_price > 0:
+                effective_price = self.product.wholesale_price
+            elif self.product.price:
+                effective_price = self.product.price
+
         return {
             'id': self.id,
             'user_id': self.user_id,
@@ -33,11 +41,13 @@ class Cart(db.Model):
                 'name': self.product.name,
                 'slug': self.product.slug,
                 'price': self.product.price,
+                'wholesale_price': self.product.wholesale_price,
                 'article': self.product.article,
                 'image_url': self.product.get_main_image_url() if self.product else None,
                 'status': self.product.status_info.to_dict() if self.product and self.product.status_info else None,
                 'category': self.product.category.to_dict() if self.product and self.product.category else None,
                 'quantity_available': self.product.quantity
             } if self.product else None,
-            'total_price': float(self.product.price * self.quantity) if self.product and self.product.price else 0
+            'effective_price': float(effective_price),
+            'total_price': float(effective_price * self.quantity)
         }

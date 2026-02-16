@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from models import Cart, Product
+from models import Cart, Product, User
 from extensions import db
 
 cart_bp = Blueprint('cart', __name__)
@@ -22,13 +22,17 @@ def get_cart():
             }), 403
 
         cart_items = Cart.query.filter_by(user_id=user_id).all()
-        
+
+        # Проверяем оптовый статус пользователя
+        user = User.query.get(user_id)
+        is_wholesale = bool(user.is_wholesale) if user else False
+
         # Подсчитываем общую сумму
         total_amount = 0
         items_data = []
-        
+
         for item in cart_items:
-            item_data = item.to_dict()
+            item_data = item.to_dict(is_wholesale=is_wholesale)
             items_data.append(item_data)
             total_amount += item_data['total_price']
 
