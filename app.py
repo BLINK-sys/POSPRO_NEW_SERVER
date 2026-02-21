@@ -28,6 +28,7 @@ from routes.upload_admin import upload_admin_bp
 from routes.favorites import favorites_bp
 from routes.cart import cart_bp
 from routes.orders import orders_bp
+from routes.kp_settings import kp_settings_bp
 from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
@@ -78,6 +79,9 @@ def create_app():
     
     # 🔹 Заказы
     app.register_blueprint(orders_bp, url_prefix='/api')  # /api/orders
+
+    # 🔹 Настройки КП
+    app.register_blueprint(kp_settings_bp, url_prefix='/api')  # /api/kp-settings
     
     # 🔹 Статусы заказов
     app.register_blueprint(order_statuses_bp, url_prefix='/api/admin')  # /api/admin/order-statuses
