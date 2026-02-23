@@ -29,6 +29,7 @@ from routes.favorites import favorites_bp
 from routes.cart import cart_bp
 from routes.orders import orders_bp
 from routes.kp_settings import kp_settings_bp
+from routes.catalog_visibility import catalog_visibility_bp
 from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
