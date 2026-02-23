@@ -82,6 +82,9 @@ def create_app():
 
     # 🔹 Настройки КП
     app.register_blueprint(kp_settings_bp, url_prefix='/api')  # /api/kp-settings
+
+    # 🔹 Видимость каталогов (публичный + админский под /api)
+    app.register_blueprint(catalog_visibility_bp, url_prefix='/api')  # /api/catalog-visibility, /api/admin-catalog-visibility
     
     # 🔹 Статусы заказов
     app.register_blueprint(order_statuses_bp, url_prefix='/api/admin')  # /api/admin/order-statuses
