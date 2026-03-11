@@ -51,12 +51,6 @@ def create_order():
                     'message': f'Товар "{product.name}" недоступен для покупки'
                 }), 400
                 
-            if product.quantity < cart_item.quantity:
-                return jsonify({
-                    'success': False,
-                    'message': f'Недостаточно товара "{product.name}" на складе. Доступно: {product.quantity}'
-                }), 400
-
         # Подсчитываем общую сумму
         subtotal = sum(item.product.price * item.quantity for item in cart_items)
         total_amount = subtotal  # В будущем можно добавить доставку, скидки и т.д.

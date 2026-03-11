@@ -77,10 +77,10 @@ def add_to_cart():
                 'message': 'Не указан ID товара'
             }), 400
 
-        if quantity < 1:
+        if quantity < 0:
             return jsonify({
                 'success': False,
-                'message': 'Количество должно быть больше 0'
+                'message': 'Количество не может быть отрицательным'
             }), 400
 
         # Проверяем существование товара
@@ -98,27 +98,12 @@ def add_to_cart():
                 'message': 'Товар недоступен для покупки'
             }), 400
 
-        # Проверяем наличие товара на складе
-        if product.quantity < quantity:
-            return jsonify({
-                'success': False,
-                'message': f'Недостаточно товара на складе. Доступно: {product.quantity}'
-            }), 400
-
         # Проверяем, есть ли уже этот товар в корзине
         existing_item = Cart.query.filter_by(user_id=user_id, product_id=product_id).first()
-        
+
         if existing_item:
             # Обновляем количество
             new_quantity = existing_item.quantity + quantity
-            
-            # Проверяем общее количество
-            if product.quantity < new_quantity:
-                return jsonify({
-                    'success': False,
-                    'message': f'Недостаточно товара на складе. Доступно: {product.quantity}, в корзине: {existing_item.quantity}'
-                }), 400
-            
             existing_item.quantity = new_quantity
             db.session.commit()
             
@@ -170,10 +155,10 @@ def update_cart_item(item_id):
         data = request.get_json()
         quantity = data.get('quantity')
 
-        if quantity is None or quantity < 1:
+        if quantity is None or quantity < 0:
             return jsonify({
                 'success': False,
-                'message': 'Количество должно быть больше 0'
+                'message': 'Количество не может быть отрицательным'
             }), 400
 
         # Найти товар в корзине пользователя
@@ -183,13 +168,6 @@ def update_cart_item(item_id):
                 'success': False,
                 'message': 'Товар не найден в корзине'
             }), 404
-
-        # Проверяем доступность товара на складе
-        if cart_item.product.quantity < quantity:
-            return jsonify({
-                'success': False,
-                'message': f'Недостаточно товара на складе. Доступно: {cart_item.product.quantity}'
-            }), 400
 
         cart_item.quantity = quantity
         db.session.commit()
