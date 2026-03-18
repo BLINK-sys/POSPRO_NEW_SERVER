@@ -105,6 +105,51 @@ def save_kp_history():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@kp_history_bp.route('/kp-history/<int:history_id>', methods=['PUT'])
+@jwt_required()
+def update_kp_history(history_id):
+    """Обновить существующее КП в истории"""
+    try:
+        user_id = int(get_jwt_identity())
+        jwt_data = get_jwt()
+        role = jwt_data.get('role', 'client')
+
+        if role not in ('admin', 'system'):
+            return jsonify({'error': 'Доступ запрещён'}), 403
+
+        record = KPHistory.query.filter_by(
+            id=history_id, user_id=user_id, user_role=role
+        ).first()
+
+        if not record:
+            return jsonify({'error': 'КП не найдено'}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Нет данных'}), 400
+
+        if 'name' in data:
+            record.name = data['name'].strip() or record.name
+        if 'items' in data:
+            record.items = data['items']
+        if 'settings' in data:
+            record.settings = data['settings']
+        if 'total_amount' in data:
+            record.total_amount = data['total_amount']
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'id': record.id,
+            'message': 'КП обновлено'
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @kp_history_bp.route('/kp-history/<int:history_id>', methods=['DELETE'])
 @jwt_required()
 def delete_kp_history(history_id):
