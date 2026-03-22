@@ -449,7 +449,7 @@ def save_product_properties(product_id, product_details):
 
 def fetch_categories():
     try:
-        response = requests.post(f"{BASE_URL}/categories", json=AUTH_CREDENTIALS, timeout=30)
+        response = requests.post(f"{BASE_URL}/categories", json=AUTH_CREDENTIALS, timeout=180)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -460,7 +460,7 @@ def fetch_categories():
 def fetch_products_by_category(category_id):
     try:
         payload = {**AUTH_CREDENTIALS, "categoryId": category_id}
-        response = requests.post(f"{BASE_URL}/products", json=payload, timeout=30)
+        response = requests.post(f"{BASE_URL}/products", json=payload, timeout=180)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -471,7 +471,7 @@ def fetch_products_by_category(category_id):
 def fetch_product_details(product_code):
     try:
         payload = {**AUTH_CREDENTIALS, "code": product_code}
-        response = requests.post(f"{BASE_URL}/product", json=payload, timeout=30)
+        response = requests.post(f"{BASE_URL}/product", json=payload, timeout=180)
         response.raise_for_status()
         return response.json()
     except Exception as e:

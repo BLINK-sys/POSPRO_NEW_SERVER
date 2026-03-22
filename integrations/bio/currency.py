@@ -29,7 +29,7 @@ def fetch_rub_rate():
         "Referer": "https://halykbank.kz/exchange-rates"
     }
 
-    response = requests.get(url, headers=headers, timeout=15)
+    response = requests.get(url, headers=headers, timeout=60)
     response.raise_for_status()
 
     data = response.json()
@@ -86,7 +86,7 @@ def fetch_bio_rates():
         f"{BIO_BASE_URL}/auth",
         headers=headers,
         json=BIO_AUTH_CREDENTIALS,
-        timeout=10
+        timeout=60
     )
     response.raise_for_status()
 
