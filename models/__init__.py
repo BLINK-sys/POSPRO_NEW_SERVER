@@ -16,3 +16,4 @@ from .systemuser import SystemUser
 from .kp_settings import KPSettings
 from .site_visitor import SiteVisitor
 from .site_request import SiteRequest
+from .product_view import ProductView

@@ -6,6 +6,7 @@ from models.user import User
 from models.systemuser import SystemUser
 from models.site_visitor import SiteVisitor
 from models.site_request import SiteRequest
+from models.product_view import ProductView
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -202,6 +203,14 @@ def dashboard_stats():
         SiteRequest.created_at <= date_to
     ).count()
 
+    # Просмотры товаров за период
+    product_views_count = db.session.query(
+        db.func.count(ProductView.id)
+    ).filter(
+        ProductView.viewed_at >= date_from,
+        ProductView.viewed_at <= date_to
+    ).scalar() or 0
+
     # Последние заявки (5 штук, без фильтра по дате)
     recent_requests = SiteRequest.query.order_by(
         SiteRequest.created_at.desc()
@@ -236,6 +245,7 @@ def dashboard_stats():
                 'orders': orders_count,
                 'price_inquiries': price_inquiries_count
             },
+            'product_views': product_views_count,
             'recent_requests': recent_list
         }
     })
@@ -273,3 +283,99 @@ def visitor_details():
     } for v in visitors]
 
     return jsonify({'success': True, 'data': rows})
+
+
+# === Публичный эндпоинт: трекинг просмотров товаров ===
+
+@dashboard_bp.route('/track-product-view', methods=['POST'])
+def track_product_view():
+    """Записывает просмотр товара (кроме системных пользователей)."""
+    data = request.get_json(silent=True) or {}
+
+    product_id = data.get('product_id')
+    if not product_id:
+        return jsonify({'error': 'product_id required'}), 400
+
+    # Фильтруем ботов по user_agent
+    user_agent = data.get('user_agent', '')
+    ua_lower = user_agent.lower()
+    bot_keywords = [
+        'bot', 'crawl', 'spider', 'slurp', 'scraper', 'fetch',
+        'curl', 'wget', 'python-requests', 'googlebot', 'bingbot',
+        'yandexbot', 'semrushbot', 'ahrefsbot', 'headlesschrome',
+        'phantomjs', 'selenium', 'puppeteer', 'lighthouse',
+    ]
+    if not user_agent or any(kw in ua_lower for kw in bot_keywords):
+        return jsonify({'success': True, 'filtered': 'bot'}), 200
+
+    ip = data.get('ip', request.remote_addr or 'unknown')
+
+    view = ProductView(
+        product_id=product_id,
+        product_name=data.get('product_name'),
+        product_slug=data.get('product_slug'),
+        ip_address=ip,
+        user_agent=user_agent,
+        viewed_at=datetime.datetime.now()
+    )
+    db.session.add(view)
+    db.session.commit()
+
+    return jsonify({'success': True}), 200
+
+
+# === Админский эндпоинт: топ просматриваемых товаров ===
+
+@dashboard_bp.route('/top-products', methods=['GET'])
+@jwt_required()
+def top_products():
+    """Возвращает топ просматриваемых товаров за период."""
+    jwt_data = get_jwt()
+    role = jwt_data.get('role', 'client')
+
+    if role not in ('admin', 'system'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+
+    date_from, date_to = parse_date_range(request.args)
+    limit = int(request.args.get('limit', 20))
+
+    # Группируем по product_id, считаем просмотры
+    results = db.session.query(
+        ProductView.product_id,
+        ProductView.product_name,
+        ProductView.product_slug,
+        db.func.count(ProductView.id).label('views'),
+        db.func.count(db.distinct(ProductView.ip_address)).label('unique_views')
+    ).filter(
+        ProductView.viewed_at >= date_from,
+        ProductView.viewed_at <= date_to
+    ).group_by(
+        ProductView.product_id,
+        ProductView.product_name,
+        ProductView.product_slug
+    ).order_by(
+        db.desc('views')
+    ).limit(limit).all()
+
+    rows = [{
+        'product_id': r.product_id,
+        'product_name': r.product_name,
+        'product_slug': r.product_slug,
+        'views': r.views,
+        'unique_views': r.unique_views
+    } for r in results]
+
+    total_views = db.session.query(
+        db.func.count(ProductView.id)
+    ).filter(
+        ProductView.viewed_at >= date_from,
+        ProductView.viewed_at <= date_to
+    ).scalar() or 0
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'total_views': total_views,
+            'products': rows
+        }
+    })
