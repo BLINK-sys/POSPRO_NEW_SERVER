@@ -43,6 +43,9 @@ def parse_date_range(args):
             year -= 1
         date_from = today_start.replace(year=year, month=month, day=1)
         date_to = now
+    elif period == 'all':
+        date_from = datetime.datetime(2020, 1, 1)
+        date_to = now
     else:  # today
         date_from = today_start
         date_to = now
