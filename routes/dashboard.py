@@ -237,3 +237,37 @@ def dashboard_stats():
             'recent_requests': recent_list
         }
     })
+
+
+@dashboard_bp.route('/visitor-details', methods=['GET'])
+@jwt_required()
+def visitor_details():
+    """Возвращает список посетителей по типу устройства."""
+    jwt_data = get_jwt()
+    role = jwt_data.get('role', 'client')
+
+    if role not in ('admin', 'system'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+
+    device_type = request.args.get('device_type', 'web')
+    show_all = request.args.get('all', 'false') == 'true'
+
+    if show_all:
+        visitors = SiteVisitor.query.filter(
+            SiteVisitor.device_type == device_type
+        ).order_by(SiteVisitor.visited_at.desc()).limit(500).all()
+    else:
+        date_from, date_to = parse_date_range(request.args)
+        visitors = SiteVisitor.query.filter(
+            SiteVisitor.device_type == device_type,
+            SiteVisitor.visited_at >= date_from,
+            SiteVisitor.visited_at <= date_to
+        ).order_by(SiteVisitor.visited_at.desc()).limit(500).all()
+
+    rows = [{
+        'ip': v.ip_address,
+        'user_agent': v.user_agent[:150] if v.user_agent else None,
+        'visited_at': v.visited_at.isoformat() if v.visited_at else None
+    } for v in visitors]
+
+    return jsonify({'success': True, 'data': rows})
