@@ -215,10 +215,17 @@ def dashboard_stats():
         ProductView.viewed_at <= date_to
     ).scalar() or 0
 
-    # Последние заявки (5 штук, без фильтра по дате)
-    recent_requests = SiteRequest.query.order_by(
+    # Последние заявки за период (с опциональным фильтром по типу)
+    request_type_filter = request.args.get('request_type')
+    recent_query = SiteRequest.query.filter(
+        SiteRequest.created_at >= date_from,
+        SiteRequest.created_at <= date_to
+    )
+    if request_type_filter in ('order', 'price_inquiry'):
+        recent_query = recent_query.filter(SiteRequest.request_type == request_type_filter)
+    recent_requests = recent_query.order_by(
         SiteRequest.created_at.desc()
-    ).limit(5).all()
+    ).limit(50).all()
 
     recent_list = [{
         'id': r.id,
