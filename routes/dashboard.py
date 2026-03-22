@@ -7,6 +7,7 @@ from models.systemuser import SystemUser
 from models.site_visitor import SiteVisitor
 from models.site_request import SiteRequest
 from models.product_view import ProductView
+from models.media import ProductMedia
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -357,10 +358,23 @@ def top_products():
         db.desc('views')
     ).limit(limit).all()
 
+    # Подтягиваем первое изображение для каждого товара
+    product_ids = [r.product_id for r in results]
+    images = {}
+    if product_ids:
+        media_rows = ProductMedia.query.filter(
+            ProductMedia.product_id.in_(product_ids),
+            ProductMedia.media_type == 'image'
+        ).order_by(ProductMedia.order).all()
+        for m in media_rows:
+            if m.product_id not in images:
+                images[m.product_id] = m.url
+
     rows = [{
         'product_id': r.product_id,
         'product_name': r.product_name,
         'product_slug': r.product_slug,
+        'image_url': images.get(r.product_id),
         'views': r.views,
         'unique_views': r.unique_views
     } for r in results]
