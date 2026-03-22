@@ -78,12 +78,14 @@ def track_visit():
         'lighthouse', 'pagespeed', 'pingdom', 'uptimerobot',
         'monitoring', 'checker', 'scanner', 'probe',
     ]
-    if not user_agent or any(kw in ua_lower for kw in bot_keywords):
-        return jsonify({'success': True, 'filtered': 'bot'}), 200
+    is_bot = not user_agent or any(kw in ua_lower for kw in bot_keywords)
 
-    # Определяем тип устройства по User-Agent
-    mobile_keywords = ['Mobile', 'Android', 'iPhone', 'iPad', 'iPod', 'Opera Mini', 'IEMobile']
-    device_type = 'mobile' if any(kw in user_agent for kw in mobile_keywords) else 'web'
+    if is_bot:
+        device_type = 'bot'
+    else:
+        # Определяем тип устройства по User-Agent
+        mobile_keywords = ['Mobile', 'Android', 'iPhone', 'iPad', 'iPod', 'Opera Mini', 'IEMobile']
+        device_type = 'mobile' if any(kw in user_agent for kw in mobile_keywords) else 'web'
 
     # Проверяем: есть ли уже запись за сегодня с этим IP + device_type
     today_start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -172,6 +174,20 @@ def dashboard_stats():
         SiteVisitor.visited_at <= date_to
     ).scalar() or 0
 
+    bot_count = db.session.query(
+        db.func.count(db.distinct(SiteVisitor.ip_address))
+    ).filter(
+        SiteVisitor.device_type == 'bot',
+        SiteVisitor.visited_at >= date_from,
+        SiteVisitor.visited_at <= date_to
+    ).scalar() or 0
+
+    bot_total = db.session.query(
+        db.func.count(SiteVisitor.id)
+    ).filter(
+        SiteVisitor.device_type == 'bot'
+    ).scalar() or 0
+
     # Заявки за период
     orders_count = SiteRequest.query.filter(
         SiteRequest.request_type == 'order',
@@ -210,7 +226,9 @@ def dashboard_stats():
             },
             'visitors': {
                 'web': web_visitors,
-                'mobile': mobile_visitors
+                'mobile': mobile_visitors,
+                'bots': bot_count,
+                'bots_total': bot_total
             },
             'requests': {
                 'orders': orders_count,
