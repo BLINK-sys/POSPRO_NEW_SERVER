@@ -128,6 +128,7 @@ def track_request():
         product_name=data.get('product_name'),
         product_slug=data.get('product_slug'),
         total_amount=data.get('total_amount'),
+        assigned_to=data.get('assigned_to'),
         created_at=datetime.datetime.now()
     )
     db.session.add(site_request)
@@ -213,6 +214,7 @@ def dashboard_stats():
         'customer_phone': r.customer_phone,
         'product_name': r.product_name,
         'total_amount': r.total_amount,
+        'assigned_to': r.assigned_to,
         'created_at': r.created_at.isoformat() if r.created_at else None
     } for r in recent_requests]
 

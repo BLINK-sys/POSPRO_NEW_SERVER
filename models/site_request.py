@@ -13,6 +13,7 @@ class SiteRequest(db.Model):
     product_name = db.Column(db.String(255))
     product_slug = db.Column(db.String(255))
     total_amount = db.Column(db.Float, nullable=True)
+    assigned_to = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, default=datetime.datetime.now, nullable=False)
 
     __table_args__ = (
