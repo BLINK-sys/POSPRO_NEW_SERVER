@@ -428,3 +428,23 @@ def clear_product_views():
     db.session.commit()
 
     return jsonify({'success': True, 'deleted': count})
+
+
+@dashboard_bp.route('/delete-request/<int:request_id>', methods=['DELETE'])
+@jwt_required()
+def delete_request(request_id):
+    """Удаляет заявку по ID."""
+    jwt_data = get_jwt()
+    role = jwt_data.get('role', 'client')
+
+    if role not in ('admin', 'system'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+
+    site_request = SiteRequest.query.get(request_id)
+    if not site_request:
+        return jsonify({'error': 'Заявка не найдена'}), 404
+
+    db.session.delete(site_request)
+    db.session.commit()
+
+    return jsonify({'success': True})
