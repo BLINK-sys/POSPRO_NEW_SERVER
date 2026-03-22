@@ -309,7 +309,21 @@ def track_product_view():
     if not user_agent or any(kw in ua_lower for kw in bot_keywords):
         return jsonify({'success': True, 'filtered': 'bot'}), 200
 
-    ip = data.get('ip', request.remote_addr or 'unknown')
+    # IP из заголовков (запрос приходит с клиента напрямую)
+    ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+    if not ip:
+        ip = request.headers.get('X-Real-Ip', request.remote_addr or 'unknown')
+
+    # Дедупликация: один product_id + IP за 5 минут = 1 просмотр
+    five_min_ago = datetime.datetime.now() - datetime.timedelta(minutes=5)
+    existing = ProductView.query.filter(
+        ProductView.product_id == product_id,
+        ProductView.ip_address == ip,
+        ProductView.viewed_at >= five_min_ago
+    ).first()
+
+    if existing:
+        return jsonify({'success': True, 'deduplicated': True}), 200
 
     view = ProductView(
         product_id=product_id,
