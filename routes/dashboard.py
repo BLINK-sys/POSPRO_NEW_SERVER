@@ -64,6 +64,23 @@ def track_visit():
 
     user_agent = data.get('user_agent', '') or request.headers.get('User-Agent', '')
 
+    # Фильтруем ботов
+    ua_lower = user_agent.lower()
+    bot_keywords = [
+        'bot', 'crawl', 'spider', 'slurp', 'scraper', 'fetch',
+        'curl', 'wget', 'python-requests', 'httpx', 'aiohttp',
+        'googlebot', 'bingbot', 'yandexbot', 'baiduspider',
+        'duckduckbot', 'facebookexternalhit', 'twitterbot',
+        'linkedinbot', 'whatsapp', 'telegrambot', 'discordbot',
+        'semrushbot', 'ahrefsbot', 'dotbot', 'mj12bot',
+        'petalbot', 'bytespider', 'gptbot', 'claudebot',
+        'headlesschrome', 'phantomjs', 'selenium', 'puppeteer',
+        'lighthouse', 'pagespeed', 'pingdom', 'uptimerobot',
+        'monitoring', 'checker', 'scanner', 'probe',
+    ]
+    if not user_agent or any(kw in ua_lower for kw in bot_keywords):
+        return jsonify({'success': True, 'filtered': 'bot'}), 200
+
     # Определяем тип устройства по User-Agent
     mobile_keywords = ['Mobile', 'Android', 'iPhone', 'iPad', 'iPod', 'Opera Mini', 'IEMobile']
     device_type = 'mobile' if any(kw in user_agent for kw in mobile_keywords) else 'web'
