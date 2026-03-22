@@ -14,3 +14,5 @@ from .order_status import OrderStatus
 from .order_manager import OrderManager
 from .systemuser import SystemUser
 from .kp_settings import KPSettings
+from .site_visitor import SiteVisitor
+from .site_request import SiteRequest
