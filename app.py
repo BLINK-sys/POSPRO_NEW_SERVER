@@ -126,7 +126,17 @@ def create_app():
 
     with app.app_context():
         db.create_all()
-        
+
+        # Безопасное добавление новых столбцов в существующие таблицы
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE site_requests ADD COLUMN IF NOT EXISTS assigned_to VARCHAR(255)"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция site_requests: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 
