@@ -453,8 +453,41 @@ def clear_product_views():
     if role not in ('admin', 'system'):
         return jsonify({'error': 'Доступ запрещён'}), 403
 
-    count = ProductView.query.count()
-    ProductView.query.delete()
+    view_type = request.args.get('view_type', 'all')  # 'detail', 'quick', or 'all'
+
+    query = ProductView.query
+    if view_type == 'detail':
+        query = query.filter(db.or_(ProductView.view_type == 'detail', ProductView.view_type.is_(None)))
+    elif view_type == 'quick':
+        query = query.filter(ProductView.view_type == 'quick')
+
+    count = query.count()
+    query.delete(synchronize_session=False)
+    db.session.commit()
+
+    return jsonify({'success': True, 'deleted': count})
+
+
+@dashboard_bp.route('/delete-product-views/<int:product_id>', methods=['DELETE'])
+@jwt_required()
+def delete_product_views(product_id):
+    """Удаляет просмотры конкретного товара."""
+    jwt_data = get_jwt()
+    role = jwt_data.get('role', 'client')
+
+    if role not in ('admin', 'system'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+
+    view_type = request.args.get('view_type', 'all')
+
+    query = ProductView.query.filter(ProductView.product_id == product_id)
+    if view_type == 'detail':
+        query = query.filter(db.or_(ProductView.view_type == 'detail', ProductView.view_type.is_(None)))
+    elif view_type == 'quick':
+        query = query.filter(ProductView.view_type == 'quick')
+
+    count = query.count()
+    query.delete(synchronize_session=False)
     db.session.commit()
 
     return jsonify({'success': True, 'deleted': count})
