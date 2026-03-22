@@ -31,6 +31,7 @@ from routes.orders import orders_bp
 from routes.kp_settings import kp_settings_bp
 from routes.kp_history import kp_history_bp
 from routes.catalog_visibility import catalog_visibility_bp
+from routes.integrations import integrations_bp
 from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
@@ -110,6 +111,9 @@ def create_app():
     app.register_blueprint(small_banner_bp, url_prefix='/api/admin')
 
     app.register_blueprint(public_homepage_bp, url_prefix='/api')
+
+    # 🔹 Импорт товаров (интеграции)
+    app.register_blueprint(integrations_bp, url_prefix='/api')  # /api/integrations/*
 
     # Настройки загрузки файлов берутся из Config
     app.config['UPLOAD_FOLDER'] = Config.UPLOAD_FOLDER
