@@ -404,6 +404,24 @@ def top_products():
         'success': True,
         'data': {
             'total_views': total_views,
+            'limit': limit,
             'products': rows
         }
     })
+
+
+@dashboard_bp.route('/clear-product-views', methods=['DELETE'])
+@jwt_required()
+def clear_product_views():
+    """Очищает таблицу просмотров товаров."""
+    jwt_data = get_jwt()
+    role = jwt_data.get('role', 'client')
+
+    if role not in ('admin', 'system'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+
+    count = ProductView.query.count()
+    ProductView.query.delete()
+    db.session.commit()
+
+    return jsonify({'success': True, 'deleted': count})
