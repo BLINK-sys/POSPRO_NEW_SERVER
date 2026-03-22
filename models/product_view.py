@@ -11,6 +11,7 @@ class ProductView(db.Model):
     product_slug = db.Column(db.String(500))
     ip_address = db.Column(db.String(45))
     user_agent = db.Column(db.Text)
+    view_type = db.Column(db.String(20), default='detail')  # 'detail' or 'quick'
     viewed_at = db.Column(db.DateTime, default=datetime.datetime.now, nullable=False)
 
     __table_args__ = (

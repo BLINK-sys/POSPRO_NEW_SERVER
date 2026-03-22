@@ -137,6 +137,15 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция site_requests: {e}")
 
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE product_views ADD COLUMN IF NOT EXISTS view_type VARCHAR(20) DEFAULT 'detail'"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция product_views: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 

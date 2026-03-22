@@ -207,12 +207,22 @@ def dashboard_stats():
         SiteRequest.created_at <= date_to
     ).count()
 
-    # Просмотры товаров за период
+    # Просмотры товаров за период (детальные)
     product_views_count = db.session.query(
         db.func.count(ProductView.id)
     ).filter(
         ProductView.viewed_at >= date_from,
-        ProductView.viewed_at <= date_to
+        ProductView.viewed_at <= date_to,
+        db.or_(ProductView.view_type == 'detail', ProductView.view_type.is_(None))
+    ).scalar() or 0
+
+    # Быстрые просмотры за период
+    quick_views_count = db.session.query(
+        db.func.count(ProductView.id)
+    ).filter(
+        ProductView.viewed_at >= date_from,
+        ProductView.viewed_at <= date_to,
+        ProductView.view_type == 'quick'
     ).scalar() or 0
 
     # Последние заявки за период (с опциональным фильтром по типу)
@@ -257,6 +267,7 @@ def dashboard_stats():
                 'price_inquiries': price_inquiries_count
             },
             'product_views': product_views_count,
+            'quick_views': quick_views_count,
             'recent_requests': recent_list
         }
     })
@@ -324,11 +335,14 @@ def track_product_view():
     if not ip:
         ip = request.headers.get('X-Real-Ip', request.remote_addr or 'unknown')
 
-    # Дедупликация: один product_id + IP за 5 минут = 1 просмотр
+    view_type = data.get('view_type', 'detail')  # 'detail' or 'quick'
+
+    # Дедупликация: один product_id + IP + view_type за 5 минут = 1 просмотр
     five_min_ago = datetime.datetime.now() - datetime.timedelta(minutes=5)
     existing = ProductView.query.filter(
         ProductView.product_id == product_id,
         ProductView.ip_address == ip,
+        ProductView.view_type == view_type,
         ProductView.viewed_at >= five_min_ago
     ).first()
 
@@ -341,6 +355,7 @@ def track_product_view():
         product_slug=data.get('product_slug'),
         ip_address=ip,
         user_agent=user_agent,
+        view_type=view_type,
         viewed_at=datetime.datetime.now()
     )
     db.session.add(view)
@@ -363,9 +378,10 @@ def top_products():
 
     date_from, date_to = parse_date_range(request.args)
     limit = int(request.args.get('limit', 20))
+    view_type = request.args.get('view_type', 'detail')  # 'detail', 'quick', or 'all'
 
     # Группируем по product_id, считаем просмотры
-    results = db.session.query(
+    query = db.session.query(
         ProductView.product_id,
         ProductView.product_name,
         ProductView.product_slug,
@@ -374,7 +390,14 @@ def top_products():
     ).filter(
         ProductView.viewed_at >= date_from,
         ProductView.viewed_at <= date_to
-    ).group_by(
+    )
+
+    if view_type == 'detail':
+        query = query.filter(db.or_(ProductView.view_type == 'detail', ProductView.view_type.is_(None)))
+    elif view_type == 'quick':
+        query = query.filter(ProductView.view_type == 'quick')
+
+    results = query.group_by(
         ProductView.product_id,
         ProductView.product_name,
         ProductView.product_slug
