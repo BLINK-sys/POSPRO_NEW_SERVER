@@ -423,7 +423,7 @@ def validate_warehouse_formula(warehouse_id):
 @warehouses_bp.route('/<int:warehouse_id>/calculate-preview', methods=['POST'])
 @jwt_required()
 def calculate_preview(warehouse_id):
-    """Preview price calculation for a specific product."""
+    """Preview price calculation. product_id is optional (for characteristics)."""
     warehouse = Warehouse.query.get(warehouse_id)
     if not warehouse:
         return jsonify({'success': False, 'message': 'Склад не найден'}), 404
@@ -431,19 +431,20 @@ def calculate_preview(warehouse_id):
     data = request.get_json()
     product_id = data.get('product_id')
     cost_price = data.get('cost_price')
+    # Optional manual characteristics for preview without product
+    manual_weight = data.get('weight', 0)
+    manual_dimensions = data.get('dimensions', 0)
 
-    if not product_id:
-        return jsonify({'success': False, 'message': 'product_id обязателен'}), 400
-
-    # Get cost price from request or from DB
     if cost_price is None:
-        pwc = ProductWarehouseCost.query.filter_by(
-            product_id=product_id,
-            warehouse_id=warehouse_id
-        ).first()
-        if not pwc:
+        if product_id:
+            pwc = ProductWarehouseCost.query.filter_by(
+                product_id=product_id,
+                warehouse_id=warehouse_id
+            ).first()
+            if pwc:
+                cost_price = pwc.cost_price
+        if cost_price is None:
             return jsonify({'success': False, 'message': 'Себестоимость не указана'}), 400
-        cost_price = pwc.cost_price
 
     # Get formula
     if not warehouse.formula:
@@ -452,8 +453,17 @@ def calculate_preview(warehouse_id):
     # Get currency rate
     currency_rate = warehouse.currency.rate_to_tenge if warehouse.currency else 1.0
 
-    # Get product characteristics
-    product_chars = extract_product_characteristics(product_id)
+    # Get product characteristics or use manual values
+    if product_id:
+        product_chars = extract_product_characteristics(product_id)
+    else:
+        product_chars = {}
+        if manual_weight:
+            product_chars['вес'] = float(manual_weight)
+        if manual_dimensions:
+            product_chars['размер_в_упаковке_длина'] = 1.0
+            product_chars['размер_в_упаковке_ширина'] = 1.0
+            product_chars['размер_в_упаковке_высота'] = float(manual_dimensions)
 
     # Get variables
     variables = WarehouseVariable.query.filter_by(warehouse_id=warehouse_id) \
@@ -469,11 +479,31 @@ def calculate_preview(warehouse_id):
             final_formula=warehouse.formula.formula
         )
 
+        # Build step-by-step breakdown
+        steps = []
+        steps.append({'name': 'себестоимость', 'value': round(float(cost_price), 2)})
+        steps.append({'name': 'курс_валюты', 'value': round(currency_rate, 4)})
+
+        for v in var_list:
+            val = all_vars.get(v['name'], 0)
+            steps.append({
+                'name': v['name'],
+                'formula': v['formula'],
+                'value': round(val, 4)
+            })
+
+        steps.append({
+            'name': 'Итоговая цена',
+            'formula': warehouse.formula.formula,
+            'value': round(price, 2)
+        })
+
         return jsonify({
             'success': True,
             'data': {
                 'calculated_price': round(price, 2),
                 'variables': {k: round(v, 4) for k, v in all_vars.items()},
+                'steps': steps,
                 'formula': warehouse.formula.formula
             }
         }), 200
