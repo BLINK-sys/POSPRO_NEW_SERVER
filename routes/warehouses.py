@@ -249,13 +249,19 @@ def save_single_variable(warehouse_id):
     if not formula:
         return jsonify({'success': False, 'message': 'Формула обязательна'}), 400
 
-    # Build known vars: builtins + all other variables with sort_order < this one
+    # Build known vars: builtins + vars_above (sent from client — reflects current UI order)
     known_vars = set(BUILTIN_VARIABLE_NAMES)
-    other_vars = WarehouseVariable.query.filter_by(warehouse_id=warehouse_id) \
-        .order_by(WarehouseVariable.sort_order).all()
-    for v in other_vars:
-        if v.sort_order < sort_order and (not var_id or v.id != var_id):
-            known_vars.add(v.name)
+    vars_above = data.get('vars_above', [])
+    if vars_above:
+        for vname in vars_above:
+            known_vars.add(vname)
+    else:
+        # Fallback: use DB order
+        other_vars = WarehouseVariable.query.filter_by(warehouse_id=warehouse_id) \
+            .order_by(WarehouseVariable.sort_order).all()
+        for v in other_vars:
+            if v.sort_order < sort_order and (not var_id or v.id != var_id):
+                known_vars.add(v.name)
 
     # Validate formula
     error = validate_formula(formula, known_vars)
