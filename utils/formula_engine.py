@@ -27,6 +27,8 @@ BUILTIN_VARIABLE_NAMES = {
     'ширина',
     'высота',
     'вес',
+    # Габариты: произведение ДxШxВ с fallback (упаковка → без упаковки), 0 если оба пусты
+    'габариты',
 }
 
 # Mapping from formula variable names to characteristic search patterns
@@ -35,6 +37,12 @@ CHARACTERISTIC_MAPPING = {
     'ширина': ['ширина'],
     'высота': ['высота'],
     'вес': ['вес', 'масса'],
+}
+
+# Characteristics that contain combined dimensions like "340х465х425"
+DIMENSION_CHARACTERISTICS = {
+    'размер_в_упаковке': ['размер в упаковке'],
+    'размер_без_упаковки': ['размер без упаковки'],
 }
 
 
@@ -257,6 +265,23 @@ def calculate_product_price(
     for key in CHARACTERISTIC_MAPPING:
         variables[key] = product_characteristics.get(key, 0.0)
 
+    # Габариты: ДxШxВ (произведение) с fallback упаковка → без упаковки → 0
+    pack_dims = [
+        product_characteristics.get(f'размер_в_упаковке_{s}', 0.0)
+        for s in ['длина', 'ширина', 'высота']
+    ]
+    nopack_dims = [
+        product_characteristics.get(f'размер_без_упаковки_{s}', 0.0)
+        for s in ['длина', 'ширина', 'высота']
+    ]
+
+    if all(d > 0 for d in pack_dims):
+        variables['габариты'] = pack_dims[0] * pack_dims[1] * pack_dims[2]
+    elif all(d > 0 for d in nopack_dims):
+        variables['габариты'] = nopack_dims[0] * nopack_dims[1] * nopack_dims[2]
+    else:
+        variables['габариты'] = 0.0
+
     # Step 2: Evaluate warehouse variables in order
     for var in warehouse_variables:
         var_name = var['name']
@@ -281,7 +306,9 @@ def calculate_product_price(
 def extract_product_characteristics(product_id: int) -> Dict[str, float]:
     """
     Extract dimension/weight characteristics from a product.
-    Returns dict like {'длина': 40.0, 'ширина': 30.0, 'высота': 25.0, 'вес': 8.0}
+    Returns dict like:
+      {'длина': 40.0, 'ширина': 30.0, 'высота': 25.0, 'вес': 8.0,
+       'размер_в_упаковке_длина': 355, 'размер_в_упаковке_ширина': 465, ...}
     """
     from models.characteristic import ProductCharacteristic
     from models.characteristics_list import CharacteristicsList
@@ -317,17 +344,62 @@ def extract_product_characteristics(product_id: int) -> Dict[str, float]:
 
         char_name = char_info.characteristic_key.lower().strip()
 
-        # Match against known characteristic patterns
+        # Match single-value characteristics (длина, ширина, высота, вес)
         for var_name, patterns in CHARACTERISTIC_MAPPING.items():
             for pattern in patterns:
                 if pattern in char_name:
-                    # Extract numeric value from string like "150 мм" or "8.5 кг"
                     numeric_value = _extract_number(c.value)
                     if numeric_value is not None:
                         result[var_name] = numeric_value
                     break
 
+        # Match combined dimension characteristics (340х465х425)
+        for var_prefix, patterns in DIMENSION_CHARACTERISTICS.items():
+            for pattern in patterns:
+                if pattern in char_name:
+                    dims = _parse_dimensions(c.value)
+                    if dims:
+                        result[f'{var_prefix}_длина'] = dims[0]
+                        result[f'{var_prefix}_ширина'] = dims[1]
+                        result[f'{var_prefix}_высота'] = dims[2]
+                    break
+
     return result
+
+
+def _parse_dimensions(value_str: str) -> Optional[Tuple[float, float, float]]:
+    """
+    Parse combined dimensions like '340х465х425' or '340x465x425' or '340*465*425'.
+    Returns (длина, ширина, высота) tuple or None.
+    """
+    if not value_str:
+        return None
+
+    # Replace comma decimal separators
+    cleaned = value_str.replace(',', '.')
+
+    # Split by various separators: х, x, X, Х, *, ×
+    parts = re.split(r'[хХxX×*]', cleaned)
+
+    if len(parts) < 3:
+        return None
+
+    try:
+        nums = []
+        for part in parts[:3]:
+            # Extract number from each part
+            match = re.search(r'[\d]+\.?[\d]*', part.strip())
+            if match:
+                nums.append(float(match.group()))
+            else:
+                return None
+
+        if len(nums) == 3:
+            return (nums[0], nums[1], nums[2])
+    except (ValueError, IndexError):
+        return None
+
+    return None
 
 
 def _extract_number(value_str: str) -> Optional[float]:
