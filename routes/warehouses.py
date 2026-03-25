@@ -458,12 +458,20 @@ def calculate_preview(warehouse_id):
         product_chars = extract_product_characteristics(product_id)
     else:
         product_chars = {}
-        if manual_weight:
-            product_chars['вес'] = float(manual_weight)
-        if manual_dimensions:
-            product_chars['размер_в_упаковке_длина'] = 1.0
-            product_chars['размер_в_упаковке_ширина'] = 1.0
-            product_chars['размер_в_упаковке_высота'] = float(manual_dimensions)
+
+    # Override with manual values if provided
+    if manual_weight:
+        product_chars['вес'] = float(manual_weight)
+    if manual_dimensions:
+        # manual_dimensions is the volume product (Д*Ш*В) in mm
+        # Parse as "ДxШxВ" string or plain number
+        dims_str = str(manual_dimensions)
+        from utils.formula_engine import _parse_dimensions
+        parsed = _parse_dimensions(dims_str)
+        if parsed:
+            product_chars['размер_в_упаковке_длина'] = parsed[0]
+            product_chars['размер_в_упаковке_ширина'] = parsed[1]
+            product_chars['размер_в_упаковке_высота'] = parsed[2]
 
     # Get variables
     variables = WarehouseVariable.query.filter_by(warehouse_id=warehouse_id) \
