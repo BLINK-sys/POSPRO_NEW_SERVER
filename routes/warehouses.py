@@ -459,6 +459,9 @@ def recalculate_warehouse(warehouse_id):
 
     db.session.commit()
 
+    # Update product.price and product.supplier_id with min price across all warehouses
+    _update_product_prices_from_warehouse(warehouse_id)
+
     return jsonify({
         'success': True,
         'message': f'Пересчитано: {success_count}, ошибок: {error_count}',
@@ -468,3 +471,44 @@ def recalculate_warehouse(warehouse_id):
             'errors': errors[:20]  # Limit error list
         }
     }), 200
+
+
+def _update_product_prices_from_warehouse(warehouse_id: int):
+    """
+    For each product on this warehouse, find the min calculated_price
+    across ALL warehouses and update product.price + product.supplier_id.
+    """
+    from models.product import Product
+
+    costs = ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).all()
+    product_ids = set(c.product_id for c in costs)
+
+    for product_id in product_ids:
+        _apply_min_price_to_product(product_id)
+
+
+def _apply_min_price_to_product(product_id: int):
+    """
+    Find the minimum calculated_price for a product across all warehouses
+    and write it to product.price + product.supplier_id.
+    """
+    from models.product import Product
+
+    all_costs = ProductWarehouseCost.query.filter_by(product_id=product_id).all()
+
+    # Find min price among costs with calculated_price > 0
+    best_cost = None
+    for c in all_costs:
+        if c.calculated_price and c.calculated_price > 0:
+            if best_cost is None or c.calculated_price < best_cost.calculated_price:
+                best_cost = c
+
+    if best_cost:
+        product = Product.query.get(product_id)
+        if product:
+            product.price = best_cost.calculated_price
+            # Set supplier from the warehouse with min price
+            warehouse = Warehouse.query.get(best_cost.warehouse_id)
+            if warehouse:
+                product.supplier_id = warehouse.supplier_id
+            db.session.commit()

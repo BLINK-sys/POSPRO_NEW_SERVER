@@ -94,6 +94,9 @@ def create_product_cost():
     db.session.add(pwc)
     db.session.commit()
 
+    # Update product.price with min price
+    _apply_min_price(pwc.product_id)
+
     return jsonify({
         'success': True,
         'message': 'Себестоимость добавлена',
@@ -120,6 +123,9 @@ def update_product_cost(cost_id):
 
     db.session.commit()
 
+    # Update product.price with min price
+    _apply_min_price(pwc.product_id)
+
     return jsonify({
         'success': True,
         'message': 'Себестоимость обновлена',
@@ -137,8 +143,12 @@ def delete_product_cost(cost_id):
     if not pwc:
         return jsonify({'success': False, 'message': 'Не найдено'}), 404
 
+    product_id = pwc.product_id
     db.session.delete(pwc)
     db.session.commit()
+
+    # Update product.price with min price (or keep manual if no costs left)
+    _apply_min_price(product_id)
 
     return jsonify({'success': True, 'message': 'Удалено'}), 200
 
@@ -228,3 +238,28 @@ def _try_calculate(pwc: ProductWarehouseCost):
         # If calculation fails, leave calculated_price as None
         pwc.calculated_price = None
         pwc.calculated_at = None
+
+
+def _apply_min_price(product_id: int):
+    """
+    Find the minimum calculated_price for a product across all warehouses
+    and write it to product.price + product.supplier_id.
+    """
+    from models.product import Product
+
+    all_costs = ProductWarehouseCost.query.filter_by(product_id=product_id).all()
+
+    best_cost = None
+    for c in all_costs:
+        if c.calculated_price and c.calculated_price > 0:
+            if best_cost is None or c.calculated_price < best_cost.calculated_price:
+                best_cost = c
+
+    if best_cost:
+        product = Product.query.get(product_id)
+        if product:
+            product.price = best_cost.calculated_price
+            warehouse = Warehouse.query.get(best_cost.warehouse_id)
+            if warehouse:
+                product.supplier_id = warehouse.supplier_id
+            db.session.commit()
