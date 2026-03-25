@@ -105,14 +105,41 @@ def create_draft_product():
     try:
         import uuid
         import time
-        
-        # Генерируем уникальный артикул для черновика
-        unique_article = f"DRAFT-{int(time.time())}-{str(uuid.uuid4())[:8]}"
-        
+        from datetime import datetime, timedelta
+
+        # Auto-cleanup: delete drafts older than 24 hours
+        try:
+            cutoff = datetime.now() - timedelta(hours=4)
+            old_drafts = Product.query.filter(
+                Product.is_draft == True,
+                Product.slug.like('draft-%')
+            ).all()
+            for draft in old_drafts:
+                # Check by article timestamp
+                try:
+                    parts = draft.article.split('-')
+                    if len(parts) >= 2:
+                        ts = int(parts[1])
+                        if ts < int(cutoff.timestamp()):
+                            db.session.delete(draft)
+                except (ValueError, IndexError):
+                    # Can't parse timestamp, delete if name is empty
+                    if not draft.name:
+                        db.session.delete(draft)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        # Generate unique article and slug for draft
+        ts = int(time.time())
+        uid = str(uuid.uuid4())[:8]
+        unique_article = f"DRAFT-{ts}-{uid}"
+        unique_slug = f"draft-{ts}-{uid}"
+
         draft_product = Product(
             name='',
-            article=unique_article,  # Уникальный артикул
-            slug='draft',
+            article=unique_article,
+            slug=unique_slug,
             price=0,
             wholesale_price=0,
             quantity=0,
@@ -124,15 +151,15 @@ def create_draft_product():
             is_draft=True,
             category_id=None
         )
-        
+
         db.session.add(draft_product)
         db.session.commit()
-        
-        return jsonify({"id": draft_product.id, "article": draft_product.article}), 201
-        
+
+        return jsonify({"id": draft_product.id, "article": draft_product.article, "success": True}), 201
+
     except Exception as e:
         db.session.rollback()
-        return jsonify({"message": str(e)}), 500
+        return jsonify({"message": str(e), "success": False}), 500
 
 
 # 🔹 Удалить черновик + папку
