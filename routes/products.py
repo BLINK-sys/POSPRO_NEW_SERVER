@@ -4,6 +4,7 @@ import re
 import unicodedata
 import math
 from flask import Blueprint, request, jsonify, current_app
+from flask_jwt_extended import verify_jwt_in_request, get_jwt
 import logging
 from sqlalchemy.orm import joinedload
 from extensions import db
@@ -19,6 +20,16 @@ from models.order import OrderItem
 
 products_bp = Blueprint('products', __name__)
 logger = logging.getLogger(__name__)
+
+
+def _is_system_user():
+    """Check if current request has a valid JWT for admin/system user"""
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt()
+        return claims.get('role') in ('admin', 'system')
+    except Exception:
+        return False
 
 
 def get_availability_status_for_quantity(quantity: int, statuses_cache=None, supplier_id=None):
@@ -952,15 +963,18 @@ def search_products():
     # ilike - регистронезависимый поиск (case-insensitive)
     # %{query}% - поиск подстроки в любом месте (начало, середина, конец)
     # Поиск только по полю name (название товара)
-    products = Product.query.options(
+    show_hidden = _is_system_user()
+    search_query = Product.query.options(
         joinedload(Product.brand_info),
         joinedload(Product.status_info),
         joinedload(Product.category)
     ).filter(
-        Product.name.ilike(f'%{query}%'),  # Регистронезависимый поиск подстроки в названии
-        Product.is_visible == True,         # Только видимые товары (не скрытые админами)
-        Product.is_draft == False           # Только не черновики
-    ).limit(limit).all()
+        Product.name.ilike(f'%{query}%'),
+        Product.is_draft == False
+    )
+    if not show_hidden:
+        search_query = search_query.filter(Product.is_visible == True)
+    products = search_query.limit(limit).all()
     
     # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
     product_ids = [p.id for p in products]
@@ -1042,10 +1056,11 @@ def search_products():
 def get_products_by_brand(brand_name):
     """Получить товары по бренду"""
     try:
+        show_hidden = _is_system_user()
         # Декодируем название бренда из URL
         import urllib.parse
         brand_name = urllib.parse.unquote(brand_name)
-        
+
         # Пытаемся найти бренд по названию или ID
         brand_obj = None
         try:
@@ -1065,16 +1080,18 @@ def get_products_by_brand(brand_name):
             }), 404
         
         # ✅ ОПТИМИЗАЦИЯ: Загружаем товары с relationships
-        products = Product.query.options(
+        query = Product.query.options(
             joinedload(Product.brand_info),
             joinedload(Product.status_info),
             joinedload(Product.category)
         ).filter(
             Product.brand_id == brand_obj.id,
-            Product.is_visible == True,
             Product.is_draft == False
-        ).all()
-        
+        )
+        if not show_hidden:
+            query = query.filter(Product.is_visible == True)
+        products = query.all()
+
         # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
         product_ids = [p.id for p in products]
         media_items = []
@@ -1086,7 +1103,7 @@ def get_products_by_brand(brand_name):
                 ) \
                 .order_by(ProductMedia.product_id, ProductMedia.order) \
                 .all()
-        
+
         # Создаем словарь {product_id: first_image}
         product_images = {}
         for media in media_items:
@@ -1146,6 +1163,7 @@ def get_products_by_brand(brand_name):
 def get_products_by_brand_detailed(brand_name):
     """Получить товары по бренду с полной информацией (статус, бренд, категория)"""
     try:
+        show_hidden = _is_system_user()
         # Декодируем название бренда из URL
         import urllib.parse
         brand_name = urllib.parse.unquote(brand_name)
@@ -1185,9 +1203,11 @@ def get_products_by_brand_detailed(brand_name):
             joinedload(Product.category)
         ).filter(
             Product.brand_id == brand_obj.id,
-            Product.is_visible == True,
             Product.is_draft == False
-        ).order_by(Product.id.desc())
+        )
+        if not show_hidden:
+            query = query.filter(Product.is_visible == True)
+        query = query.order_by(Product.id.desc())
 
         total_count = query.count()
         total_pages = math.ceil(total_count / per_page) if total_count else 0
@@ -1301,6 +1321,7 @@ def get_products_by_brand_detailed(brand_name):
 def get_categories_by_brand(brand_name):
     """Получить категории товаров по бренду для фильтрации"""
     try:
+        show_hidden = _is_system_user()
         # Декодируем название бренда из URL
         import urllib.parse
         brand_name = urllib.parse.unquote(brand_name)
@@ -1320,31 +1341,35 @@ def get_categories_by_brand(brand_name):
             return jsonify({'categories': []})
         
         # Подзапрос для получения ID категорий товаров данного бренда
-        category_ids = db.session.query(Product.category_id).filter(
+        cat_query = db.session.query(Product.category_id).filter(
             Product.brand_id == brand_obj.id,
-            Product.is_visible == True,
             Product.is_draft == False,
             Product.category_id.isnot(None)
-        ).distinct().all()
-        
+        )
+        if not show_hidden:
+            cat_query = cat_query.filter(Product.is_visible == True)
+        category_ids = cat_query.distinct().all()
+
         category_ids = [cat_id[0] for cat_id in category_ids]
-        
+
         if not category_ids:
             return jsonify({'categories': []})
-        
+
         # Получаем категории
         categories = Category.query.filter(Category.id.in_(category_ids)).all()
-        
+
         result = []
         for cat in categories:
             # Подсчитываем количество товаров в каждой категории для данного бренда
-            product_count = Product.query.filter(
+            count_query = Product.query.filter(
                 Product.brand_id == brand_obj.id,
                 Product.category_id == cat.id,
-                Product.is_visible == True,
                 Product.is_draft == False
-            ).count()
-            
+            )
+            if not show_hidden:
+                count_query = count_query.filter(Product.is_visible == True)
+            product_count = count_query.count()
+
             result.append({
                 'id': cat.id,
                 'name': cat.name,
@@ -1375,6 +1400,7 @@ def get_categories_by_brand(brand_name):
 def get_products_by_brand_and_category(brand_name):
     """Получить товары по бренду с фильтрацией по категории"""
     try:
+        show_hidden = _is_system_user()
         # Декодируем название бренда из URL
         import urllib.parse
         brand_name = urllib.parse.unquote(brand_name)
@@ -1409,10 +1435,11 @@ def get_products_by_brand_and_category(brand_name):
             joinedload(Product.category)
         ).filter(
             Product.brand_id == brand_obj.id,
-            Product.is_visible == True,
             Product.is_draft == False
         )
-        
+        if not show_hidden:
+            query = query.filter(Product.is_visible == True)
+
         # Добавляем фильтр по категории, если указан
         if category_param:
             if category_param == 'no-category':

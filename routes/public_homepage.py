@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from flask_jwt_extended import verify_jwt_in_request, get_jwt
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 import math
@@ -17,6 +18,16 @@ from models.small_banner_card import SmallBanner
 public_homepage_bp = Blueprint('public_homepage', __name__)
 
 
+def _is_system_user():
+    """Check if current request has a valid JWT for admin/system user"""
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt()
+        return claims.get('role') in ('admin', 'system')
+    except Exception:
+        return False
+
+
 @public_homepage_bp.route('/public', methods=['GET'])
 def get_public_info():
     return {"message": "Public API", "status": "ok"}
@@ -25,11 +36,13 @@ def get_public_info():
 @public_homepage_bp.route('/public/sitemap-slugs', methods=['GET'])
 def get_sitemap_slugs():
     """Список slug товаров и категорий для генерации sitemap на фронте."""
+    show_hidden = _is_system_user()
+    query = Product.query.filter_by(is_draft=False)
+    if not show_hidden:
+        query = query.filter_by(is_visible=True)
     product_slugs = [
         row[0] for row in
-        Product.query.filter_by(is_visible=True, is_draft=False)
-        .with_entities(Product.slug)
-        .all()
+        query.with_entities(Product.slug).all()
     ]
     category_slugs = [
         row[0] for row in
@@ -281,6 +294,7 @@ def get_homepage_data():
 @public_homepage_bp.route('/public/catalog/categories', methods=['GET'])
 def get_catalog_categories():
     """Получить категории для каталожных панелей (с иерархией, изображениями и количеством товаров)"""
+    show_hidden = _is_system_user()
     # Получаем все категории с show_in_menu=True (если поле существует в БД)
     # Если поле еще не добавлено в БД, возвращаем все категории
     try:
@@ -288,18 +302,18 @@ def get_catalog_categories():
     except Exception:
         # Если поле show_in_menu еще не существует в БД, возвращаем все категории
         all_categories = Category.query.order_by(Category.parent_id, Category.order).all()
-    
+
     category_ids = [c.id for c in all_categories]
     product_counts = {}
 
     if category_ids:
-        counts_query = (
+        counts_q = (
             db.session.query(Product.category_id, func.count(Product.id))
             .filter(Product.category_id.in_(category_ids))
-            .filter(Product.is_visible.is_(True))
-            .group_by(Product.category_id)
-            .all()
         )
+        if not show_hidden:
+            counts_q = counts_q.filter(Product.is_visible.is_(True))
+        counts_query = counts_q.group_by(Product.category_id).all()
         product_counts = {category_id: count for category_id, count in counts_query}
 
     # Создаем словарь для быстрого доступа
@@ -358,6 +372,7 @@ def get_catalog_categories():
 
 @public_homepage_bp.route('/public/category/<string:slug>', methods=['GET'])
 def get_category_with_children_and_products(slug):
+    show_hidden = _is_system_user()
     category = Category.query.filter_by(slug=slug).first_or_404()
 
     # 🔹 Вложенные подкатегории
@@ -386,8 +401,10 @@ def get_category_with_children_and_products(slug):
         joinedload(Product.brand_info),
         joinedload(Product.status_info),
         joinedload(Product.category)
-    ).filter_by(category_id=category.id, is_visible=True)
-    
+    ).filter_by(category_id=category.id)
+    if not show_hidden:
+        query = query.filter(Product.is_visible == True)
+
     # Применяем фильтр по поиску
     if search_query:
         query = query.filter(
@@ -444,10 +461,10 @@ def get_category_with_children_and_products(slug):
     
     # ✅ ОПТИМИЗАЦИЯ: Для получения всех уникальных брендов категории делаем отдельный запрос
     # (не только из товаров на текущей странице, а из всех товаров категории)
-    all_category_products = Product.query.filter_by(
-        category_id=category.id, 
-        is_visible=True
-    ).with_entities(Product.brand_id).distinct().all()
+    brands_query = Product.query.filter_by(category_id=category.id)
+    if not show_hidden:
+        brands_query = brands_query.filter(Product.is_visible == True)
+    all_category_products = brands_query.with_entities(Product.brand_id).distinct().all()
     
     brand_ids = [p.brand_id for p in all_category_products if p.brand_id]
     all_brands = {}

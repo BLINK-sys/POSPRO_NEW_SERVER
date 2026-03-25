@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, current_app
+from flask_jwt_extended import verify_jwt_in_request, get_jwt
 from extensions import db
 from models.brand import Brand
 from models.product import Product
@@ -10,17 +11,30 @@ from sqlalchemy import func
 bp = Blueprint('brands_statuses', __name__)
 
 
+def _is_system_user():
+    """Check if current request has a valid JWT for admin/system user"""
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt()
+        return claims.get('role') in ('admin', 'system')
+    except Exception:
+        return False
+
+
 # ✅ Получить все бренды
 @bp.route('/brands', methods=['GET'])
 def get_brands():
+    show_hidden = _is_system_user()
     # Подсчёт видимых товаров для каждого бренда
-    counts = db.session.query(
+    counts_query = db.session.query(
         Product.brand_id,
         func.count(Product.id).label('cnt')
     ).filter(
-        Product.is_visible == True,
         Product.is_draft == False
-    ).group_by(Product.brand_id).all()
+    )
+    if not show_hidden:
+        counts_query = counts_query.filter(Product.is_visible == True)
+    counts = counts_query.group_by(Product.brand_id).all()
 
     count_map = {row.brand_id: row.cnt for row in counts}
 
