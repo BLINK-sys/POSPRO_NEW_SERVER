@@ -551,6 +551,21 @@ def recalculate_warehouse(warehouse_id):
     for pwc in costs:
         try:
             product_chars = extract_product_characteristics(pwc.product_id)
+
+            # If no weight and no dimensions — price = 0, skip formula
+            has_weight = product_chars.get('вес', 0) > 0
+            has_dims = any(
+                product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
+                product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
+                for s in ['длина', 'ширина', 'высота']
+            )
+
+            if not has_weight and not has_dims:
+                pwc.calculated_price = 0
+                pwc.calculated_at = datetime.now()
+                success_count += 1
+                continue
+
             price, _ = calculate_product_price(
                 cost_price=pwc.cost_price,
                 currency_rate=currency_rate,
