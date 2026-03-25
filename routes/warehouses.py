@@ -226,6 +226,71 @@ def save_variables(warehouse_id):
     }), 200
 
 
+@warehouses_bp.route('/<int:warehouse_id>/variables/single', methods=['POST'])
+@jwt_required()
+def save_single_variable(warehouse_id):
+    """Create or update a single variable."""
+    if not check_admin():
+        return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
+
+    warehouse = Warehouse.query.get(warehouse_id)
+    if not warehouse:
+        return jsonify({'success': False, 'message': 'Склад не найден'}), 404
+
+    data = request.get_json()
+    var_id = data.get('id')
+    name = data.get('name', '').strip()
+    label = data.get('label', '').strip() if data.get('label') else None
+    formula = data.get('formula', '').strip()
+    sort_order = data.get('sort_order', 0)
+
+    if not name:
+        return jsonify({'success': False, 'message': 'Имя переменной обязательно'}), 400
+    if not formula:
+        return jsonify({'success': False, 'message': 'Формула обязательна'}), 400
+
+    # Build known vars: builtins + all other variables with sort_order < this one
+    known_vars = set(BUILTIN_VARIABLE_NAMES)
+    other_vars = WarehouseVariable.query.filter_by(warehouse_id=warehouse_id) \
+        .order_by(WarehouseVariable.sort_order).all()
+    for v in other_vars:
+        if v.sort_order < sort_order and (not var_id or v.id != var_id):
+            known_vars.add(v.name)
+
+    # Validate formula
+    error = validate_formula(formula, known_vars)
+    if error:
+        return jsonify({'success': False, 'message': error}), 400
+
+    if var_id:
+        # Update existing
+        variable = WarehouseVariable.query.get(var_id)
+        if not variable or variable.warehouse_id != warehouse_id:
+            return jsonify({'success': False, 'message': 'Переменная не найдена'}), 404
+        variable.name = name
+        variable.label = label
+        variable.formula = formula
+        variable.sort_order = sort_order
+    else:
+        # Create new
+        variable = WarehouseVariable(
+            warehouse_id=warehouse_id,
+            name=name,
+            label=label,
+            formula=formula,
+            sort_order=sort_order
+        )
+        db.session.add(variable)
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'message': f'Переменная "{name}" сохранена',
+        'data': variable.to_dict()
+    }), 200
+
+
 @warehouses_bp.route('/<int:warehouse_id>/variables/<int:variable_id>', methods=['DELETE'])
 @jwt_required()
 def delete_variable(warehouse_id, variable_id):
