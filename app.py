@@ -154,6 +154,15 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция product_views: {e}")
 
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE warehouse_variable ALTER COLUMN label TYPE TEXT"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция warehouse_variable.label: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 

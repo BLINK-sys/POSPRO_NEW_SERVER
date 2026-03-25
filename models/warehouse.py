@@ -50,7 +50,7 @@ class WarehouseVariable(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
-    label = db.Column(db.String(255))
+    label = db.Column(db.Text)
     formula = db.Column(db.Text, nullable=False)
     sort_order = db.Column(db.Integer, default=0)
 
