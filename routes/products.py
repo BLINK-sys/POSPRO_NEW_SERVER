@@ -27,8 +27,13 @@ def _is_system_user():
     try:
         verify_jwt_in_request(optional=True)
         claims = get_jwt()
-        return claims.get('role') in ('admin', 'system')
-    except Exception:
+        role = claims.get('role')
+        is_system = role in ('admin', 'system')
+        if is_system:
+            logger.info(f"[_is_system_user] role={role}, showing hidden items")
+        return is_system
+    except Exception as e:
+        logger.debug(f"[_is_system_user] no JWT: {e}")
         return False
 
 

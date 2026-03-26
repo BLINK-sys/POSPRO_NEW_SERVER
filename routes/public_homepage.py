@@ -295,12 +295,13 @@ def get_homepage_data():
 def get_catalog_categories():
     """Получить категории для каталожных панелей (с иерархией, изображениями и количеством товаров)"""
     show_hidden = _is_system_user()
-    # Получаем все категории с show_in_menu=True (если поле существует в БД)
-    # Если поле еще не добавлено в БД, возвращаем все категории
+    # Получаем категории: для системных пользователей — все, для остальных — только show_in_menu=True
     try:
-        all_categories = Category.query.filter_by(show_in_menu=True).order_by(Category.parent_id, Category.order).all()
+        cat_query = Category.query
+        if not show_hidden:
+            cat_query = cat_query.filter_by(show_in_menu=True)
+        all_categories = cat_query.order_by(Category.parent_id, Category.order).all()
     except Exception:
-        # Если поле show_in_menu еще не существует в БД, возвращаем все категории
         all_categories = Category.query.order_by(Category.parent_id, Category.order).all()
 
     category_ids = [c.id for c in all_categories]
