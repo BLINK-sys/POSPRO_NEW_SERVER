@@ -53,6 +53,27 @@ def get_product_costs():
     }), 200
 
 
+@product_costs_bp.route('/count', methods=['GET'])
+@jwt_required()
+def get_product_costs_count():
+    warehouse_id = request.args.get('warehouse_id', type=int)
+    product_id = request.args.get('product_id', type=int)
+
+    query = ProductWarehouseCost.query
+
+    if warehouse_id:
+        query = query.filter_by(warehouse_id=warehouse_id)
+    if product_id:
+        query = query.filter_by(product_id=product_id)
+
+    count = query.count()
+
+    return jsonify({
+        'success': True,
+        'count': count
+    }), 200
+
+
 @product_costs_bp.route('/', methods=['POST'])
 @jwt_required()
 def create_product_cost():
