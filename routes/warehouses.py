@@ -551,46 +551,70 @@ def recalculate_warehouse(warehouse_id):
         .order_by(WarehouseVariable.sort_order).all()
     var_list = [{'name': v.name, 'formula': v.formula} for v in variables]
 
-    costs = ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).all()
+    cost_ids = [c.id for c in ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).with_entities(ProductWarehouseCost.id).all()]
 
     success_count = 0
     error_count = 0
     errors = []
+    BATCH_SIZE = 100
+    delivery_formula_text = warehouse.formula.delivery_formula
 
-    for pwc in costs:
-        try:
-            product_chars = extract_product_characteristics(pwc.product_id)
+    for batch_start in range(0, len(cost_ids), BATCH_SIZE):
+        batch_ids = cost_ids[batch_start:batch_start + BATCH_SIZE]
+        batch_costs = ProductWarehouseCost.query.filter(ProductWarehouseCost.id.in_(batch_ids)).all()
 
-            # If no weight and no dimensions — price = 0, skip formula
-            has_weight = product_chars.get('вес', 0) > 0
-            has_dims = any(
-                product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
-                product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
-                for s in ['длина', 'ширина', 'высота']
-            )
+        for pwc in batch_costs:
+            try:
+                product_chars = extract_product_characteristics(pwc.product_id)
 
-            if not has_weight and not has_dims:
-                pwc.calculated_price = 0
+                # If no weight and no dimensions — price = 0, skip formula
+                has_weight = product_chars.get('вес', 0) > 0
+                has_dims = any(
+                    product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
+                    product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
+                    for s in ['длина', 'ширина', 'высота']
+                )
+
+                if not has_weight and not has_dims:
+                    pwc.calculated_price = 0
+                    pwc.calculated_delivery = None
+                    pwc.calculated_at = datetime.now()
+                    success_count += 1
+                    continue
+
+                price, _ = calculate_product_price(
+                    cost_price=pwc.cost_price,
+                    currency_rate=currency_rate,
+                    product_characteristics=product_chars,
+                    warehouse_variables=var_list,
+                    final_formula=warehouse.formula.formula
+                )
+                pwc.calculated_price = round(price, 2)
                 pwc.calculated_at = datetime.now()
+
+                # Calculate delivery if formula exists
+                if delivery_formula_text:
+                    try:
+                        delivery, _ = calculate_product_price(
+                            cost_price=pwc.cost_price,
+                            currency_rate=currency_rate,
+                            product_characteristics=product_chars,
+                            warehouse_variables=var_list,
+                            final_formula=delivery_formula_text
+                        )
+                        pwc.calculated_delivery = round(delivery, 2)
+                    except (FormulaError, Exception):
+                        pwc.calculated_delivery = None
+                else:
+                    pwc.calculated_delivery = None
+
                 success_count += 1
-                continue
+            except FormulaError as e:
+                error_count += 1
+                product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
+                errors.append(f'{product_name}: {str(e)}')
 
-            price, _ = calculate_product_price(
-                cost_price=pwc.cost_price,
-                currency_rate=currency_rate,
-                product_characteristics=product_chars,
-                warehouse_variables=var_list,
-                final_formula=warehouse.formula.formula
-            )
-            pwc.calculated_price = round(price, 2)
-            pwc.calculated_at = datetime.now()
-            success_count += 1
-        except FormulaError as e:
-            error_count += 1
-            product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
-            errors.append(f'{product_name}: {str(e)}')
-
-    db.session.commit()
+        db.session.commit()
 
     # Update product.price and product.supplier_id with min price across all warehouses
     _update_product_prices_from_warehouse(warehouse_id)
