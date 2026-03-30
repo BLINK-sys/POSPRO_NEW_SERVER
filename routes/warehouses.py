@@ -555,7 +555,11 @@ def recalculate_warehouse(warehouse_id):
 
     success_count = 0
     error_count = 0
+    zero_price_count = 0
+    zero_price_reasons = []  # [{name, reason}]
+    delivery_count = 0
     errors = []
+    total_count = len(cost_ids)
     BATCH_SIZE = 100
     delivery_formula_text = warehouse.formula.delivery_formula
 
@@ -579,6 +583,10 @@ def recalculate_warehouse(warehouse_id):
                     pwc.calculated_price = 0
                     pwc.calculated_delivery = None
                     pwc.calculated_at = datetime.now()
+                    zero_price_count += 1
+                    product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
+                    if len(zero_price_reasons) < 20:
+                        zero_price_reasons.append({'name': product_name, 'reason': 'Нет веса и габаритов'})
                     success_count += 1
                     continue
 
@@ -603,6 +611,7 @@ def recalculate_warehouse(warehouse_id):
                             final_formula=delivery_formula_text
                         )
                         pwc.calculated_delivery = round(delivery, 2)
+                        delivery_count += 1
                     except (FormulaError, Exception):
                         pwc.calculated_delivery = None
                 else:
@@ -619,13 +628,20 @@ def recalculate_warehouse(warehouse_id):
     # Update product.price and product.supplier_id with min price across all warehouses
     _update_product_prices_from_warehouse(warehouse_id)
 
+    price_count = success_count - zero_price_count
+
     return jsonify({
         'success': True,
-        'message': f'Пересчитано: {success_count}, ошибок: {error_count}',
+        'message': f'Пересчитано: {success_count} из {total_count}',
         'data': {
-            'success_count': success_count,
+            'total': total_count,
+            'price_calculated': price_count,
+            'delivery_calculated': delivery_count,
+            'zero_price': zero_price_count,
+            'zero_price_reasons': zero_price_reasons,
             'error_count': error_count,
-            'errors': errors[:20]  # Limit error list
+            'errors': errors[:20],
+            'has_delivery_formula': bool(delivery_formula_text),
         }
     }), 200
 
