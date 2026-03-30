@@ -44,6 +44,14 @@ def get_product_costs():
             product_id=c.product_id, media_type='image'
         ).order_by(ProductMedia.order).first()
         data['product_image'] = image.url if image else None
+        # Add warehouse and supplier names
+        warehouse = Warehouse.query.get(c.warehouse_id)
+        if warehouse:
+            data['warehouse_name'] = warehouse.name
+            data['supplier_name'] = warehouse.supplier.name if warehouse.supplier else None
+        else:
+            data['warehouse_name'] = None
+            data['supplier_name'] = None
         result.append(data)
 
     return jsonify({
