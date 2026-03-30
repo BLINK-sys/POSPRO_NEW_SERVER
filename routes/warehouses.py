@@ -725,38 +725,26 @@ def _update_product_prices_from_warehouse(warehouse_id: int):
     """
     For each product on this warehouse, find the min calculated_price
     across ALL warehouses and update product.price + product.supplier_id.
+    Uses raw SQL for performance (handles 12k+ products in seconds).
     """
-    from models.product import Product
-
-    costs = ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).all()
-    product_ids = set(c.product_id for c in costs)
-
-    for product_id in product_ids:
-        _apply_min_price_to_product(product_id)
-
-
-def _apply_min_price_to_product(product_id: int):
-    """
-    Find the minimum calculated_price for a product across all warehouses
-    and write it to product.price + product.supplier_id.
-    """
-    from models.product import Product
-
-    all_costs = ProductWarehouseCost.query.filter_by(product_id=product_id).all()
-
-    # Find min price among costs with calculated_price > 0
-    best_cost = None
-    for c in all_costs:
-        if c.calculated_price and c.calculated_price > 0:
-            if best_cost is None or c.calculated_price < best_cost.calculated_price:
-                best_cost = c
-
-    if best_cost:
-        product = Product.query.get(product_id)
-        if product:
-            product.price = best_cost.calculated_price
-            # Set supplier from the warehouse with min price
-            warehouse = Warehouse.query.get(best_cost.warehouse_id)
-            if warehouse:
-                product.supplier_id = warehouse.supplier_id
-            db.session.commit()
+    # Single SQL: find min price per product across all warehouses, then bulk update
+    db.session.execute(db.text("""
+        UPDATE product p
+        SET price = best.min_price,
+            supplier_id = best.best_supplier_id
+        FROM (
+            SELECT DISTINCT ON (pwc.product_id)
+                pwc.product_id,
+                pwc.calculated_price AS min_price,
+                w.supplier_id AS best_supplier_id
+            FROM product_warehouse_cost pwc
+            JOIN warehouse w ON w.id = pwc.warehouse_id
+            WHERE pwc.calculated_price > 0
+              AND pwc.product_id IN (
+                  SELECT product_id FROM product_warehouse_cost WHERE warehouse_id = :wid
+              )
+            ORDER BY pwc.product_id, pwc.calculated_price ASC
+        ) best
+        WHERE p.id = best.product_id
+    """), {'wid': warehouse_id})
+    db.session.commit()
