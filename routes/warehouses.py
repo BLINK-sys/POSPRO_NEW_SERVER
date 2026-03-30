@@ -540,75 +540,105 @@ _recalc_status = {}
 def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formula_text, delivery_formula_text):
     """Background recalculation worker."""
     status = _recalc_status[warehouse_id]
-    with app.app_context():
-        BATCH_SIZE = 100
-        for batch_start in range(0, len(cost_ids), BATCH_SIZE):
-            batch_ids = cost_ids[batch_start:batch_start + BATCH_SIZE]
-            batch_costs = ProductWarehouseCost.query.filter(ProductWarehouseCost.id.in_(batch_ids)).all()
+    try:
+        with app.app_context():
+            BATCH_SIZE = 100
+            for batch_start in range(0, len(cost_ids), BATCH_SIZE):
+                batch_ids = cost_ids[batch_start:batch_start + BATCH_SIZE]
 
-            batch_product_ids = [pwc.product_id for pwc in batch_costs]
-            all_chars = bulk_extract_product_characteristics(batch_product_ids)
-
-            for pwc in batch_costs:
                 try:
-                    product_chars = all_chars.get(pwc.product_id, {})
-                    has_weight = product_chars.get('вес', 0) > 0
-                    has_dims = any(
-                        product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
-                        product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
-                        for s in ['длина', 'ширина', 'высота']
-                    )
-
-                    if not has_weight and not has_dims:
-                        pwc.calculated_price = 0
-                        pwc.calculated_delivery = None
-                        pwc.calculated_at = datetime.now()
-                        status['zero_price'] += 1
-                        product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
-                        if len(status['zero_price_reasons']) < 20:
-                            status['zero_price_reasons'].append({'name': product_name, 'reason': 'Нет веса и габаритов'})
-                        status['processed'] += 1
+                    batch_costs = ProductWarehouseCost.query.filter(ProductWarehouseCost.id.in_(batch_ids)).all()
+                    batch_product_ids = [pwc.product_id for pwc in batch_costs]
+                    all_chars = bulk_extract_product_characteristics(batch_product_ids)
+                except Exception as e:
+                    # DB connection error — rollback and retry once
+                    db.session.rollback()
+                    try:
+                        batch_costs = ProductWarehouseCost.query.filter(ProductWarehouseCost.id.in_(batch_ids)).all()
+                        batch_product_ids = [pwc.product_id for pwc in batch_costs]
+                        all_chars = bulk_extract_product_characteristics(batch_product_ids)
+                    except Exception as e2:
+                        status['error_count'] += len(batch_ids)
+                        status['processed'] += len(batch_ids)
+                        if len(status['errors']) < 20:
+                            status['errors'].append(f'Batch error: {str(e2)[:100]}')
                         continue
 
-                    price, _ = calculate_product_price(
-                        cost_price=pwc.cost_price,
-                        currency_rate=currency_rate,
-                        product_characteristics=product_chars,
-                        warehouse_variables=var_list,
-                        final_formula=formula_text
-                    )
-                    pwc.calculated_price = round(price, 2)
-                    pwc.calculated_at = datetime.now()
-                    status['price_calculated'] += 1
+                for pwc in batch_costs:
+                    try:
+                        product_chars = all_chars.get(pwc.product_id, {})
+                        has_weight = product_chars.get('вес', 0) > 0
+                        has_dims = any(
+                            product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
+                            product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
+                            for s in ['длина', 'ширина', 'высота']
+                        )
 
-                    if delivery_formula_text:
-                        try:
-                            delivery, _ = calculate_product_price(
-                                cost_price=pwc.cost_price,
-                                currency_rate=currency_rate,
-                                product_characteristics=product_chars,
-                                warehouse_variables=var_list,
-                                final_formula=delivery_formula_text
-                            )
-                            pwc.calculated_delivery = round(delivery, 2)
-                            status['delivery_calculated'] += 1
-                        except (FormulaError, Exception):
+                        if not has_weight and not has_dims:
+                            pwc.calculated_price = 0
                             pwc.calculated_delivery = None
-                    else:
-                        pwc.calculated_delivery = None
+                            pwc.calculated_at = datetime.now()
+                            status['zero_price'] += 1
+                            product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
+                            if len(status['zero_price_reasons']) < 20:
+                                status['zero_price_reasons'].append({'name': product_name, 'reason': 'Нет веса и габаритов'})
+                            status['processed'] += 1
+                            continue
 
-                    status['processed'] += 1
-                except FormulaError as e:
-                    status['error_count'] += 1
-                    product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
+                        price, _ = calculate_product_price(
+                            cost_price=pwc.cost_price,
+                            currency_rate=currency_rate,
+                            product_characteristics=product_chars,
+                            warehouse_variables=var_list,
+                            final_formula=formula_text
+                        )
+                        pwc.calculated_price = round(price, 2)
+                        pwc.calculated_at = datetime.now()
+                        status['price_calculated'] += 1
+
+                        if delivery_formula_text:
+                            try:
+                                delivery, _ = calculate_product_price(
+                                    cost_price=pwc.cost_price,
+                                    currency_rate=currency_rate,
+                                    product_characteristics=product_chars,
+                                    warehouse_variables=var_list,
+                                    final_formula=delivery_formula_text
+                                )
+                                pwc.calculated_delivery = round(delivery, 2)
+                                status['delivery_calculated'] += 1
+                            except (FormulaError, Exception):
+                                pwc.calculated_delivery = None
+                        else:
+                            pwc.calculated_delivery = None
+
+                        status['processed'] += 1
+                    except FormulaError as e:
+                        status['error_count'] += 1
+                        product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
+                        if len(status['errors']) < 20:
+                            status['errors'].append(f'{product_name}: {str(e)}')
+                        status['processed'] += 1
+
+                try:
+                    db.session.commit()
+                except Exception as e:
+                    db.session.rollback()
                     if len(status['errors']) < 20:
-                        status['errors'].append(f'{product_name}: {str(e)}')
-                    status['processed'] += 1
+                        status['errors'].append(f'Commit error: {str(e)[:100]}')
 
-            db.session.commit()
+            try:
+                _update_product_prices_from_warehouse(warehouse_id)
+            except Exception:
+                db.session.rollback()
 
-        _update_product_prices_from_warehouse(warehouse_id)
-        status['status'] = 'done'
+            status['status'] = 'done'
+            status['finished_at'] = datetime.now().isoformat()
+    except Exception as e:
+        status['status'] = 'error'
+        status['finished_at'] = datetime.now().isoformat()
+        if len(status['errors']) < 20:
+            status['errors'].append(f'Fatal: {str(e)[:200]}')
 
 
 @warehouses_bp.route('/<int:warehouse_id>/recalculate', methods=['POST'])
@@ -645,6 +675,8 @@ def recalculate_warehouse(warehouse_id):
 
     _recalc_status[warehouse_id] = {
         'status': 'running',
+        'started_at': datetime.now().isoformat(),
+        'finished_at': None,
         'total': len(cost_ids),
         'processed': 0,
         'price_calculated': 0,
