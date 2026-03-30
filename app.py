@@ -30,6 +30,7 @@ from routes.cart import cart_bp
 from routes.orders import orders_bp
 from routes.kp_settings import kp_settings_bp
 from routes.kp_history import kp_history_bp
+from routes.kp_logos import kp_logos_bp
 from routes.dashboard import dashboard_bp
 from routes.catalog_visibility import catalog_visibility_bp
 from routes.currencies import currencies_bp
@@ -89,6 +90,7 @@ def create_app():
     # 🔹 Настройки КП
     app.register_blueprint(kp_settings_bp, url_prefix='/api')  # /api/kp-settings
     app.register_blueprint(kp_history_bp, url_prefix='/api')   # /api/kp-history
+    app.register_blueprint(kp_logos_bp, url_prefix='/api')     # /api/kp-logos
 
     # 🔹 Видимость каталогов (публичный + админский под /api)
     app.register_blueprint(catalog_visibility_bp, url_prefix='/api')  # /api/catalog-visibility, /api/admin-catalog-visibility
