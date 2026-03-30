@@ -267,7 +267,7 @@ def _try_calculate(pwc: ProductWarehouseCost):
             .order_by(WarehouseVariable.sort_order).all()
         var_list = [{'name': v.name, 'formula': v.formula} for v in variables]
 
-        price, _ = calculate_product_price(
+        price, all_vars = calculate_product_price(
             cost_price=pwc.cost_price,
             currency_rate=currency_rate,
             product_characteristics=product_chars,
@@ -278,9 +278,26 @@ def _try_calculate(pwc: ProductWarehouseCost):
         pwc.calculated_price = round(price, 2)
         pwc.calculated_at = datetime.now()
 
+        # Calculate delivery if delivery_formula exists
+        if warehouse.formula.delivery_formula:
+            try:
+                delivery, _ = calculate_product_price(
+                    cost_price=pwc.cost_price,
+                    currency_rate=currency_rate,
+                    product_characteristics=product_chars,
+                    warehouse_variables=var_list,
+                    final_formula=warehouse.formula.delivery_formula
+                )
+                pwc.calculated_delivery = round(delivery, 2)
+            except (FormulaError, Exception):
+                pwc.calculated_delivery = None
+        else:
+            pwc.calculated_delivery = None
+
     except (FormulaError, Exception):
         # If calculation fails, leave calculated_price as None
         pwc.calculated_price = None
+        pwc.calculated_delivery = None
         pwc.calculated_at = None
 
 

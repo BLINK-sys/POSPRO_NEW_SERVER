@@ -165,6 +165,18 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция warehouse_variable.label: {e}")
 
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE warehouse_formula ADD COLUMN IF NOT EXISTS delivery_formula TEXT"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE product_warehouse_cost ADD COLUMN IF NOT EXISTS calculated_delivery FLOAT"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция delivery formula: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 

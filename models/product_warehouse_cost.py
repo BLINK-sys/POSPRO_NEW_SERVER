@@ -10,6 +10,7 @@ class ProductWarehouseCost(db.Model):
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False)
     cost_price = db.Column(db.Float, nullable=False)
     calculated_price = db.Column(db.Float, nullable=True)
+    calculated_delivery = db.Column(db.Float, nullable=True)
     calculated_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
@@ -30,6 +31,7 @@ class ProductWarehouseCost(db.Model):
             'warehouse_id': self.warehouse_id,
             'cost_price': self.cost_price,
             'calculated_price': self.calculated_price,
+            'calculated_delivery': self.calculated_delivery,
             'calculated_at': self.calculated_at.isoformat() if self.calculated_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None

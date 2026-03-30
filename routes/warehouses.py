@@ -341,6 +341,7 @@ def save_formula(warehouse_id):
 
     data = request.get_json()
     formula_text = data.get('formula', '').strip()
+    delivery_formula_text = data.get('delivery_formula', '').strip() if data.get('delivery_formula') else None
 
     if not formula_text:
         return jsonify({'success': False, 'message': 'Формула не может быть пустой'}), 400
@@ -352,20 +353,28 @@ def save_formula(warehouse_id):
     for v in variables:
         available_vars.add(v.name)
 
-    # Validate formula
+    # Validate price formula
     error = validate_formula(formula_text, available_vars)
     if error:
-        return jsonify({'success': False, 'message': error}), 400
+        return jsonify({'success': False, 'message': f'Формула цены: {error}'}), 400
+
+    # Validate delivery formula if provided
+    if delivery_formula_text:
+        error = validate_formula(delivery_formula_text, available_vars)
+        if error:
+            return jsonify({'success': False, 'message': f'Формула доставки: {error}'}), 400
 
     # Save or update
     formula = WarehouseFormula.query.filter_by(warehouse_id=warehouse_id).first()
     if formula:
         formula.formula = formula_text
+        formula.delivery_formula = delivery_formula_text
         formula.updated_at = datetime.now()
     else:
         formula = WarehouseFormula(
             warehouse_id=warehouse_id,
-            formula=formula_text
+            formula=formula_text,
+            delivery_formula=delivery_formula_text
         )
         db.session.add(formula)
 
@@ -373,7 +382,7 @@ def save_formula(warehouse_id):
 
     return jsonify({
         'success': True,
-        'message': 'Формула сохранена',
+        'message': 'Формулы сохранены',
         'data': formula.to_dict()
     }), 200
 

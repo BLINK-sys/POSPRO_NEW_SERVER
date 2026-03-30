@@ -75,6 +75,7 @@ class WarehouseFormula(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False, unique=True)
     formula = db.Column(db.Text, nullable=False)
+    delivery_formula = db.Column(db.Text, nullable=True)  # Formula for delivery per unit
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -83,6 +84,7 @@ class WarehouseFormula(db.Model):
             'id': self.id,
             'warehouse_id': self.warehouse_id,
             'formula': self.formula,
+            'delivery_formula': self.delivery_formula,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
