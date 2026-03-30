@@ -531,10 +531,90 @@ def calculate_preview(warehouse_id):
 
 # ============ Recalculate ============
 
+import threading
+
+# In-memory storage for recalculation status
+_recalc_status = {}
+
+
+def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formula_text, delivery_formula_text):
+    """Background recalculation worker."""
+    status = _recalc_status[warehouse_id]
+    with app.app_context():
+        BATCH_SIZE = 100
+        for batch_start in range(0, len(cost_ids), BATCH_SIZE):
+            batch_ids = cost_ids[batch_start:batch_start + BATCH_SIZE]
+            batch_costs = ProductWarehouseCost.query.filter(ProductWarehouseCost.id.in_(batch_ids)).all()
+
+            batch_product_ids = [pwc.product_id for pwc in batch_costs]
+            all_chars = bulk_extract_product_characteristics(batch_product_ids)
+
+            for pwc in batch_costs:
+                try:
+                    product_chars = all_chars.get(pwc.product_id, {})
+                    has_weight = product_chars.get('вес', 0) > 0
+                    has_dims = any(
+                        product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
+                        product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
+                        for s in ['длина', 'ширина', 'высота']
+                    )
+
+                    if not has_weight and not has_dims:
+                        pwc.calculated_price = 0
+                        pwc.calculated_delivery = None
+                        pwc.calculated_at = datetime.now()
+                        status['zero_price'] += 1
+                        product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
+                        if len(status['zero_price_reasons']) < 20:
+                            status['zero_price_reasons'].append({'name': product_name, 'reason': 'Нет веса и габаритов'})
+                        status['processed'] += 1
+                        continue
+
+                    price, _ = calculate_product_price(
+                        cost_price=pwc.cost_price,
+                        currency_rate=currency_rate,
+                        product_characteristics=product_chars,
+                        warehouse_variables=var_list,
+                        final_formula=formula_text
+                    )
+                    pwc.calculated_price = round(price, 2)
+                    pwc.calculated_at = datetime.now()
+                    status['price_calculated'] += 1
+
+                    if delivery_formula_text:
+                        try:
+                            delivery, _ = calculate_product_price(
+                                cost_price=pwc.cost_price,
+                                currency_rate=currency_rate,
+                                product_characteristics=product_chars,
+                                warehouse_variables=var_list,
+                                final_formula=delivery_formula_text
+                            )
+                            pwc.calculated_delivery = round(delivery, 2)
+                            status['delivery_calculated'] += 1
+                        except (FormulaError, Exception):
+                            pwc.calculated_delivery = None
+                    else:
+                        pwc.calculated_delivery = None
+
+                    status['processed'] += 1
+                except FormulaError as e:
+                    status['error_count'] += 1
+                    product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
+                    if len(status['errors']) < 20:
+                        status['errors'].append(f'{product_name}: {str(e)}')
+                    status['processed'] += 1
+
+            db.session.commit()
+
+        _update_product_prices_from_warehouse(warehouse_id)
+        status['status'] = 'done'
+
+
 @warehouses_bp.route('/<int:warehouse_id>/recalculate', methods=['POST'])
 @jwt_required()
 def recalculate_warehouse(warehouse_id):
-    """Recalculate prices for all products in a warehouse."""
+    """Start async recalculation for all products in a warehouse."""
     if not check_admin():
         return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
 
@@ -545,108 +625,67 @@ def recalculate_warehouse(warehouse_id):
     if not warehouse.formula:
         return jsonify({'success': False, 'message': 'Формула не задана'}), 400
 
-    currency_rate = warehouse.currency.rate_to_tenge if warehouse.currency else 1.0
+    # Check if already running
+    if warehouse_id in _recalc_status and _recalc_status[warehouse_id]['status'] == 'running':
+        s = _recalc_status[warehouse_id]
+        return jsonify({
+            'success': True,
+            'message': f'Уже выполняется: {s["processed"]}/{s["total"]}',
+            'data': {**s}
+        }), 200
 
+    currency_rate = warehouse.currency.rate_to_tenge if warehouse.currency else 1.0
     variables = WarehouseVariable.query.filter_by(warehouse_id=warehouse_id) \
         .order_by(WarehouseVariable.sort_order).all()
     var_list = [{'name': v.name, 'formula': v.formula} for v in variables]
 
     cost_ids = [c.id for c in ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).with_entities(ProductWarehouseCost.id).all()]
 
-    success_count = 0
-    error_count = 0
-    zero_price_count = 0
-    zero_price_reasons = []  # [{name, reason}]
-    delivery_count = 0
-    errors = []
-    total_count = len(cost_ids)
-    BATCH_SIZE = 100
     delivery_formula_text = warehouse.formula.delivery_formula
 
-    for batch_start in range(0, len(cost_ids), BATCH_SIZE):
-        batch_ids = cost_ids[batch_start:batch_start + BATCH_SIZE]
-        batch_costs = ProductWarehouseCost.query.filter(ProductWarehouseCost.id.in_(batch_ids)).all()
+    _recalc_status[warehouse_id] = {
+        'status': 'running',
+        'total': len(cost_ids),
+        'processed': 0,
+        'price_calculated': 0,
+        'delivery_calculated': 0,
+        'zero_price': 0,
+        'zero_price_reasons': [],
+        'error_count': 0,
+        'errors': [],
+        'has_delivery_formula': bool(delivery_formula_text),
+    }
 
-        # Pre-fetch characteristics for all products in this batch (2 queries instead of N)
-        batch_product_ids = [pwc.product_id for pwc in batch_costs]
-        all_chars = bulk_extract_product_characteristics(batch_product_ids)
+    from flask import current_app
+    app = current_app._get_current_object()
 
-        for pwc in batch_costs:
-            try:
-                product_chars = all_chars.get(pwc.product_id, {})
-
-                # If no weight and no dimensions — price = 0, skip formula
-                has_weight = product_chars.get('вес', 0) > 0
-                has_dims = any(
-                    product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
-                    product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
-                    for s in ['длина', 'ширина', 'высота']
-                )
-
-                if not has_weight and not has_dims:
-                    pwc.calculated_price = 0
-                    pwc.calculated_delivery = None
-                    pwc.calculated_at = datetime.now()
-                    zero_price_count += 1
-                    product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
-                    if len(zero_price_reasons) < 20:
-                        zero_price_reasons.append({'name': product_name, 'reason': 'Нет веса и габаритов'})
-                    success_count += 1
-                    continue
-
-                price, _ = calculate_product_price(
-                    cost_price=pwc.cost_price,
-                    currency_rate=currency_rate,
-                    product_characteristics=product_chars,
-                    warehouse_variables=var_list,
-                    final_formula=warehouse.formula.formula
-                )
-                pwc.calculated_price = round(price, 2)
-                pwc.calculated_at = datetime.now()
-
-                # Calculate delivery if formula exists
-                if delivery_formula_text:
-                    try:
-                        delivery, _ = calculate_product_price(
-                            cost_price=pwc.cost_price,
-                            currency_rate=currency_rate,
-                            product_characteristics=product_chars,
-                            warehouse_variables=var_list,
-                            final_formula=delivery_formula_text
-                        )
-                        pwc.calculated_delivery = round(delivery, 2)
-                        delivery_count += 1
-                    except (FormulaError, Exception):
-                        pwc.calculated_delivery = None
-                else:
-                    pwc.calculated_delivery = None
-
-                success_count += 1
-            except FormulaError as e:
-                error_count += 1
-                product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
-                errors.append(f'{product_name}: {str(e)}')
-
-        db.session.commit()
-
-    # Update product.price and product.supplier_id with min price across all warehouses
-    _update_product_prices_from_warehouse(warehouse_id)
-
-    price_count = success_count - zero_price_count
+    thread = threading.Thread(
+        target=_do_recalculate,
+        args=(app, warehouse_id, currency_rate, var_list, cost_ids,
+              warehouse.formula.formula, delivery_formula_text),
+        daemon=True
+    )
+    thread.start()
 
     return jsonify({
         'success': True,
-        'message': f'Пересчитано: {success_count} из {total_count}',
-        'data': {
-            'total': total_count,
-            'price_calculated': price_count,
-            'delivery_calculated': delivery_count,
-            'zero_price': zero_price_count,
-            'zero_price_reasons': zero_price_reasons,
-            'error_count': error_count,
-            'errors': errors[:20],
-            'has_delivery_formula': bool(delivery_formula_text),
-        }
+        'message': f'Пересчёт запущен: {len(cost_ids)} товаров',
+        'data': _recalc_status[warehouse_id]
+    }), 200
+
+
+@warehouses_bp.route('/<int:warehouse_id>/recalculate-status', methods=['GET'])
+@jwt_required()
+def recalculate_status(warehouse_id):
+    """Check recalculation progress."""
+    status = _recalc_status.get(warehouse_id)
+    if not status:
+        return jsonify({'success': True, 'data': None}), 200
+
+    return jsonify({
+        'success': True,
+        'message': f'{"Завершено" if status["status"] == "done" else "Выполняется"}: {status["processed"]}/{status["total"]}',
+        'data': {**status}
     }), 200
 
 
