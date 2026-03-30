@@ -303,6 +303,84 @@ def calculate_product_price(
     return price, variables
 
 
+def bulk_extract_product_characteristics(product_ids: list) -> Dict[int, Dict[str, float]]:
+    """
+    Extract characteristics for multiple products in bulk (2 queries total).
+    Returns {product_id: {char_name: value, ...}, ...}
+    """
+    from models.characteristic import ProductCharacteristic
+    from models.characteristics_list import CharacteristicsList
+
+    if not product_ids:
+        return {}
+
+    # Fetch ALL characteristics for all products in one query
+    all_chars = ProductCharacteristic.query.filter(
+        ProductCharacteristic.product_id.in_(product_ids)
+    ).all()
+
+    # Collect all char_ids for CharacteristicsList lookup
+    all_char_ids = set()
+    for c in all_chars:
+        try:
+            all_char_ids.add(int(c.key))
+        except (ValueError, TypeError):
+            pass
+
+    # Fetch all CharacteristicsList entries in one query
+    char_list_map = {}
+    if all_char_ids:
+        char_list = CharacteristicsList.query.filter(
+            CharacteristicsList.id.in_(list(all_char_ids))
+        ).all()
+        char_list_map = {ch.id: ch for ch in char_list}
+
+    # Group characteristics by product_id
+    product_chars_raw: Dict[int, list] = {}
+    for c in all_chars:
+        product_chars_raw.setdefault(c.product_id, []).append(c)
+
+    # Process each product
+    result: Dict[int, Dict[str, float]] = {}
+    for pid in product_ids:
+        chars = product_chars_raw.get(pid, [])
+        product_result: Dict[str, float] = {}
+
+        for c in chars:
+            try:
+                char_id = int(c.key)
+            except (ValueError, TypeError):
+                continue
+
+            char_info = char_list_map.get(char_id)
+            if not char_info:
+                continue
+
+            char_name = char_info.characteristic_key.lower().strip()
+
+            for var_name, patterns in CHARACTERISTIC_MAPPING.items():
+                for pattern in patterns:
+                    if pattern in char_name:
+                        numeric_value = _extract_number(c.value)
+                        if numeric_value is not None:
+                            product_result[var_name] = numeric_value
+                        break
+
+            for var_prefix, patterns in DIMENSION_CHARACTERISTICS.items():
+                for pattern in patterns:
+                    if pattern in char_name:
+                        dims = _parse_dimensions(c.value)
+                        if dims:
+                            product_result[f'{var_prefix}_длина'] = dims[0]
+                            product_result[f'{var_prefix}_ширина'] = dims[1]
+                            product_result[f'{var_prefix}_высота'] = dims[2]
+                        break
+
+        result[pid] = product_result
+
+    return result
+
+
 def extract_product_characteristics(product_id: int) -> Dict[str, float]:
     """
     Extract dimension/weight characteristics from a product.

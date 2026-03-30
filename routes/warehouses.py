@@ -6,8 +6,8 @@ from models.product_warehouse_cost import ProductWarehouseCost
 from models.currency import Currency
 from utils.formula_engine import (
     validate_formula, calculate_product_price,
-    extract_product_characteristics, BUILTIN_VARIABLE_NAMES,
-    FormulaError
+    extract_product_characteristics, bulk_extract_product_characteristics,
+    BUILTIN_VARIABLE_NAMES, FormulaError
 )
 from datetime import datetime
 
@@ -567,9 +567,13 @@ def recalculate_warehouse(warehouse_id):
         batch_ids = cost_ids[batch_start:batch_start + BATCH_SIZE]
         batch_costs = ProductWarehouseCost.query.filter(ProductWarehouseCost.id.in_(batch_ids)).all()
 
+        # Pre-fetch characteristics for all products in this batch (2 queries instead of N)
+        batch_product_ids = [pwc.product_id for pwc in batch_costs]
+        all_chars = bulk_extract_product_characteristics(batch_product_ids)
+
         for pwc in batch_costs:
             try:
-                product_chars = extract_product_characteristics(pwc.product_id)
+                product_chars = all_chars.get(pwc.product_id, {})
 
                 # If no weight and no dimensions — price = 0, skip formula
                 has_weight = product_chars.get('вес', 0) > 0
