@@ -49,9 +49,11 @@ def get_product_costs():
         if warehouse:
             data['warehouse_name'] = warehouse.name
             data['supplier_name'] = warehouse.supplier.name if warehouse.supplier else None
+            data['currency_code'] = warehouse.currency.code if warehouse.currency else 'KZT'
         else:
             data['warehouse_name'] = None
             data['supplier_name'] = None
+            data['currency_code'] = 'KZT'
         result.append(data)
 
     return jsonify({
