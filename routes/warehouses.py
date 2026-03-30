@@ -632,10 +632,10 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
                 db.session.rollback()
 
             status['status'] = 'done'
-            status['finished_at'] = datetime.now().isoformat()
+            status['finished_at'] = datetime.utcnow().isoformat() + 'Z'
     except Exception as e:
         status['status'] = 'error'
-        status['finished_at'] = datetime.now().isoformat()
+        status['finished_at'] = datetime.utcnow().isoformat() + 'Z'
         if len(status['errors']) < 20:
             status['errors'].append(f'Fatal: {str(e)[:200]}')
 
@@ -674,7 +674,7 @@ def recalculate_warehouse(warehouse_id):
 
     _recalc_status[warehouse_id] = {
         'status': 'running',
-        'started_at': datetime.now().isoformat(),
+        'started_at': datetime.utcnow().isoformat() + 'Z',
         'finished_at': None,
         'total': len(cost_ids),
         'processed': 0,
