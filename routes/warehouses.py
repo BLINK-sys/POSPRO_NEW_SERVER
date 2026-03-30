@@ -580,8 +580,7 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
                             pwc.calculated_at = datetime.now()
                             status['zero_price'] += 1
                             product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
-                            if len(status['zero_price_reasons']) < 20:
-                                status['zero_price_reasons'].append({'name': product_name, 'reason': 'Нет веса и габаритов'})
+                            status['zero_price_reasons'].append({'name': product_name, 'reason': 'Нет веса и габаритов'})
                             status['processed'] += 1
                             continue
 
