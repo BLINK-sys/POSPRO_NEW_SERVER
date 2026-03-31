@@ -11,6 +11,7 @@ class Warehouse(db.Model):
     city = db.Column(db.String(255))
     address = db.Column(db.Text)
     currency_id = db.Column(db.Integer, db.ForeignKey('currency.id'), nullable=False)
+    last_recalc = db.Column(db.JSON, nullable=True)  # last recalculation results
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -33,6 +34,7 @@ class Warehouse(db.Model):
             'address': self.address,
             'currency_id': self.currency_id,
             'currency': self.currency.to_dict() if self.currency else None,
+            'last_recalc': self.last_recalc,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

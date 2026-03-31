@@ -639,6 +639,16 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
         if len(status['errors']) < 20:
             status['errors'].append(f'Fatal: {str(e)[:200]}')
 
+    # Persist results to DB
+    try:
+        with app.app_context():
+            wh = Warehouse.query.get(warehouse_id)
+            if wh:
+                wh.last_recalc = {k: v for k, v in status.items()}
+                db.session.commit()
+    except Exception:
+        pass
+
 
 @warehouses_bp.route('/<int:warehouse_id>/recalculate', methods=['POST'])
 @jwt_required()
@@ -711,6 +721,14 @@ def recalculate_status(warehouse_id):
     """Check recalculation progress."""
     status = _recalc_status.get(warehouse_id)
     if not status:
+        # Try loading from DB
+        wh = Warehouse.query.get(warehouse_id)
+        if wh and wh.last_recalc:
+            return jsonify({
+                'success': True,
+                'message': f'Последний пересчёт: {wh.last_recalc.get("processed", 0)}/{wh.last_recalc.get("total", 0)}',
+                'data': wh.last_recalc
+            }), 200
         return jsonify({'success': True, 'data': None}), 200
 
     return jsonify({
