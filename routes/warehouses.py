@@ -673,6 +673,19 @@ def recalculate_warehouse(warehouse_id):
             'data': {**s}
         }), 200
 
+    # Refresh RUB rate from Halyk Bank before recalculation
+    rate_refreshed = None
+    if warehouse.currency and warehouse.currency.code == 'RUB':
+        try:
+            from utils.currency_rates import fetch_rub_rate_halyk
+            new_rate = fetch_rub_rate_halyk()
+            old_rate = warehouse.currency.rate_to_tenge
+            warehouse.currency.rate_to_tenge = new_rate
+            db.session.commit()
+            rate_refreshed = {'old': old_rate, 'new': new_rate}
+        except Exception as e:
+            rate_refreshed = {'error': str(e)}
+
     currency_rate = warehouse.currency.rate_to_tenge if warehouse.currency else 1.0
     variables = WarehouseVariable.query.filter_by(warehouse_id=warehouse_id) \
         .order_by(WarehouseVariable.sort_order).all()
@@ -695,6 +708,8 @@ def recalculate_warehouse(warehouse_id):
         'error_count': 0,
         'errors': [],
         'has_delivery_formula': bool(delivery_formula_text),
+        'currency_rate': currency_rate,
+        'rate_refreshed': rate_refreshed,
     }
 
     from flask import current_app

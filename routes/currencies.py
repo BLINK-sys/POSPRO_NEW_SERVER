@@ -125,3 +125,40 @@ def delete_currency(currency_id):
     db.session.commit()
 
     return jsonify({'success': True, 'message': 'Валюта удалена'}), 200
+
+
+@currencies_bp.route('/refresh-rate', methods=['POST'])
+@jwt_required()
+def refresh_rub_rate():
+    """Fetch fresh RUB/KZT rate from Halyk Bank and update in DB."""
+    if not check_admin():
+        return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
+
+    from utils.currency_rates import fetch_rub_rate_halyk
+
+    try:
+        new_rate = fetch_rub_rate_halyk()
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Ошибка получения курса: {str(e)}'
+        }), 500
+
+    # Update RUB in DB
+    rub = Currency.query.filter_by(code='RUB').first()
+    if not rub:
+        return jsonify({'success': False, 'message': 'Валюта RUB не найдена в справочнике'}), 404
+
+    old_rate = rub.rate_to_tenge
+    rub.rate_to_tenge = new_rate
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'message': f'Курс RUB обновлён: {old_rate} → {new_rate}',
+        'data': {
+            'code': 'RUB',
+            'old_rate': old_rate,
+            'new_rate': new_rate,
+        }
+    }), 200
