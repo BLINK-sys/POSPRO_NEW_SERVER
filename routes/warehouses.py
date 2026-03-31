@@ -681,13 +681,14 @@ def recalculate_warehouse(warehouse_id):
         bank_rates = fetch_halyk_rates()
         updated = []
         for curr in Currency.query.all():
-            if curr.code in bank_rates and curr.rate_to_tenge != bank_rates[curr.code]:
+            if curr.code in bank_rates:
                 old_rate = curr.rate_to_tenge
-                curr.rate_to_tenge = bank_rates[curr.code]
-                updated.append({'code': curr.code, 'old': old_rate, 'new': bank_rates[curr.code]})
-        if updated:
-            db.session.commit()
-            rate_refreshed = updated
+                new_rate = bank_rates[curr.code]
+                if old_rate != new_rate:
+                    curr.rate_to_tenge = new_rate
+                updated.append({'code': curr.code, 'old': old_rate, 'new': new_rate})
+        db.session.commit()
+        rate_refreshed = updated
     except Exception as e:
         rate_refreshed = {'error': str(e)}
 
