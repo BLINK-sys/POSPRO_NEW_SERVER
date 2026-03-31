@@ -52,7 +52,4 @@ def fetch_rub_rate_halyk() -> float:
     if sell_rate is None:
         raise ValueError("Не найден курс продажи RUB")
 
-    # Add 1% markup (same logic as BioApiNewShop)
-    rate_value = round(sell_rate + (sell_rate * 0.01), 2)
-
-    return rate_value
+    return round(sell_rate, 2)
