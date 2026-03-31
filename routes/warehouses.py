@@ -673,16 +673,19 @@ def recalculate_warehouse(warehouse_id):
             'data': {**s}
         }), 200
 
-    # Refresh RUB rate from Halyk Bank before recalculation
+    # Refresh currency rates from Halyk Bank before recalculation
     rate_refreshed = None
-    if warehouse.currency and warehouse.currency.code == 'RUB':
+    if warehouse.currency and warehouse.currency.code != 'KZT':
         try:
-            from utils.currency_rates import fetch_rub_rate_halyk
-            new_rate = fetch_rub_rate_halyk()
-            old_rate = warehouse.currency.rate_to_tenge
-            warehouse.currency.rate_to_tenge = new_rate
-            db.session.commit()
-            rate_refreshed = {'old': old_rate, 'new': new_rate}
+            from utils.currency_rates import fetch_halyk_rates
+            bank_rates = fetch_halyk_rates()
+            code = warehouse.currency.code
+            if code in bank_rates:
+                old_rate = warehouse.currency.rate_to_tenge
+                new_rate = bank_rates[code]
+                warehouse.currency.rate_to_tenge = new_rate
+                db.session.commit()
+                rate_refreshed = {'code': code, 'old': old_rate, 'new': new_rate}
         except Exception as e:
             rate_refreshed = {'error': str(e)}
 

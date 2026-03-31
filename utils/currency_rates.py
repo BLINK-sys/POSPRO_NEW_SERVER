@@ -1,10 +1,12 @@
 import requests
+from typing import Dict
 
 
-def fetch_rub_rate_halyk() -> float:
+def fetch_halyk_rates(markup: float = 0.01) -> Dict[str, float]:
     """
-    Fetch RUB/KZT sell rate from Halyk Bank API (for business).
-    Returns rate with +1% markup.
+    Fetch currency sell rates from Halyk Bank API (for business).
+    Returns dict like {'RUB': 6.43, 'USD': 490.15, 'EUR': 564.50}
+    with markup applied (default +1%).
     """
     URL = "https://back.halykbank.kz/common/currency-history"
     headers = {
@@ -44,15 +46,13 @@ def fetch_rub_rate_halyk() -> float:
 
     currency_source = latest_data.get("legalPersons") or latest_data.get("cards") or {}
 
-    rub_data = currency_source.get("RUB/KZT")
-    if not rub_data:
-        raise ValueError("Не найден курс RUB в данных API")
+    rates = {}
+    for pair_key, pair_data in currency_source.items():
+        if not pair_key.endswith('/KZT'):
+            continue
+        code = pair_key.split('/')[0]
+        sell_rate = pair_data.get("sell")
+        if sell_rate is not None:
+            rates[code] = round(sell_rate * (1 + markup), 2)
 
-    sell_rate = rub_data.get("sell")
-    if sell_rate is None:
-        raise ValueError("Не найден курс продажи RUB")
-
-    # Add 1% markup
-    rate_value = round(sell_rate * 1.01, 2)
-
-    return rate_value
+    return rates
