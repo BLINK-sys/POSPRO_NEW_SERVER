@@ -52,4 +52,7 @@ def fetch_rub_rate_halyk() -> float:
     if sell_rate is None:
         raise ValueError("Не найден курс продажи RUB")
 
-    return round(sell_rate, 2)
+    # Add 1% markup
+    rate_value = round(sell_rate * 1.01, 2)
+
+    return rate_value
