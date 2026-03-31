@@ -177,6 +177,15 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция delivery formula: {e}")
 
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE kp_history ADD COLUMN IF NOT EXISTS calculator_data JSON"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция kp_history calculator_data: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 

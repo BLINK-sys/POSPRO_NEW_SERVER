@@ -12,6 +12,7 @@ class KPHistory(db.Model):
     items = db.Column(db.JSON, nullable=False, default=list)
     settings = db.Column(db.JSON, nullable=False, default=dict)
     total_amount = db.Column(db.Float, nullable=False, default=0)
+    calculator_data = db.Column(db.JSON, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self, short=False):
@@ -24,4 +25,5 @@ class KPHistory(db.Model):
         if not short:
             result['items'] = self.items
             result['settings'] = self.settings
+            result['calculator_data'] = self.calculator_data
         return result

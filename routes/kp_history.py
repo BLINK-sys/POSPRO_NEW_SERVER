@@ -83,6 +83,8 @@ def save_kp_history():
         if not name:
             name = 'КП без названия'
 
+        calculator_data = data.get('calculator_data', None)
+
         record = KPHistory(
             user_id=user_id,
             user_role=role,
@@ -90,6 +92,7 @@ def save_kp_history():
             items=items,
             settings=settings,
             total_amount=total_amount,
+            calculator_data=calculator_data,
         )
         db.session.add(record)
         db.session.commit()
@@ -136,6 +139,8 @@ def update_kp_history(history_id):
             record.settings = data['settings']
         if 'total_amount' in data:
             record.total_amount = data['total_amount']
+        if 'calculator_data' in data:
+            record.calculator_data = data['calculator_data']
 
         db.session.commit()
 
