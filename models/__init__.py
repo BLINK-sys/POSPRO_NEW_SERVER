@@ -21,3 +21,4 @@ from .currency import Currency
 from .warehouse import Warehouse, WarehouseVariable, WarehouseFormula
 from .product_warehouse_cost import ProductWarehouseCost
 from .help_article import HelpArticle, HelpArticleMedia
+from .driver import Driver

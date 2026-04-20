@@ -40,6 +40,7 @@ from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
 from routes.help_articles import help_articles_bp
+from routes.drivers import drivers_bp
 from models.systemuser import SystemUser
 
 
@@ -107,6 +108,9 @@ def create_app():
 
     # 🔹 Справка (инструкции для админов/менеджеров)
     app.register_blueprint(help_articles_bp, url_prefix='/api/help-articles')  # /api/help-articles/*
+
+    # 🔹 Мастер-список драйверов (переиспользуемых в нескольких товарах)
+    app.register_blueprint(drivers_bp, url_prefix='/api/drivers')  # /api/drivers/*
 
     # 🔹 Главная страница (настройки, категории, баннеры, преимущества и пр.)
     app.register_blueprint(homepage_categories_bp, url_prefix='/api/admin')  # /api/admin/homepage-categories
@@ -198,6 +202,15 @@ def create_app():
         except Exception as e:
             db.session.rollback()
             print(f"⚠️ Миграция warehouse last_recalc: {e}")
+
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE product_document ADD COLUMN IF NOT EXISTS driver_id INTEGER REFERENCES drivers(id) ON DELETE SET NULL"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция product_document.driver_id: {e}")
 
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
@@ -332,6 +345,15 @@ def serve_help_video(article_id, filename):
     return send_from_directory(
         os.path.join(app.config['UPLOAD_FOLDER'], 'help', str(article_id)),
         filename
+    )
+
+
+@app.route('/uploads/drivers/<int:driver_id>/<filename>')
+def serve_driver_file(driver_id, filename):
+    return send_file(
+        os.path.join(app.config['UPLOAD_FOLDER'], 'drivers', str(driver_id), filename),
+        as_attachment=True,
+        download_name=filename,
     )
 
 

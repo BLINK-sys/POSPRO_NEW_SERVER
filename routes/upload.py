@@ -680,9 +680,10 @@ def get_drivers(product_id):
         'filename': d.filename,
         'url': d.url,
         'file_type': d.file_type,
-        'mime_type': d.mime_type
+        'mime_type': d.mime_type,
+        'driver_id': d.driver_id,
     } for d in drivers]
-    
+
     print(f"Returning drivers data: {result}")
     return jsonify(result)
 
