@@ -769,10 +769,10 @@ def _handle_file_upload(req, folder_type):
     print(f"Handling file upload for {folder_type}")
     print(f"Form data: {req.form}")
     print(f"Files: {list(req.files.keys())}")
-    
+
     product_id = req.form.get('product_id')
     print(f"Product ID: {product_id}")
-    
+
     if 'file' not in req.files or not product_id:
         error_msg = f"No file or product_id provided. Files: {list(req.files.keys())}, product_id: {product_id}"
         print(error_msg)
@@ -780,10 +780,17 @@ def _handle_file_upload(req, folder_type):
 
     file = req.files['file']
     print(f"File: {file.filename}, Content type: {file.content_type}")
-    
+
     if file.filename == '':
         print("No selected file")
         return jsonify({'error': 'No selected file'}), 400
+
+    # Индивидуальный лимит для драйверов — 200MB
+    if folder_type == 'drivers':
+        driver_limit = current_app.config.get('DRIVER_MAX_SIZE', 200 * 1024 * 1024)
+        if req.content_length and req.content_length > driver_limit:
+            limit_mb = driver_limit // (1024 * 1024)
+            return jsonify({'error': f'Файл драйвера больше {limit_mb}MB'}), 413
 
     filename = sanitize_filename(file.filename)
 

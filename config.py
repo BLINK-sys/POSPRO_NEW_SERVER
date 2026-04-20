@@ -10,7 +10,8 @@ class Config:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret")
     JWT_IDENTITY_CLAIM = 'sub'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 20MB
+    MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB (общий лимит; для драйверов проверка 200MB в роуте)
+    DRIVER_MAX_SIZE = 200 * 1024 * 1024  # 200MB для драйверов товара
     ALLOWED_EXTENSIONS = {
         'png', 'jpg', 'jpeg', 'gif', 'pdf', 'zip', 'rar', 'doc', 'docx',
         'mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm'

@@ -268,7 +268,7 @@ def finalize_product(product_id):
             
             # Обработка бренда: используем только brand_id
             brand_id = data.get('brand_id', product.brand_id)
-            
+
             if brand_id is not None and brand_id:
                 # Проверяем существование бренда
                 brand_obj = Brand.query.get(brand_id)
@@ -277,7 +277,7 @@ def finalize_product(product_id):
             elif brand_id == '' or brand_id == 'no':
                 brand_id = None
 
-            product.status = status            
+            product.status = status
             product.is_visible = data.get('is_visible', False)
             product.country = data.get('country', '')
             product.brand_id = brand_id

@@ -39,6 +39,7 @@ from routes.product_costs import product_costs_bp
 from routes.order_statuses import order_statuses_bp
 from routes.product_availability_statuses import product_availability_statuses_bp
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
+from routes.help_articles import help_articles_bp
 from models.systemuser import SystemUser
 
 
@@ -103,6 +104,9 @@ def create_app():
     
     # 🔹 Статусы наличия товара (публичные)
     app.register_blueprint(public_product_availability_statuses_bp, url_prefix='/api')  # /api/product-availability-statuses/check/*
+
+    # 🔹 Справка (инструкции для админов/менеджеров)
+    app.register_blueprint(help_articles_bp, url_prefix='/api/help-articles')  # /api/help-articles/*
 
     # 🔹 Главная страница (настройки, категории, баннеры, преимущества и пр.)
     app.register_blueprint(homepage_categories_bp, url_prefix='/api/admin')  # /api/admin/homepage-categories
@@ -319,6 +323,14 @@ def serve_brand_image(brand_id, filename):
 def serve_category_image(category_id, filename):
     return send_from_directory(
         os.path.join(app.config['UPLOAD_FOLDER'], 'categories', str(category_id)),
+        filename
+    )
+
+
+@app.route('/uploads/help/<int:article_id>/<filename>')
+def serve_help_video(article_id, filename):
+    return send_from_directory(
+        os.path.join(app.config['UPLOAD_FOLDER'], 'help', str(article_id)),
         filename
     )
 
