@@ -13,6 +13,7 @@ class Driver(db.Model):
     filename = db.Column(db.String(255))
     mime_type = db.Column(db.String(100))
     file_size = db.Column(db.BigInteger)
+    image_url = db.Column(db.String(500))  # картинка для карточки
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     order = db.Column(db.Integer, default=0, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -26,6 +27,7 @@ class Driver(db.Model):
             'filename': self.filename,
             'mime_type': self.mime_type,
             'file_size': self.file_size,
+            'image_url': self.image_url,
             'is_active': self.is_active,
             'order': self.order,
             'created_at': self.created_at.isoformat() if self.created_at else None,

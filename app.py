@@ -212,6 +212,15 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция product_document.driver_id: {e}")
 
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция drivers.image_url: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 
@@ -345,6 +354,14 @@ def serve_help_video(article_id, filename):
     return send_from_directory(
         os.path.join(app.config['UPLOAD_FOLDER'], 'help', str(article_id)),
         filename
+    )
+
+
+@app.route('/uploads/drivers/<int:driver_id>/image/<filename>')
+def serve_driver_image(driver_id, filename):
+    return send_from_directory(
+        os.path.join(app.config['UPLOAD_FOLDER'], 'drivers', str(driver_id), 'image'),
+        filename,
     )
 
 

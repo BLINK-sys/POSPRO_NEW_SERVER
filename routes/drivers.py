@@ -1,6 +1,8 @@
 import os
 import re
 import mimetypes
+from urllib.parse import urlparse
+from urllib.request import urlopen, Request
 
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt
@@ -9,6 +11,8 @@ from extensions import db
 from models import Driver, ProductDocument, Product
 
 drivers_bp = Blueprint('drivers', __name__)
+
+IMAGE_EXTS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'}
 
 
 def _is_admin():
@@ -61,6 +65,7 @@ def list_public_drivers():
             'filename': d.filename,
             'mime_type': d.mime_type,
             'file_size': d.file_size,
+            'image_url': d.image_url,
         }
         for d in drivers
     ])
@@ -230,6 +235,102 @@ def replace_driver_file(driver_id):
 
     usage = _usage_map()
     return jsonify(driver.to_dict(usage_count=usage.get(driver.id, 0)))
+
+
+def _save_driver_image_bytes(driver, file_bytes, orig_name):
+    """Сохранить байты картинки в папку драйвера, обновить driver.image_url."""
+    filename = _sanitize_filename(orig_name) or 'image.jpg'
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    if ext not in IMAGE_EXTS:
+        raise ValueError(f'Разрешены только изображения: {", ".join(sorted(IMAGE_EXTS))}')
+
+    folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'drivers', str(driver.id), 'image')
+    os.makedirs(folder, exist_ok=True)
+
+    # Удалить старые картинки в папке image
+    for existing in os.listdir(folder):
+        try:
+            os.remove(os.path.join(folder, existing))
+        except Exception:
+            pass
+
+    dest = os.path.join(folder, filename)
+    with open(dest, 'wb') as f:
+        f.write(file_bytes)
+
+    driver.image_url = f'/uploads/drivers/{driver.id}/image/{filename}'
+    db.session.commit()
+
+
+@drivers_bp.route('/<int:driver_id>/image', methods=['POST'])
+@jwt_required()
+def upload_driver_image(driver_id):
+    """Загрузить картинку драйвера файлом (multipart)."""
+    if not _is_admin():
+        return jsonify({'error': 'Только администратор'}), 403
+
+    driver = Driver.query.get_or_404(driver_id)
+    if 'file' not in request.files:
+        return jsonify({'error': 'Файл не передан'}), 400
+
+    file = request.files['file']
+    if not file or not file.filename:
+        return jsonify({'error': 'Файл не передан'}), 400
+
+    try:
+        _save_driver_image_bytes(driver, file.read(), file.filename)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    return jsonify({'image_url': driver.image_url})
+
+
+@drivers_bp.route('/<int:driver_id>/image-url', methods=['POST'])
+@jwt_required()
+def upload_driver_image_by_url(driver_id):
+    """Скачать картинку по URL и сохранить локально."""
+    if not _is_admin():
+        return jsonify({'error': 'Только администратор'}), 403
+
+    driver = Driver.query.get_or_404(driver_id)
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'URL обязателен'}), 400
+
+    try:
+        req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urlopen(req, timeout=30) as resp:
+            content = resp.read()
+    except Exception as e:
+        return jsonify({'error': f'Не удалось скачать: {e}'}), 400
+
+    orig_name = os.path.basename(urlparse(url).path) or 'image.jpg'
+    try:
+        _save_driver_image_bytes(driver, content, orig_name)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    return jsonify({'image_url': driver.image_url})
+
+
+@drivers_bp.route('/<int:driver_id>/image', methods=['DELETE'])
+@jwt_required()
+def delete_driver_image(driver_id):
+    if not _is_admin():
+        return jsonify({'error': 'Только администратор'}), 403
+
+    driver = Driver.query.get_or_404(driver_id)
+    if driver.image_url and driver.image_url.startswith('/uploads/'):
+        file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], driver.image_url[len('/uploads/'):])
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+    driver.image_url = None
+    db.session.commit()
+    return jsonify({'message': 'Картинка удалена'})
 
 
 @drivers_bp.route('/<int:driver_id>', methods=['DELETE'])
