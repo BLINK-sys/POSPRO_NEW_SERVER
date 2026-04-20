@@ -863,23 +863,26 @@ def delete_driver(doc_id):
 
 def _delete_document_or_driver(doc_id, file_type):
     doc = ProductDocument.query.filter_by(id=doc_id, file_type=file_type).first_or_404()
-    
+
     print(f"Deleting {file_type}: {doc.filename}")
     print(f"Database URL: {doc.url}")
     print(f"Database filename: {doc.filename}")
 
-    if doc.url.startswith('/uploads/'):
+    # Если это привязка из мастер-списка (driver_id != None) — только отвязываем,
+    # сам файл остаётся в /uploads/drivers/{driver_id}/ — он общий для нескольких товаров.
+    is_linked = doc.driver_id is not None
+
+    if not is_linked and doc.url.startswith('/uploads/'):
         try:
             filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.url[9:])  # Remove '/uploads/' prefix
             print(f"Full file path: {filepath}")
             print(f"File exists: {os.path.exists(filepath)}")
-            
-            # Проверяем содержимое директории
+
             dir_path = os.path.dirname(filepath)
             if os.path.exists(dir_path):
                 files_in_dir = os.listdir(dir_path)
                 print(f"Files in directory {dir_path}: {files_in_dir}")
-            
+
             if os.path.exists(filepath):
                 os.remove(filepath)
                 print(f"File deleted successfully: {filepath}")
@@ -892,7 +895,8 @@ def _delete_document_or_driver(doc_id, file_type):
 
     db.session.delete(doc)
     db.session.commit()
-    return jsonify({'message': f'{file_type.capitalize()} deleted'})
+    msg = f'{file_type.capitalize()} {"unlinked" if is_linked else "deleted"}'
+    return jsonify({'message': msg, 'unlinked': is_linked})
 
 
 @upload_bp.route('/small-banner', methods=['POST'])
