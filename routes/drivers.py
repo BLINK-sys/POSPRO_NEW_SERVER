@@ -45,6 +45,27 @@ def list_drivers():
     return jsonify([d.to_dict(usage_count=usage.get(d.id, 0)) for d in drivers])
 
 
+@drivers_bp.route('/public', methods=['GET'])
+def list_public_drivers():
+    """Публичный список активных драйверов — без JWT, для каталога на сайте."""
+    drivers = (
+        Driver.query.filter(Driver.is_active == True)  # noqa: E712
+        .order_by(Driver.order, Driver.id)
+        .all()
+    )
+    return jsonify([
+        {
+            'id': d.id,
+            'name': d.name,
+            'url': d.url,
+            'filename': d.filename,
+            'mime_type': d.mime_type,
+            'file_size': d.file_size,
+        }
+        for d in drivers
+    ])
+
+
 @drivers_bp.route('/<int:driver_id>', methods=['GET'])
 @jwt_required()
 def get_driver(driver_id):
