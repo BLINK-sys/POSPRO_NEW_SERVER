@@ -237,12 +237,33 @@ def replace_driver_file(driver_id):
     return jsonify(driver.to_dict(usage_count=usage.get(driver.id, 0)))
 
 
-def _save_driver_image_bytes(driver, file_bytes, orig_name):
+CONTENT_TYPE_TO_EXT = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+}
+
+
+def _save_driver_image_bytes(driver, file_bytes, orig_name, content_type=None):
     """Сохранить байты картинки в папку драйвера, обновить driver.image_url."""
-    filename = _sanitize_filename(orig_name) or 'image.jpg'
+    filename = _sanitize_filename(orig_name) or 'image'
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+
+    # Если расширения нет / неверное — пробуем по Content-Type
+    if ext not in IMAGE_EXTS and content_type:
+        ct_main = content_type.split(';')[0].strip().lower()
+        guessed = CONTENT_TYPE_TO_EXT.get(ct_main)
+        if guessed:
+            ext = guessed
+            filename = f"{filename}.{ext}" if '.' not in filename else f"{filename.rsplit('.', 1)[0]}.{ext}"
+
     if ext not in IMAGE_EXTS:
-        raise ValueError(f'Разрешены только изображения: {", ".join(sorted(IMAGE_EXTS))}')
+        raise ValueError(
+            f'Не удалось определить тип изображения. Разрешены: {", ".join(sorted(IMAGE_EXTS))}'
+        )
 
     folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'drivers', str(driver.id), 'image')
     os.makedirs(folder, exist_ok=True)
@@ -278,7 +299,7 @@ def upload_driver_image(driver_id):
         return jsonify({'error': 'Файл не передан'}), 400
 
     try:
-        _save_driver_image_bytes(driver, file.read(), file.filename)
+        _save_driver_image_bytes(driver, file.read(), file.filename, content_type=file.content_type)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -302,12 +323,13 @@ def upload_driver_image_by_url(driver_id):
         req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urlopen(req, timeout=30) as resp:
             content = resp.read()
+            content_type = resp.headers.get('Content-Type', '')
     except Exception as e:
         return jsonify({'error': f'Не удалось скачать: {e}'}), 400
 
-    orig_name = os.path.basename(urlparse(url).path) or 'image.jpg'
+    orig_name = os.path.basename(urlparse(url).path) or 'image'
     try:
-        _save_driver_image_bytes(driver, content, orig_name)
+        _save_driver_image_bytes(driver, content, orig_name, content_type=content_type)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
