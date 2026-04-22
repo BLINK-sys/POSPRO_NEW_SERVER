@@ -32,13 +32,19 @@ def get_system_users():
 @system_users_bp.route('/system-users', methods=['POST'])
 def create_system_user():
     data = request.get_json()
-    
+
     # Логируем полученные данные для отладки
     print(f"Create system user data: {data}")
 
-    # Проверка email во всех таблицах
-    existing_admin = SystemUser.query.filter_by(email=data['email']).first()
-    existing_client = User.query.filter_by(email=data['email']).first()
+    # Нормализуем email — храним в lowercase, чтобы избежать проблем с регистром при логине
+    email = (data.get('email') or '').strip().lower()
+    if not email:
+        return jsonify({'error': 'Email обязателен'}), 400
+    data['email'] = email
+
+    # Проверка email во всех таблицах (без учёта регистра)
+    existing_admin = SystemUser.query.filter(db.func.lower(SystemUser.email) == email).first()
+    existing_client = User.query.filter(db.func.lower(User.email) == email).first()
     if existing_admin or existing_client:
         return jsonify({'error': 'Email уже используется'}), 400
 

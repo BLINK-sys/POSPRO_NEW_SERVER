@@ -82,11 +82,18 @@ def register():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-    email = data.get('email')
+    email = (data.get('email') or '').strip()
     password = data.get('password')
 
+    if not email or not password:
+        return jsonify({'error': 'Не указаны email или пароль'}), 400
+
+    # Поиск без учёта регистра — иначе пользователь, вводящий email с другим регистром,
+    # не сможет войти, даже если такой email есть в БД.
+    email_lower = email.lower()
+
     # Попробовать найти среди админов
-    admin = SystemUser.query.filter_by(email=email).first()
+    admin = SystemUser.query.filter(db.func.lower(SystemUser.email) == email_lower).first()
     if admin and check_password_hash(admin.password_hash, password):
         token = create_access_token(
             identity=str(admin.id),
@@ -106,7 +113,7 @@ def login():
         })
 
     # Попробовать найти среди клиентов
-    user = User.query.filter_by(email=email).first()
+    user = User.query.filter(db.func.lower(User.email) == email_lower).first()
     if user and check_password_hash(user.password_hash, password):
         name = user.full_name or user.ip_name or user.too_name
 
