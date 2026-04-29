@@ -41,6 +41,7 @@ from routes.product_availability_statuses import product_availability_statuses_b
 from routes.public_product_availability_statuses import public_product_availability_statuses_bp
 from routes.help_articles import help_articles_bp
 from routes.drivers import drivers_bp
+from routes.ai_consultant_access import ai_consultant_access_bp
 from models.systemuser import SystemUser
 
 
@@ -93,6 +94,10 @@ def create_app():
     app.register_blueprint(kp_settings_bp, url_prefix='/api')  # /api/kp-settings
     app.register_blueprint(kp_history_bp, url_prefix='/api')   # /api/kp-history
     app.register_blueprint(kp_logos_bp, url_prefix='/api')     # /api/kp-logos
+
+    # 🔹 Доступ к AI Консультанту (страница /ai)
+    app.register_blueprint(ai_consultant_access_bp, url_prefix='/api')
+    # /api/ai-consultant/access (public), /api/admin/ai-consultant/settings (owner)
 
     # 🔹 Видимость каталогов (публичный + админский под /api)
     app.register_blueprint(catalog_visibility_bp, url_prefix='/api')  # /api/catalog-visibility, /api/admin-catalog-visibility
