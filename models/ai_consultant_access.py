@@ -29,6 +29,12 @@ class AIConsultantAccess(db.Model):
     # but a separate list — the two features are gated independently.
     allowed_product_import_user_ids = db.Column(db.JSON, default=list, nullable=False)
 
+    # Per-system-user opt-in for VISIBILITY of the AI Settings admin page
+    # (/admin/ai-consultant) itself. Owner edits this; recipients can then
+    # see the section in the sidebar and manage every other field except
+    # this list (which only the owner can modify).
+    allowed_settings_admin_user_ids = db.Column(db.JSON, default=list, nullable=False)
+
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by_email = db.Column(db.String(255))
 
@@ -40,6 +46,7 @@ class AIConsultantAccess(db.Model):
             'allow_wholesale': bool(self.allow_wholesale),
             'allowed_system_user_ids': list(self.allowed_system_user_ids or []),
             'allowed_product_import_user_ids': list(self.allowed_product_import_user_ids or []),
+            'allowed_settings_admin_user_ids': list(self.allowed_settings_admin_user_ids or []),
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'updated_by_email': self.updated_by_email,
         }
@@ -55,6 +62,7 @@ class AIConsultantAccess(db.Model):
                 allow_wholesale=False,
                 allowed_system_user_ids=[],
                 allowed_product_import_user_ids=[],
+                allowed_settings_admin_user_ids=[],
             )
             db.session.add(row)
             db.session.commit()

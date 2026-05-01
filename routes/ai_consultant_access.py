@@ -103,6 +103,20 @@ def _has_product_import_access(viewer, settings: AIConsultantAccess) -> bool:
     return False
 
 
+def _has_settings_admin_access(viewer, settings: AIConsultantAccess) -> bool:
+    """
+    Visibility / management access for the AI Settings admin page itself.
+    Owner is always allowed; system users must be opted in via
+    allowed_settings_admin_user_ids. Used by the admin sidebar to decide
+    whether to render the menu item, and by the page-level access guard.
+    """
+    if viewer['kind'] == 'admin':
+        return True
+    if viewer['kind'] == 'system':
+        return viewer['user_id'] in (settings.allowed_settings_admin_user_ids or [])
+    return False
+
+
 # ───────────────────────────────────────────────────────────────────
 # Public access check — used by header + /ai page on the frontend
 # ───────────────────────────────────────────────────────────────────
@@ -132,37 +146,53 @@ def check_product_import_access():
     }), 200
 
 
+@ai_consultant_access_bp.route('/ai-consultant/settings-admin-access', methods=['GET'])
+def check_settings_admin_access():
+    """
+    Used by the admin sidebar (to decide whether to show the AI Settings
+    menu item) and by the page itself (to gate access). Returns:
+      - has_access: bool — viewer can see/manage settings
+      - is_owner: bool — viewer is the hardcoded owner. Owner-only fields
+        in the settings PUT (the allowed_settings_admin_user_ids list)
+        rely on this distinction.
+    """
+    viewer = _resolve_viewer()
+    settings = AIConsultantAccess.get_or_create()
+    return jsonify({
+        'has_access': _has_settings_admin_access(viewer, settings),
+        'is_owner': viewer['kind'] == 'admin',
+        'kind': viewer['kind'],
+    }), 200
+
+
 # ───────────────────────────────────────────────────────────────────
 # Admin (owner-only) endpoints
 # ───────────────────────────────────────────────────────────────────
 
-def _require_owner():
-    """Validate that the caller is the hardcoded owner. Returns None on
-    success, or a (response, status) tuple to short-circuit on failure."""
+def _require_settings_admin():
+    """
+    Validate caller can read/manage AI Settings. Owner is always allowed;
+    other system users must be in allowed_settings_admin_user_ids.
+    Returns None on success, or a (response, status) tuple on failure.
+    """
     try:
         verify_jwt_in_request()
     except Exception:
         return jsonify({'error': 'Требуется авторизация'}), 401
-    claims = get_jwt() or {}
-    role = claims.get('role')
-    if role not in ('admin', 'system'):
-        return jsonify({'error': 'Доступ запрещён'}), 403
-    try:
-        user_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Доступ запрещён'}), 403
-    su = SystemUser.query.get(user_id)
-    if not su or (su.email or '').lower() != OWNER_EMAIL:
+    viewer = _resolve_viewer()
+    settings = AIConsultantAccess.get_or_create()
+    if not _has_settings_admin_access(viewer, settings):
         return jsonify({'error': 'Доступ запрещён'}), 403
     return None
 
 
 @ai_consultant_access_bp.route('/admin/ai-consultant/settings', methods=['GET'])
 def get_settings():
-    err = _require_owner()
+    err = _require_settings_admin()
     if err is not None:
         return err
 
+    viewer = _resolve_viewer()
     settings = AIConsultantAccess.get_or_create()
     system_users = SystemUser.query.order_by(SystemUser.full_name).all()
     return jsonify({
@@ -171,14 +201,18 @@ def get_settings():
             {'id': u.id, 'email': u.email, 'full_name': u.full_name}
             for u in system_users
         ],
+        'is_owner': viewer['kind'] == 'admin',
     }), 200
 
 
 @ai_consultant_access_bp.route('/admin/ai-consultant/settings', methods=['PUT'])
 def update_settings():
-    err = _require_owner()
+    err = _require_settings_admin()
     if err is not None:
         return err
+
+    viewer = _resolve_viewer()
+    is_owner = viewer['kind'] == 'admin'
 
     data = request.get_json(silent=True) or {}
     settings = AIConsultantAccess.get_or_create()
@@ -218,6 +252,19 @@ def update_settings():
         if cleaned is None:
             return jsonify({'error': 'allowed_product_import_user_ids должен быть массивом'}), 400
         settings.allowed_product_import_user_ids = cleaned
+
+    # Only the owner can grant/revoke access to the AI Settings page
+    # itself — otherwise an opted-in admin could elevate themselves to
+    # control who else has access.
+    if 'allowed_settings_admin_user_ids' in data:
+        if not is_owner:
+            return jsonify({
+                'error': 'Только владелец может изменять список администраторов настроек',
+            }), 403
+        cleaned = _clean_user_ids(data['allowed_settings_admin_user_ids'])
+        if cleaned is None:
+            return jsonify({'error': 'allowed_settings_admin_user_ids должен быть массивом'}), 400
+        settings.allowed_settings_admin_user_ids = cleaned
 
     # Track who made the change (for audit display in the UI).
     try:
