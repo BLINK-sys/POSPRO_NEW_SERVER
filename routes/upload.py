@@ -4,10 +4,14 @@ from models.media import ProductMedia
 from models.documents import ProductDocument
 from models.category import Category
 from datetime import datetime
+from urllib.parse import urlparse, unquote
 import os
 import re
 import unicodedata
 import mimetypes
+import uuid
+
+import requests
 
 upload_bp = Blueprint('upload', __name__)
 
@@ -922,4 +926,134 @@ def upload_small_banner_image():
     return jsonify({
         'message': 'Image uploaded',
         'url': f'/uploads/banners/small_banners/{final_filename}'
+    }), 200
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Upload product image by URL — used by AI Product Import flow.
+# ────────────────────────────────────────────────────────────────────────
+
+# Cap image download to prevent server from yanking 100MB files
+_MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15MB
+_IMAGE_FETCH_TIMEOUT = 20
+
+# Map mimetype → file extension when we can't infer from URL
+_MIME_TO_EXT = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/svg+xml': 'svg',
+    'image/bmp': 'bmp',
+}
+
+
+@upload_bp.route('/upload_product_from_url', methods=['POST'])
+def upload_product_from_url():
+    """
+    Download an image from a remote URL and attach it to the product as a
+    new ProductMedia row. Used by the AI Product Import flow where the
+    auto-fill returns image URLs that need to be transferred to our storage.
+
+    Body: { product_id: int, url: str }
+    """
+    data = request.get_json(silent=True) or {}
+
+    product_id = data.get('product_id')
+    url = (data.get('url') or '').strip()
+
+    try:
+        product_id = int(product_id)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'product_id обязателен и должен быть числом'}), 400
+    if not url:
+        return jsonify({'error': 'url обязателен'}), 400
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        return jsonify({'error': 'URL должен быть http(s) с указанным доменом'}), 400
+
+    # Download
+    try:
+        resp = requests.get(
+            url,
+            headers={'User-Agent': 'Mozilla/5.0 PosProBot/1.0'},
+            timeout=_IMAGE_FETCH_TIMEOUT,
+            stream=True,
+            allow_redirects=True,
+        )
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Не удалось скачать: {e}'}), 502
+
+    if resp.status_code != 200:
+        return jsonify({'error': f'Источник вернул HTTP {resp.status_code}'}), 502
+
+    content_type = (resp.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+    if not content_type.startswith('image/'):
+        return jsonify({'error': f'URL не является изображением (Content-Type: {content_type})'}), 400
+
+    # Read with size cap
+    chunks = []
+    total = 0
+    for chunk in resp.iter_content(chunk_size=64_000):
+        if not chunk:
+            continue
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > _MAX_IMAGE_BYTES:
+            return jsonify({'error': f'Файл слишком большой (>{_MAX_IMAGE_BYTES // (1024 * 1024)}МБ)'}), 400
+    blob = b''.join(chunks)
+
+    # Determine filename: prefer URL path, fall back to UUID + extension from mimetype
+    url_filename = os.path.basename(unquote(parsed.path)) or ''
+    url_filename = sanitize_filename(url_filename) if url_filename else ''
+    has_ext = '.' in url_filename and url_filename.rsplit('.', 1)[1].lower() in current_app.config['ALLOWED_EXTENSIONS']
+    if not has_ext:
+        ext = _MIME_TO_EXT.get(content_type, 'jpg')
+        base = url_filename.rsplit('.', 1)[0] if '.' in url_filename else url_filename
+        if not base:
+            base = uuid.uuid4().hex[:12]
+        url_filename = f'{base}.{ext}'
+
+    if not allowed_file(url_filename):
+        return jsonify({'error': f'Тип файла не разрешён: {url_filename}'}), 400
+
+    folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'products', str(product_id))
+    os.makedirs(folder, exist_ok=True)
+
+    # Avoid overwriting an existing file with same name — append uuid suffix
+    filepath = os.path.join(folder, url_filename)
+    if os.path.exists(filepath):
+        stem, ext = os.path.splitext(url_filename)
+        url_filename = f'{stem}-{uuid.uuid4().hex[:6]}{ext}'
+        filepath = os.path.join(folder, url_filename)
+
+    try:
+        with open(filepath, 'wb') as f:
+            f.write(blob)
+    except Exception as e:
+        return jsonify({'error': f'Не удалось сохранить файл: {e}'}), 500
+
+    file_url = f'/uploads/products/{product_id}/{url_filename}'
+    media_type = get_media_type_from_filename(url_filename)
+
+    try:
+        media = ProductMedia(
+            product_id=product_id,
+            url=file_url,
+            media_type=media_type,
+        )
+        db.session.add(media)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Ошибка записи в БД: {e}'}), 500
+
+    return jsonify({
+        'success': True,
+        'id': media.id,
+        'url': file_url,
+        'media_type': media_type,
+        'filename': url_filename,
     }), 200

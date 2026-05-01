@@ -90,6 +90,19 @@ def _has_access(viewer, settings: AIConsultantAccess) -> bool:
     return False
 
 
+def _has_product_import_access(viewer, settings: AIConsultantAccess) -> bool:
+    """
+    Product Import is only relevant for system users (creating products is an
+    admin action). Owner always has access; everyone else must be opted in
+    via allowed_product_import_user_ids.
+    """
+    if viewer['kind'] == 'admin':
+        return True
+    if viewer['kind'] == 'system':
+        return viewer['user_id'] in (settings.allowed_product_import_user_ids or [])
+    return False
+
+
 # ───────────────────────────────────────────────────────────────────
 # Public access check — used by header + /ai page on the frontend
 # ───────────────────────────────────────────────────────────────────
@@ -100,6 +113,21 @@ def check_access():
     settings = AIConsultantAccess.get_or_create()
     return jsonify({
         'has_access': _has_access(viewer, settings),
+        'kind': viewer['kind'],
+    }), 200
+
+
+@ai_consultant_access_bp.route('/product-import/access', methods=['GET'])
+def check_product_import_access():
+    """
+    Used by the admin product create form to decide whether to render the
+    "Импорт из URL" button. Backend enforces the same check on the actual
+    auto-fill endpoint, so this is purely a UI hint.
+    """
+    viewer = _resolve_viewer()
+    settings = AIConsultantAccess.get_or_create()
+    return jsonify({
+        'has_access': _has_product_import_access(viewer, settings),
         'kind': viewer['kind'],
     }), 200
 
@@ -161,11 +189,10 @@ def update_settings():
         settings.allow_registered = bool(data['allow_registered'])
     if 'allow_wholesale' in data:
         settings.allow_wholesale = bool(data['allow_wholesale'])
-    if 'allowed_system_user_ids' in data:
-        ids_raw = data['allowed_system_user_ids']
+    def _clean_user_ids(ids_raw):
+        """Validate id list — keep only ints that exist in system_users, dedupe, sort."""
         if not isinstance(ids_raw, list):
-            return jsonify({'error': 'allowed_system_user_ids должен быть массивом'}), 400
-        # Filter to int and dedupe; verify each id actually exists.
+            return None  # caller signals error
         cleaned: list[int] = []
         seen = set()
         for v in ids_raw:
@@ -178,7 +205,19 @@ def update_settings():
             if SystemUser.query.get(vid):
                 cleaned.append(vid)
                 seen.add(vid)
+        return cleaned
+
+    if 'allowed_system_user_ids' in data:
+        cleaned = _clean_user_ids(data['allowed_system_user_ids'])
+        if cleaned is None:
+            return jsonify({'error': 'allowed_system_user_ids должен быть массивом'}), 400
         settings.allowed_system_user_ids = cleaned
+
+    if 'allowed_product_import_user_ids' in data:
+        cleaned = _clean_user_ids(data['allowed_product_import_user_ids'])
+        if cleaned is None:
+            return jsonify({'error': 'allowed_product_import_user_ids должен быть массивом'}), 400
+        settings.allowed_product_import_user_ids = cleaned
 
     # Track who made the change (for audit display in the UI).
     try:

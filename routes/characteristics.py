@@ -48,6 +48,77 @@ def add_characteristic(product_id):
     return jsonify({'message': 'Characteristic added'}), 201
 
 
+@characteristics_bp.route('/<int:product_id>/bulk-by-key', methods=['POST'])
+def add_characteristics_bulk_by_key(product_id):
+    """
+    Add multiple characteristics by string key in one call. For each item:
+      - look up CharacteristicsList by `characteristic_key` (case-insensitive)
+      - if missing, create a new entry (with optional unit_of_measurement)
+      - then attach to product via ProductCharacteristic
+
+    Used by the AI product auto-fill flow where Claude returns characteristic
+    names (not ids), and we need a single round-trip to insert everything.
+
+    Body: { items: [{ key: str, value: str, unit?: str }, ...] }
+    Response: { success, added: [{ characteristic_id, key, value, unit }] }
+    """
+    body = request.json or {}
+    items = body.get('items') or []
+    if not isinstance(items, list):
+        return jsonify({'error': 'items должен быть массивом'}), 400
+
+    added = []
+    next_sort_order = (
+        db.session.query(db.func.max(ProductCharacteristic.sort_order))
+        .filter(ProductCharacteristic.product_id == product_id)
+        .scalar()
+        or 0
+    )
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = (item.get('key') or '').strip()
+        value = (item.get('value') or '').strip()
+        unit = (item.get('unit') or '').strip() or None
+        if not key or not value:
+            continue
+
+        # Find or create CharacteristicsList entry (case-insensitive match)
+        cl = CharacteristicsList.query.filter(
+            db.func.lower(CharacteristicsList.characteristic_key) == key.lower()
+        ).first()
+        if not cl:
+            cl = CharacteristicsList(
+                characteristic_key=key,
+                unit_of_measurement=unit,
+            )
+            db.session.add(cl)
+            try:
+                db.session.flush()  # need cl.id below
+            except Exception:
+                db.session.rollback()
+                continue
+
+        next_sort_order += 1
+        char = ProductCharacteristic(
+            product_id=product_id,
+            key=str(cl.id),
+            value=value,
+            sort_order=next_sort_order,
+        )
+        db.session.add(char)
+        added.append({
+            'characteristic_id': cl.id,
+            'key': cl.characteristic_key,
+            'value': value,
+            'unit': cl.unit_of_measurement or '',
+        })
+
+    db.session.commit()
+    return jsonify({'success': True, 'added': added}), 201
+
+
 @characteristics_bp.route('/<int:char_id>', methods=['PUT'])
 def update_characteristic(char_id):
     char = ProductCharacteristic.query.get_or_404(char_id)

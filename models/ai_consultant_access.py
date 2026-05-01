@@ -20,9 +20,14 @@ class AIConsultantAccess(db.Model):
     allow_registered = db.Column(db.Boolean, default=False, nullable=False)
     allow_wholesale = db.Column(db.Boolean, default=False, nullable=False)
 
-    # Per-system-user opt-in. Stored as JSON list of system_users.id.
-    # Default empty list — system users start with no access.
+    # Per-system-user opt-in for the AI Consultant chat (`/ai`).
+    # Stored as JSON list of system_users.id. Empty by default.
     allowed_system_user_ids = db.Column(db.JSON, default=list, nullable=False)
+
+    # Per-system-user opt-in for the AI-driven Product Import in the
+    # admin product create form. Same shape as allowed_system_user_ids
+    # but a separate list — the two features are gated independently.
+    allowed_product_import_user_ids = db.Column(db.JSON, default=list, nullable=False)
 
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by_email = db.Column(db.String(255))
@@ -34,6 +39,7 @@ class AIConsultantAccess(db.Model):
             'allow_registered': bool(self.allow_registered),
             'allow_wholesale': bool(self.allow_wholesale),
             'allowed_system_user_ids': list(self.allowed_system_user_ids or []),
+            'allowed_product_import_user_ids': list(self.allowed_product_import_user_ids or []),
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'updated_by_email': self.updated_by_email,
         }
@@ -48,6 +54,7 @@ class AIConsultantAccess(db.Model):
                 allow_registered=False,
                 allow_wholesale=False,
                 allowed_system_user_ids=[],
+                allowed_product_import_user_ids=[],
             )
             db.session.add(row)
             db.session.commit()
