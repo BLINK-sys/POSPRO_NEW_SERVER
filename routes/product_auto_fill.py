@@ -36,8 +36,29 @@ MAX_HTML_BYTES = 1_500_000  # ~1.5MB raw HTML; we strip/trim before sending to C
 HTML_FETCH_TIMEOUT = 15
 USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-    '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 PosProBot/1.0'
+    '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 )
+
+# Headers a real Chrome on Windows would send. Many WAFs flag requests
+# that are missing the secondary fingerprint headers (sec-ch-ua,
+# accept-language, etc.) — sending them dramatically reduces 403 rates
+# from sites with default-on anti-bot rules.
+_BROWSER_HEADERS = {
+    'User-Agent': USER_AGENT,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+}
 
 # After cleaning we cap to this many characters so the Anthropic input
 # token bill stays bounded (~25-30K tokens at most).
@@ -99,10 +120,18 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 def _fetch_html(url: str) -> tuple[str | None, str | None]:
     """Returns (html, error). On success error is None."""
+    # Send a Referer that matches the page's own host — some anti-bot
+    # rules treat "no referer" as suspicious. Using the page's own origin
+    # mimics the user clicking from a search result on the same site.
+    parsed = urlparse(url)
+    headers = dict(_BROWSER_HEADERS)
+    if parsed.scheme and parsed.netloc:
+        headers['Referer'] = f'{parsed.scheme}://{parsed.netloc}/'
+
     try:
         resp = requests.get(
             url,
-            headers={'User-Agent': USER_AGENT, 'Accept': 'text/html,*/*'},
+            headers=headers,
             timeout=HTML_FETCH_TIMEOUT,
             stream=True,
             allow_redirects=True,
@@ -113,6 +142,13 @@ def _fetch_html(url: str) -> tuple[str | None, str | None]:
         return None, f'Ошибка загрузки страницы: {e}'
 
     if resp.status_code != 200:
+        # Provide a more useful hint for the common 403 case
+        if resp.status_code == 403:
+            return None, (
+                'Сайт-донор отклонил запрос (HTTP 403). У него стоит '
+                'защита от ботов или он рендерит контент через JavaScript. '
+                'Попробуйте другой источник.'
+            )
         return None, f'Сайт-донор вернул HTTP {resp.status_code}'
 
     content_type = (resp.headers.get('Content-Type') or '').lower()
