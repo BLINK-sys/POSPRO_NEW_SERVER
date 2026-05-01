@@ -212,7 +212,6 @@ def update_settings():
         return err
 
     viewer = _resolve_viewer()
-    is_owner = viewer['kind'] == 'admin'
 
     data = request.get_json(silent=True) or {}
     settings = AIConsultantAccess.get_or_create()
@@ -253,14 +252,11 @@ def update_settings():
             return jsonify({'error': 'allowed_product_import_user_ids должен быть массивом'}), 400
         settings.allowed_product_import_user_ids = cleaned
 
-    # Only the owner can grant/revoke access to the AI Settings page
-    # itself — otherwise an opted-in admin could elevate themselves to
-    # control who else has access.
+    # Anyone with settings-admin access can manage the access list itself
+    # (per product requirement — granted admins are treated as equals to
+    # the owner). Owner is hardcoded by email so they're always implicitly
+    # in even if removed from this list, so they can't be locked out.
     if 'allowed_settings_admin_user_ids' in data:
-        if not is_owner:
-            return jsonify({
-                'error': 'Только владелец может изменять список администраторов настроек',
-            }), 403
         cleaned = _clean_user_ids(data['allowed_settings_admin_user_ids'])
         if cleaned is None:
             return jsonify({'error': 'allowed_settings_admin_user_ids должен быть массивом'}), 400
