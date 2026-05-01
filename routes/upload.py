@@ -962,6 +962,7 @@ def upload_product_from_url():
 
     product_id = data.get('product_id')
     url = (data.get('url') or '').strip()
+    raw_order = data.get('order')
 
     try:
         product_id = int(product_id)
@@ -969,6 +970,11 @@ def upload_product_from_url():
         return jsonify({'error': 'product_id обязателен и должен быть числом'}), 400
     if not url:
         return jsonify({'error': 'url обязателен'}), 400
+
+    try:
+        media_order = int(raw_order) if raw_order is not None else 0
+    except (TypeError, ValueError):
+        media_order = 0
 
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https') or not parsed.netloc:
@@ -1043,6 +1049,7 @@ def upload_product_from_url():
             product_id=product_id,
             url=file_url,
             media_type=media_type,
+            order=media_order,
         )
         db.session.add(media)
         db.session.commit()
