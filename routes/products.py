@@ -461,6 +461,7 @@ def get_products():
         supplier_param = request.args.get('supplier')
         visibility_param = request.args.get('visibility')
         quantity_param = request.args.get('quantity')
+        price_param = request.args.get('price')
 
         query = Product.query
 
@@ -521,6 +522,13 @@ def get_products():
             query = query.filter(Product.quantity > 0)
         elif quantity_param == 'false':
             query = query.filter(Product.quantity <= 0)
+
+        # Фильтр по цене: 'gt0' — больше нуля (есть цена),
+        # 'eq0' — ровно ноль (нет цены/без формулы).
+        if price_param == 'gt0':
+            query = query.filter(Product.price > 0)
+        elif price_param == 'eq0':
+            query = query.filter(Product.price <= 0)
 
         # ✅ ОПТИМИЗАЦИЯ: Добавляем joinedload для relationships
         query = query.options(
