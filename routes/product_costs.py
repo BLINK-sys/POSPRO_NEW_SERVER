@@ -113,10 +113,17 @@ def create_product_cost():
             'message': 'Себестоимость для этого товара на этом складе уже задана'
         }), 400
 
+    quantity = data.get('quantity', 0)
+    try:
+        quantity = max(0, int(quantity or 0))
+    except (TypeError, ValueError):
+        quantity = 0
+
     pwc = ProductWarehouseCost(
         product_id=product_id,
         warehouse_id=warehouse_id,
-        cost_price=float(cost_price)
+        cost_price=float(cost_price),
+        quantity=quantity
     )
 
     # Try to calculate price immediately
@@ -151,6 +158,12 @@ def update_product_cost(cost_id):
         pwc.cost_price = float(data['cost_price'])
         # Recalculate price
         _try_calculate(pwc)
+
+    if 'quantity' in data:
+        try:
+            pwc.quantity = max(0, int(data['quantity'] or 0))
+        except (TypeError, ValueError):
+            pwc.quantity = 0
 
     db.session.commit()
 
@@ -204,13 +217,20 @@ def bulk_create_costs():
 
     created = 0
     updated = 0
+    affected_product_ids = set()
 
     for item in items:
         product_id = item.get('product_id')
         cost_price = item.get('cost_price')
+        quantity_in = item.get('quantity')
 
         if not product_id or cost_price is None:
             continue
+
+        try:
+            quantity = max(0, int(quantity_in or 0)) if quantity_in is not None else None
+        except (TypeError, ValueError):
+            quantity = None
 
         pwc = ProductWarehouseCost.query.filter_by(
             product_id=product_id,
@@ -219,19 +239,28 @@ def bulk_create_costs():
 
         if pwc:
             pwc.cost_price = float(cost_price)
+            if quantity is not None:
+                pwc.quantity = quantity
             _try_calculate(pwc)
             updated += 1
         else:
             pwc = ProductWarehouseCost(
                 product_id=product_id,
                 warehouse_id=warehouse_id,
-                cost_price=float(cost_price)
+                cost_price=float(cost_price),
+                quantity=quantity if quantity is not None else 0
             )
             _try_calculate(pwc)
             db.session.add(pwc)
             created += 1
 
+        affected_product_ids.add(product_id)
+
     db.session.commit()
+
+    # Пересчитать product.price/quantity/supplier_id для всех затронутых
+    for pid in affected_product_ids:
+        _apply_min_price(pid)
 
     return jsonify({
         'success': True,
@@ -303,24 +332,39 @@ def _try_calculate(pwc: ProductWarehouseCost):
 
 def _apply_min_price(product_id: int):
     """
-    Find the minimum calculated_price for a product across all warehouses
-    and write it to product.price + product.supplier_id.
+    Найти минимальную calculated_price среди складов и записать в product.
+
+    Приоритет: сначала ищем склад с минимумом среди тех, где quantity > 0
+    (товар реально доступен) — оттуда берём цену, поставщика И остаток.
+    Если в наличии нигде нет — берём минимум без учёта остатка
+    (как «теоретическая» цена при поступлении), а quantity ставим 0.
     """
     from models.product import Product
 
     all_costs = ProductWarehouseCost.query.filter_by(product_id=product_id).all()
 
-    best_cost = None
-    for c in all_costs:
-        if c.calculated_price and c.calculated_price > 0:
-            if best_cost is None or c.calculated_price < best_cost.calculated_price:
-                best_cost = c
+    in_stock = [c for c in all_costs if c.calculated_price and c.calculated_price > 0 and (c.quantity or 0) > 0]
+    fallback = [c for c in all_costs if c.calculated_price and c.calculated_price > 0]
 
-    if best_cost:
-        product = Product.query.get(product_id)
-        if product:
-            product.price = best_cost.calculated_price
-            warehouse = Warehouse.query.get(best_cost.warehouse_id)
-            if warehouse:
-                product.supplier_id = warehouse.supplier_id
-            db.session.commit()
+    best_cost = None
+    use_quantity = False
+
+    if in_stock:
+        best_cost = min(in_stock, key=lambda c: c.calculated_price)
+        use_quantity = True
+    elif fallback:
+        best_cost = min(fallback, key=lambda c: c.calculated_price)
+
+    if not best_cost:
+        return
+
+    product = Product.query.get(product_id)
+    if not product:
+        return
+
+    product.price = best_cost.calculated_price
+    warehouse = Warehouse.query.get(best_cost.warehouse_id)
+    if warehouse:
+        product.supplier_id = warehouse.supplier_id
+    product.quantity = (best_cost.quantity or 0) if use_quantity else 0
+    db.session.commit()

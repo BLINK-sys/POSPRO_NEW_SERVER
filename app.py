@@ -231,6 +231,33 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция drivers.image_url: {e}")
 
+        # product_warehouse_cost.quantity — остаток на складе для товара.
+        # Бэкфилл: для строк где quantity ещё 0, копируем product.quantity,
+        # если supplier товара совпадает с supplier склада (т.е. это «основной»
+        # склад товара — для BIO это warehouse_id=2). Без этого после миграции
+        # все товары станут «нет в наличии», т.к. _apply_min_price теперь
+        # учитывает quantity > 0.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE product_warehouse_cost "
+                "ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 0"
+            ))
+            db.session.commit()
+            db.session.execute(db.text("""
+                UPDATE product_warehouse_cost AS pwc
+                SET quantity = p.quantity
+                FROM product p, warehouse w
+                WHERE pwc.product_id = p.id
+                  AND pwc.warehouse_id = w.id
+                  AND p.supplier_id = w.supplier_id
+                  AND pwc.quantity = 0
+                  AND COALESCE(p.quantity, 0) > 0
+            """))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция product_warehouse_cost.quantity: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 

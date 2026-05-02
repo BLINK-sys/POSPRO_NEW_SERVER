@@ -9,6 +9,7 @@ class ProductWarehouseCost(db.Model):
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False)
     cost_price = db.Column(db.Float, nullable=False)
+    quantity = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     calculated_price = db.Column(db.Float, nullable=True)
     calculated_delivery = db.Column(db.Float, nullable=True)
     calculated_at = db.Column(db.DateTime, nullable=True)
@@ -30,6 +31,7 @@ class ProductWarehouseCost(db.Model):
             'product_slug': self.product.slug if self.product else None,
             'warehouse_id': self.warehouse_id,
             'cost_price': self.cost_price,
+            'quantity': self.quantity,
             'calculated_price': self.calculated_price,
             'calculated_delivery': self.calculated_delivery,
             'calculated_at': self.calculated_at.isoformat() if self.calculated_at else None,
