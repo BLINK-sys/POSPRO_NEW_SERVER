@@ -258,6 +258,45 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция product_warehouse_cost.quantity: {e}")
 
+        # category.slug должен быть уникальным во всём магазине: маршрут
+        # /category/{slug} однозначно резолвится только при уникальности.
+        # Раньше unique=False допускал дубли (родитель и подкатегория с одним
+        # slug), и провалиться в подкатегорию было нельзя — открывался родитель.
+        # Сначала переименовываем существующие дубли (slug, slug-2, slug-3, ...),
+        # потом ставим UNIQUE-индекс. IF NOT EXISTS — идемпотентно.
+        try:
+            dup_rows = db.session.execute(db.text("""
+                SELECT slug FROM category GROUP BY slug HAVING COUNT(*) > 1
+            """)).fetchall()
+            for (dup_slug,) in dup_rows:
+                rows = db.session.execute(
+                    db.text("SELECT id FROM category WHERE slug = :s ORDER BY id"),
+                    {"s": dup_slug},
+                ).fetchall()
+                # Первая запись остаётся как есть; остальным даём суффикс -2, -3...
+                for n, (cat_id,) in enumerate(rows[1:], start=2):
+                    new_slug = f"{dup_slug}-{n}"
+                    # на всякий случай страхуемся от коллизии и с уже занятыми
+                    while db.session.execute(
+                        db.text("SELECT 1 FROM category WHERE slug = :s LIMIT 1"),
+                        {"s": new_slug},
+                    ).first():
+                        n += 1
+                        new_slug = f"{dup_slug}-{n}"
+                    db.session.execute(
+                        db.text("UPDATE category SET slug = :ns WHERE id = :id"),
+                        {"ns": new_slug, "id": cat_id},
+                    )
+                    print(f"  category.slug дубль исправлен: id={cat_id} '{dup_slug}' -> '{new_slug}'")
+            db.session.commit()
+            db.session.execute(db.text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_category_slug ON category(slug)"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция category.slug UNIQUE: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 

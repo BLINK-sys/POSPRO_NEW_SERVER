@@ -10,6 +10,32 @@ from models.category import Category
 categories_bp = Blueprint('categories', __name__)
 
 
+def ensure_unique_category_slug(desired, exclude_id=None):
+    """
+    Возвращает уникальный slug для категории. Если `desired` уже занят —
+    добавляет суффикс `-2`, `-3`, ... пока не освободится. exclude_id
+    нужен при PUT, чтобы не считать «занятой» саму себя.
+
+    UI отдаёт сгенерированный из имени slug; пользователь не должен
+    видеть ошибку при коллизии (например «насосы» в двух разных корнях
+    каталога) — бэкенд сам подберёт уникальный.
+    """
+    base = (desired or '').strip()
+    if not base:
+        return base
+
+    candidate = base
+    n = 2
+    while True:
+        q = Category.query.filter_by(slug=candidate)
+        if exclude_id is not None:
+            q = q.filter(Category.id != exclude_id)
+        if not q.first():
+            return candidate
+        candidate = f"{base}-{n}"
+        n += 1
+
+
 @categories_bp.route('/', methods=['GET'])
 def get_categories():
     categories = Category.query.order_by(Category.parent_id, Category.order).all()
@@ -42,6 +68,12 @@ def create_category_with_image():
     # Проверка обязательных полей
     if not name or not slug:
         return jsonify({'error': 'name and slug are required'}), 400
+
+    # slug должен быть уникальным (роутинг /category/{slug} однозначен только
+    # при уникальности). Если приходит занятый — тихо добавляем суффикс
+    # `-2`, `-3` и т.д., чтобы юзер не получал ошибку. Финальный slug
+    # вернётся в response — UI подхватит при перезагрузке.
+    slug = ensure_unique_category_slug(slug)
 
     show_in_menu = request.form.get('show_in_menu', 'true').lower() == 'true'
     category = Category(
@@ -85,8 +117,15 @@ def update_category(category_id):
 
     category = Category.query.get_or_404(category_id)
     data = request.json
+
+    # Если slug меняется и оказывается занят другой категорией — тихо
+    # добавим суффикс. Юзер при следующем открытии увидит финальный slug.
+    new_slug = data.get('slug')
+    if new_slug and new_slug != category.slug:
+        new_slug = ensure_unique_category_slug(new_slug, exclude_id=category_id)
+
     category.name = data['name']
-    category.slug = data['slug']
+    category.slug = new_slug or data['slug']
     category.description = data.get('description')
 
     # image_url обновляем только если он явно передан, чтобы случайно не

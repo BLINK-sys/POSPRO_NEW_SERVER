@@ -5,7 +5,7 @@ from sqlalchemy import Index
 class Category(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
-    slug = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=False, unique=True)
     parent_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True)
     description = db.Column(db.Text, nullable=True)
     image_url = db.Column(db.String(255), nullable=True)
