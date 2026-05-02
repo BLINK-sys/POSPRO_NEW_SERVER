@@ -10,6 +10,17 @@ class Config:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "jwt-secret")
     JWT_IDENTITY_CLAIM = 'sub'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # Render PostgreSQL закрывает idle-соединения через несколько минут.
+    # При запуске под gthread (несколько воркер-потоков делят пул)
+    # соединение могло «протухнуть» к моменту использования и падать с
+    # `SSL SYSCALL error: EOF detected`. Pre-ping делает SELECT 1 перед
+    # каждым взятием соединения и поднимает новое если предыдущее мертво.
+    # pool_recycle гарантирует что мы заранее переподключимся раньше,
+    # чем PostgreSQL нас выкинет (Render обычно идёт 10 минут — ставим 5).
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 300,
+    }
     MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB (общий лимит; для драйверов проверка 200MB в роуте)
     DRIVER_MAX_SIZE = 200 * 1024 * 1024  # 200MB для драйверов товара
     ALLOWED_EXTENSIONS = {
