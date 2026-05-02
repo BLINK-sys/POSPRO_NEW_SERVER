@@ -51,14 +51,29 @@ def get_brands():
 
 @bp.route('/brands', methods=['POST'])
 def create_brand():
+    from utils.external_image import is_external_image_url, download_to_uploads
+
     data = request.json
+    requested_image = data.get('image_url')
+
     brand = Brand(
         name=data['name'],
         country=data.get('country', ''),
         description=data.get('description', ''),
-        image_url=data.get('image_url')
+        image_url=None,
     )
     db.session.add(brand)
+    db.session.flush()  # нужен brand.id для пути сохранения картинки
+
+    if is_external_image_url(requested_image):
+        local_url, err = download_to_uploads(requested_image, f'brands/{brand.id}')
+        if err:
+            db.session.rollback()
+            return jsonify({'error': f'Не удалось скачать картинку: {err}'}), 400
+        brand.image_url = local_url
+    else:
+        brand.image_url = requested_image
+
     db.session.commit()
     return jsonify({'message': 'Brand created', 'id': brand.id})
 
@@ -66,24 +81,42 @@ def create_brand():
 # ✅ Создать или обновить бренд
 @bp.route('/brands/<int:brand_id>', methods=['PUT'])
 def update_brand(brand_id):
+    from utils.external_image import is_external_image_url, download_to_uploads, remove_local_upload
+
     data = request.json
     brand = Brand.query.get(brand_id)
+    is_new = brand is None
+    requested_image = data.get('image_url')
 
-    if brand:
-        # Обновление
-        brand.name = data['name']
-        brand.country = data.get('country', '')
-        brand.description = data.get('description', '')
-        brand.image_url = data.get('image_url')
-    else:
-        # Создание без указания id (он создастся автоматически)
+    if is_new:
+        # Создание — сначала flush чтобы получить id (нужен для пути сохранения
+        # картинки), затем — если картинка внешняя — скачиваем и обновляем url.
         brand = Brand(
             name=data['name'],
             country=data.get('country', ''),
             description=data.get('description', ''),
-            image_url=data.get('image_url')
+            image_url=None,
         )
         db.session.add(brand)
+        db.session.flush()
+    else:
+        brand.name = data['name']
+        brand.country = data.get('country', '')
+        brand.description = data.get('description', '')
+
+    old_url = brand.image_url
+    if is_external_image_url(requested_image):
+        local_url, err = download_to_uploads(requested_image, f'brands/{brand.id}')
+        if err:
+            db.session.rollback()
+            return jsonify({'error': f'Не удалось скачать картинку: {err}'}), 400
+        if old_url and old_url.startswith('/uploads/') and old_url != local_url:
+            remove_local_upload(old_url)
+        brand.image_url = local_url
+    else:
+        if (requested_image is None or requested_image == '') and old_url and old_url.startswith('/uploads/'):
+            remove_local_upload(old_url)
+        brand.image_url = requested_image
 
     db.session.commit()
     return jsonify({'message': 'Brand saved', 'id': brand.id})

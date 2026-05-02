@@ -81,17 +81,36 @@ def create_category_with_image():
 
 @categories_bp.route('/<int:category_id>', methods=['PUT'])
 def update_category(category_id):
+    from utils.external_image import is_external_image_url, download_to_uploads, remove_local_upload
+
     category = Category.query.get_or_404(category_id)
     data = request.json
     category.name = data['name']
     category.slug = data['slug']
     category.description = data.get('description')
-    
-    # Обновляем image_url только если он явно передан в запросе
-    # Это предотвращает случайное удаление изображения при обновлении других полей
+
+    # image_url обновляем только если он явно передан, чтобы случайно не
+    # снести картинку при обновлении других полей.
+    # Если приходит внешний http(s) URL — скачиваем в /uploads/categories/{id}/
+    # и сохраняем локальный путь. Внешние ссылки никогда не сохраняем
+    # «как есть», иначе картинка пропадёт когда стухнет источник.
     if 'image_url' in data:
-        category.image_url = data.get('image_url')
-    
+        new_url = data.get('image_url')
+        old_url = category.image_url
+        if is_external_image_url(new_url):
+            local_url, err = download_to_uploads(new_url, f'categories/{category_id}')
+            if err:
+                return jsonify({'error': f'Не удалось скачать картинку: {err}'}), 400
+            if old_url and old_url.startswith('/uploads/') and old_url != local_url:
+                remove_local_upload(old_url)
+            category.image_url = local_url
+        else:
+            # null / пустая строка / уже локальный путь — пишем как есть.
+            # При обнулении убираем старый файл с диска.
+            if (new_url is None or new_url == '') and old_url and old_url.startswith('/uploads/'):
+                remove_local_upload(old_url)
+            category.image_url = new_url
+
     category.parent_id = data.get('parent_id')
     
     if 'show_in_menu' in data:
