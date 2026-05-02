@@ -18,6 +18,7 @@ from models.favorite import Favorite
 from models.cart import Cart
 from models.order import OrderItem
 from models.product_warehouse_cost import ProductWarehouseCost
+from models.warehouse import Warehouse
 
 products_bp = Blueprint('products', __name__)
 logger = logging.getLogger(__name__)
@@ -318,14 +319,104 @@ def finalize_product(product_id):
         return jsonify({'error': 'Ошибка при финализации товара'}), 500
 
 
-def serialize_product(product, availability_status=None, product_images=None):
+def load_winning_warehouse_for_products(product_ids):
+    """
+    Возвращает {product_id: {id, name, city}} — для каждого товара тот склад,
+    с которого он сейчас «продаётся»: у которого calculated_price совпадает
+    с Product.price (его выбрал _apply_min_price) и есть остаток (>0).
+
+    Если у товара несколько складов с одинаковой минимальной ценой и
+    остатком — берётся первый по id (стабильно). Для товаров без
+    подходящего склада ничего не возвращается.
+    """
+    if not product_ids:
+        return {}
+
+    # SQL: JOIN product_warehouse_cost <- warehouse, ограничиваем по
+    # quantity > 0 и calculated_price = product.price. Одной строкой
+    # на товар через row_number поверх (вариант портативный к PostgreSQL и SQLite).
+    sql = db.text("""
+        SELECT DISTINCT ON (pwc.product_id)
+            pwc.product_id, w.id AS w_id, w.name AS w_name, w.city AS w_city
+        FROM product_warehouse_cost pwc
+        JOIN warehouse w ON w.id = pwc.warehouse_id
+        JOIN product p ON p.id = pwc.product_id
+        WHERE pwc.product_id = ANY(:ids)
+          AND pwc.quantity > 0
+          AND pwc.calculated_price IS NOT NULL
+          AND pwc.calculated_price = p.price
+        ORDER BY pwc.product_id, w.id
+    """)
+    result = {}
+    rows = db.session.execute(sql, {"ids": list(product_ids)}).mappings().all()
+    for row in rows:
+        result[row["product_id"]] = {
+            "id": row["w_id"],
+            "name": row["w_name"],
+            "city": row["w_city"],
+        }
+    return result
+
+
+def load_suppliers_for_products(product_ids):
+    """
+    Возвращает {product_id: [{id, name}, ...]} — все уникальные поставщики
+    каждого товара через product_warehouse_cost → warehouse → supplier,
+    плюс legacy fallback на Product.supplier_id.
+
+    Один SQL-запрос для всего батча — без N+1.
+    """
+    if not product_ids:
+        return {}
+    from sqlalchemy import distinct
+
+    # Поставщики через склады
+    rows = (
+        db.session.query(
+            ProductWarehouseCost.product_id,
+            Supplier.id,
+            Supplier.name,
+        )
+        .join(Warehouse, Warehouse.id == ProductWarehouseCost.warehouse_id)
+        .join(Supplier, Supplier.id == Warehouse.supplier_id)
+        .filter(ProductWarehouseCost.product_id.in_(product_ids))
+        .distinct()
+        .all()
+    )
+
+    result = {}
+    for product_id, supplier_id, supplier_name in rows:
+        result.setdefault(product_id, []).append({"id": supplier_id, "name": supplier_name})
+
+    # Fallback: Product.supplier_id для товаров без записей в product_warehouse_cost
+    legacy_rows = (
+        db.session.query(Product.id, Supplier.id, Supplier.name)
+        .join(Supplier, Supplier.id == Product.supplier_id)
+        .filter(Product.id.in_(product_ids))
+        .all()
+    )
+    for product_id, supplier_id, supplier_name in legacy_rows:
+        existing = result.setdefault(product_id, [])
+        if not any(s["id"] == supplier_id for s in existing):
+            existing.append({"id": supplier_id, "name": supplier_name})
+
+    # Сортировка по имени для стабильного порядка в UI
+    for plist in result.values():
+        plist.sort(key=lambda s: (s["name"] or "").lower())
+    return result
+
+
+def serialize_product(product, availability_status=None, product_images=None, suppliers_map=None, winning_warehouse_map=None):
     """
     Сериализует товар в словарь.
-    
+
     Args:
         product: Объект Product
         availability_status: Статус наличия (опционально)
         product_images: Словарь {product_id: first_image} для оптимизации (опционально)
+        suppliers_map: Словарь {product_id: [{id, name}]} для batch-загрузки (опционально)
+        winning_warehouse_map: Словарь {product_id: {id, name, city}} — склад с
+            минимальной ценой и остатком (опционально, batch)
     """
     # ✅ ОПТИМИЗАЦИЯ: Используем предзагруженное изображение, если доступно
     first_image = None
@@ -368,6 +459,21 @@ def serialize_product(product, availability_status=None, product_images=None):
     if availability_status is None:
         availability_status = get_availability_status_for_quantity(product.quantity or 0, supplier_id=product.supplier_id)
 
+    # Все поставщики товара (через product_warehouse_cost.warehouse.supplier
+    # + legacy fallback). Если suppliers_map не передан — на лету одним
+    # запросом для одного товара.
+    if suppliers_map is not None:
+        suppliers_list = suppliers_map.get(product.id) or []
+    else:
+        suppliers_list = load_suppliers_for_products([product.id]).get(product.id, [])
+
+    # Склад с минимальной ценой и остатком — для отображения admin/system
+    # «120 000 ₸ (Equip Алматы)»
+    if winning_warehouse_map is not None:
+        winning_warehouse = winning_warehouse_map.get(product.id)
+    else:
+        winning_warehouse = load_winning_warehouse_for_products([product.id]).get(product.id)
+
     product_data = {
         'id': product.id,
         'name': product.name,
@@ -385,6 +491,8 @@ def serialize_product(product, availability_status=None, product_images=None):
         'supplier_id': product.supplier_id,
         'supplier_name': supplier_info.get('name') if supplier_info else None,
         'supplier': supplier_info,
+        'suppliers': suppliers_list,
+        'winning_warehouse': winning_warehouse,
         'description': product.description,
         'category_id': product.category_id,
         'category': product.category.name if product.category else None,
@@ -438,12 +546,15 @@ def get_products_bulk():
     availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
     index_map = {product_id: index for index, product_id in enumerate(id_list)}
 
+    suppliers_map = load_suppliers_for_products([p.id for p in products])
+    winning_warehouse_map = load_winning_warehouse_for_products([p.id for p in products])
+
     serialized_items = []
     for product in products:
         availability_status = get_availability_status_for_quantity(product.quantity or 0, availability_statuses, supplier_id=product.supplier_id)
         serialized_items.append((
             index_map.get(product.id, len(id_list)),
-            serialize_product(product, availability_status, product_images)
+            serialize_product(product, availability_status, product_images, suppliers_map, winning_warehouse_map)
         ))
 
     serialized_items.sort(key=lambda item: item[0])
@@ -503,16 +614,50 @@ def get_products():
                 if brand_id:
                     query = query.filter(Product.brand_id == brand_id)
 
-        supplier_column = getattr(Product, 'supplier_id', None)
-        if supplier_param and supplier_column is not None:
+        # Фильтр по поставщику. Один товар может физически числиться у
+        # нескольких поставщиков (есть запись product_warehouse_cost на
+        # складах разных suppliers — например тот же холодильник у BIO и
+        # у Equip). Поэтому фильтр идёт через EXISTS-подзапрос по складам,
+        # а не по полю Product.supplier_id (там — «основной поставщик с
+        # минимальной ценой», нужен для бэйджа на сайте, не для фильтрации).
+        if supplier_param:
             if supplier_param == 'no-supplier':
-                query = query.filter(Product.supplier_id.is_(None))
+                # Товары без единой записи product_warehouse_cost ИЛИ без
+                # привязки к поставщику. Используем and-условие через
+                # отсутствие любого склада с supplier_id, плюс NULL в
+                # Product.supplier_id для legacy-товаров.
+                has_any_supplier_warehouse = (
+                    db.session.query(ProductWarehouseCost.id)
+                    .join(Warehouse, Warehouse.id == ProductWarehouseCost.warehouse_id)
+                    .filter(ProductWarehouseCost.product_id == Product.id)
+                    .filter(Warehouse.supplier_id.isnot(None))
+                    .exists()
+                )
+                query = query.filter(
+                    db.and_(
+                        ~has_any_supplier_warehouse,
+                        Product.supplier_id.is_(None),
+                    )
+                )
             else:
                 try:
                     supplier_id = int(supplier_param)
-                    query = query.filter(Product.supplier_id == supplier_id)
                 except (TypeError, ValueError):
-                    pass
+                    supplier_id = None
+                if supplier_id:
+                    has_warehouse_of_supplier = (
+                        db.session.query(ProductWarehouseCost.id)
+                        .join(Warehouse, Warehouse.id == ProductWarehouseCost.warehouse_id)
+                        .filter(ProductWarehouseCost.product_id == Product.id)
+                        .filter(Warehouse.supplier_id == supplier_id)
+                        .exists()
+                    )
+                    query = query.filter(
+                        db.or_(
+                            Product.supplier_id == supplier_id,  # legacy / товары без складов
+                            has_warehouse_of_supplier,
+                        )
+                    )
 
         if visibility_param == 'true':
             query = query.filter(Product.is_visible.is_(True))
@@ -570,11 +715,15 @@ def get_products():
                     product_images[media.product_id] = media
             
             availability_statuses = ProductAvailabilityStatus.query.filter_by(active=True).order_by(ProductAvailabilityStatus.order).all()
+            suppliers_map = load_suppliers_for_products([p.id for p in products])
+            winning_warehouse_map = load_winning_warehouse_for_products([p.id for p in products])
             result = [
                 serialize_product(
                     product,
                     availability_status=get_availability_status_for_quantity(product.quantity or 0, availability_statuses, supplier_id=product.supplier_id),
-                    product_images=product_images
+                    product_images=product_images,
+                    suppliers_map=suppliers_map,
+                    winning_warehouse_map=winning_warehouse_map,
                 ) for product in products
             ]
             return jsonify({
@@ -586,7 +735,7 @@ def get_products():
             })
 
         products = query.all()
-        
+
         # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом для всех товаров
         product_ids = [p.id for p in products]
         media_items = []
@@ -598,14 +747,16 @@ def get_products():
                 ) \
                 .order_by(ProductMedia.product_id, ProductMedia.order) \
                 .all()
-        
+
         # Создаем словарь {product_id: first_image}
         product_images = {}
         for media in media_items:
             if media.product_id not in product_images:
                 product_images[media.product_id] = media
-        
-        result = [serialize_product(product, product_images=product_images) for product in products]
+
+        suppliers_map = load_suppliers_for_products(product_ids)
+        winning_warehouse_map = load_winning_warehouse_for_products(product_ids)
+        result = [serialize_product(product, product_images=product_images, suppliers_map=suppliers_map, winning_warehouse_map=winning_warehouse_map) for product in products]
         return jsonify(result)
 
     except Exception as e:
@@ -722,6 +873,12 @@ def get_product_by_slug(slug):
             # но supplier_id всё равно будет в результате
             pass
 
+    # Все поставщики у которых товар физически числится (через
+    # product_warehouse_cost.warehouse.supplier) + legacy fallback.
+    # Используем для отображения "BIO, Equip" на карточке.
+    suppliers_list = load_suppliers_for_products([product.id]).get(product.id, [])
+    winning_warehouse = load_winning_warehouse_for_products([product.id]).get(product.id)
+
     result = {
         'id': product.id,
         'name': product.name,
@@ -737,6 +894,8 @@ def get_product_by_slug(slug):
         'brand_info': brand_info,  # Полная информация о бренде
         'supplier_id': product.supplier_id,  # ID поставщика
         'supplier': supplier_info,  # Полная информация о поставщике
+        'suppliers': suppliers_list,  # Все поставщики у которых товар на складах
+        'winning_warehouse': winning_warehouse,  # Склад с минимальной ценой и остатком
         'description': product.description,
         'category_id': product.category_id,
         'image': first_image.url if first_image else None,
