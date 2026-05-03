@@ -279,10 +279,20 @@ def upsert_many_costs():
 
     Body: {
         "product_id": int,
+        "supplier_id": int,    # ОБЯЗАТЕЛЬНО при prune=true
+        "prune": bool,         # default false
         "items": [
             {"warehouse_id": int, "cost_price": float, "quantity": int}, ...
         ]
     }
+
+    prune=true: после upsert удаляются записи product_warehouse_cost
+    этого товара, у которых warehouse.supplier_id == указанному supplier_id
+    И warehouse_id НЕ в items. Используется регулярными синками когда
+    у товара пропадают склады в источнике (Equip API). Ограничено по
+    supplier_id чтобы случайно не снести записи другого поставщика
+    (например, BIO для того же товара после дедупа по имени).
+
     После всего одного коммита один раз вызываем _apply_min_price.
     """
     if not check_admin():
@@ -291,9 +301,17 @@ def upsert_many_costs():
     data = request.get_json() or {}
     product_id = data.get('product_id')
     items = data.get('items') or []
+    prune = bool(data.get('prune'))
+    supplier_id = data.get('supplier_id')
 
-    if not product_id or not items:
-        return jsonify({'success': False, 'message': 'product_id и items обязательны'}), 400
+    if not product_id:
+        return jsonify({'success': False, 'message': 'product_id обязателен'}), 400
+    if prune and not supplier_id:
+        # Безопасность: prune без supplier_id мог бы стереть записи
+        # другого поставщика для того же товара.
+        return jsonify({'success': False, 'message': 'prune=true требует supplier_id'}), 400
+    if not items and not prune:
+        return jsonify({'success': False, 'message': 'items обязательны (или prune=true для очистки)'}), 400
 
     # Один запрос — поднимаем все существующие записи этого товара
     existing_by_wh = {
@@ -304,6 +322,7 @@ def upsert_many_costs():
     created = 0
     updated = 0
     skipped = 0
+    sent_warehouse_ids = set()
 
     for item in items:
         if not isinstance(item, dict):
@@ -319,6 +338,7 @@ def upsert_many_costs():
         except (TypeError, ValueError):
             qty = 0
 
+        sent_warehouse_ids.add(wh_id)
         pwc = existing_by_wh.get(wh_id)
         if pwc:
             pwc.cost_price = float(cost_price)
@@ -337,13 +357,34 @@ def upsert_many_costs():
             existing_by_wh[wh_id] = pwc
             created += 1
 
+    pruned = 0
+    if prune:
+        # Удаляем cost-записи этого товара ТОЛЬКО на складах указанного
+        # поставщика, которых не было в items. Например, Equip перестал
+        # везти товар в Екатеринбург — соответствующая запись (с её
+        # старыми quantity и calculated_price) уходит.
+        from models.warehouse import Warehouse
+        stale_q = (
+            ProductWarehouseCost.query
+            .join(Warehouse, Warehouse.id == ProductWarehouseCost.warehouse_id)
+            .filter(
+                ProductWarehouseCost.product_id == product_id,
+                Warehouse.supplier_id == supplier_id,
+            )
+        )
+        if sent_warehouse_ids:
+            stale_q = stale_q.filter(~ProductWarehouseCost.warehouse_id.in_(sent_warehouse_ids))
+        for stale_pwc in stale_q.all():
+            db.session.delete(stale_pwc)
+            pruned += 1
+
     db.session.commit()
     # Один пересчёт min-price на товар, не N как было.
     _apply_min_price(product_id)
 
     return jsonify({
         'success': True,
-        'data': {'created': created, 'updated': updated, 'skipped': skipped},
+        'data': {'created': created, 'updated': updated, 'skipped': skipped, 'pruned': pruned},
     }), 200
 
 
