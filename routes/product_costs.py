@@ -269,6 +269,84 @@ def bulk_create_costs():
     }), 200
 
 
+@product_costs_bp.route('/upsert-many', methods=['POST'])
+@jwt_required()
+def upsert_many_costs():
+    """
+    Для одного товара upsert закупок/остатков сразу на несколько складов.
+    Один запрос вместо N (POST → 400 → GET → PUT) на каждый склад. Ускоряет
+    миграции вроде Equip, где у товара 9-10 закупок на разных warehouses.
+
+    Body: {
+        "product_id": int,
+        "items": [
+            {"warehouse_id": int, "cost_price": float, "quantity": int}, ...
+        ]
+    }
+    После всего одного коммита один раз вызываем _apply_min_price.
+    """
+    if not check_admin():
+        return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
+
+    data = request.get_json() or {}
+    product_id = data.get('product_id')
+    items = data.get('items') or []
+
+    if not product_id or not items:
+        return jsonify({'success': False, 'message': 'product_id и items обязательны'}), 400
+
+    # Один запрос — поднимаем все существующие записи этого товара
+    existing_by_wh = {
+        c.warehouse_id: c
+        for c in ProductWarehouseCost.query.filter_by(product_id=product_id).all()
+    }
+
+    created = 0
+    updated = 0
+    skipped = 0
+
+    for item in items:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        wh_id = item.get('warehouse_id')
+        cost_price = item.get('cost_price')
+        if not wh_id or cost_price is None:
+            skipped += 1
+            continue
+        try:
+            qty = max(0, int(item.get('quantity') or 0))
+        except (TypeError, ValueError):
+            qty = 0
+
+        pwc = existing_by_wh.get(wh_id)
+        if pwc:
+            pwc.cost_price = float(cost_price)
+            pwc.quantity = qty
+            _try_calculate(pwc)
+            updated += 1
+        else:
+            pwc = ProductWarehouseCost(
+                product_id=product_id,
+                warehouse_id=wh_id,
+                cost_price=float(cost_price),
+                quantity=qty,
+            )
+            _try_calculate(pwc)
+            db.session.add(pwc)
+            existing_by_wh[wh_id] = pwc
+            created += 1
+
+    db.session.commit()
+    # Один пересчёт min-price на товар, не N как было.
+    _apply_min_price(product_id)
+
+    return jsonify({
+        'success': True,
+        'data': {'created': created, 'updated': updated, 'skipped': skipped},
+    }), 200
+
+
 def _try_calculate(pwc: ProductWarehouseCost):
     """Try to calculate price for a product-warehouse cost entry."""
     try:
