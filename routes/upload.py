@@ -948,6 +948,11 @@ _MIME_TO_EXT = {
     'image/bmp': 'bmp',
 }
 
+# Обратная мапа для случаев когда источник (типа Yandex Cloud Storage)
+# отдаёт файл с Content-Type: application/octet-stream — у таких файлов
+# реально картинка, и определить тип можно только по расширению URL.
+_EXT_TO_MIME = {v: k for k, v in _MIME_TO_EXT.items()} | {'jpeg': 'image/jpeg'}
+
 
 @upload_bp.route('/upload_product_from_url', methods=['POST'])
 def upload_product_from_url():
@@ -996,8 +1001,18 @@ def upload_product_from_url():
         return jsonify({'error': f'Источник вернул HTTP {resp.status_code}'}), 502
 
     content_type = (resp.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+
+    # Yandex Cloud Storage (и некоторые CDN) отдают часть файлов с
+    # generic Content-Type (application/octet-stream / binary / пусто).
+    # Если в URL валидное image-расширение — доверяем ему, та же логика
+    # что в utils/external_image.py для картинок брендов/категорий.
     if not content_type.startswith('image/'):
-        return jsonify({'error': f'URL не является изображением (Content-Type: {content_type})'}), 400
+        url_ext = (os.path.splitext(parsed.path)[1] or '').lower().lstrip('.')
+        guessed = _EXT_TO_MIME.get(url_ext)
+        if guessed:
+            content_type = guessed
+        else:
+            return jsonify({'error': f'URL не является изображением (Content-Type: {content_type or "none"})'}), 400
 
     # Read with size cap
     chunks = []

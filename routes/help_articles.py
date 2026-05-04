@@ -1,5 +1,6 @@
 import os
 import re
+import traceback
 
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt
@@ -144,34 +145,61 @@ def upload_video(article_id):
     if ext not in VIDEO_EXTS:
         return jsonify({'error': f'Разрешены только видео: {", ".join(VIDEO_EXTS)}'}), 400
 
-    folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'help', str(article.id))
-    os.makedirs(folder, exist_ok=True)
+    # Сохраняем файл и пишем в БД с обработкой ошибок — иначе любые проблемы
+    # с диском / правами / БД превращаются в голый 500 без объяснений.
+    dest_path = None
+    try:
+        folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'help', str(article.id))
+        os.makedirs(folder, exist_ok=True)
 
-    # Обработка коллизий имён
-    base_path = os.path.join(folder, filename)
-    if os.path.exists(base_path):
-        name_part, ext_part = os.path.splitext(filename)
-        i = 1
-        while os.path.exists(os.path.join(folder, f'{name_part}_{i}{ext_part}')):
-            i += 1
-        filename = f'{name_part}_{i}{ext_part}'
+        # Обработка коллизий имён
+        base_path = os.path.join(folder, filename)
+        if os.path.exists(base_path):
+            name_part, ext_part = os.path.splitext(filename)
+            i = 1
+            while os.path.exists(os.path.join(folder, f'{name_part}_{i}{ext_part}')):
+                i += 1
+            filename = f'{name_part}_{i}{ext_part}'
 
-    file.save(os.path.join(folder, filename))
+        dest_path = os.path.join(folder, filename)
+        file.save(dest_path)
+    except Exception as e:
+        current_app.logger.exception("help video upload — file save failed")
+        return jsonify({
+            'error': 'Не удалось сохранить файл на диск',
+            'detail': str(e),
+            'type': type(e).__name__,
+        }), 500
 
-    max_order = (
-        db.session.query(db.func.max(HelpArticleMedia.order))
-        .filter(HelpArticleMedia.article_id == article.id)
-        .scalar()
-        or 0
-    )
-    media = HelpArticleMedia(
-        article_id=article.id,
-        url=f'/uploads/help/{article.id}/{filename}',
-        filename=filename,
-        order=max_order + 1,
-    )
-    db.session.add(media)
-    db.session.commit()
+    try:
+        max_order = (
+            db.session.query(db.func.max(HelpArticleMedia.order))
+            .filter(HelpArticleMedia.article_id == article.id)
+            .scalar()
+            or 0
+        )
+        media = HelpArticleMedia(
+            article_id=article.id,
+            url=f'/uploads/help/{article.id}/{filename}',
+            filename=filename,
+            order=max_order + 1,
+        )
+        db.session.add(media)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("help video upload — DB insert failed")
+        # Файл уже на диске — попробуем убрать, чтобы не плодить сирот
+        if dest_path and os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
+        return jsonify({
+            'error': 'Не удалось сохранить запись о видео в БД',
+            'detail': str(e),
+            'type': type(e).__name__,
+        }), 500
 
     return jsonify(media.to_dict()), 201
 
