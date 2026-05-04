@@ -561,6 +561,25 @@ def get_products_bulk():
     return jsonify([item[1] for item in serialized_items])
 
 
+@products_bp.route('/articles-map', methods=['GET'])
+def get_articles_map():
+    """
+    Лёгкий эндпоинт {article: id} для всех товаров.
+
+    Используется внешними импортами (Equip / BIO) для bootstrap-фазы:
+    при старте миграции мы хотим понять, какой equip-товар какому
+    pospro-товару соответствует, не таская через сеть полные карточки.
+
+    Один SQL `SELECT id, article` + JSON-сериализация — для 50 тыс
+    товаров это ~2 MB ответа и доли секунды. Зову раз за миграцию.
+
+    Артикулы дедуплицированы (article unique в БД), но на всякий случай
+    последний выигрывает (не должно быть кейса).
+    """
+    rows = db.session.query(Product.id, Product.article).all()
+    return jsonify({article: pid for pid, article in rows if article})
+
+
 @products_bp.route('/', methods=['GET'])
 def get_products():
     try:
