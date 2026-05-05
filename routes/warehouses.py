@@ -416,6 +416,96 @@ def delete_formula(warehouse_id):
     return jsonify({'success': True, 'message': 'Формула удалена'}), 200
 
 
+# ============ Copy configuration ============
+
+@warehouses_bp.route('/<int:source_id>/copy-config', methods=['POST'])
+@jwt_required()
+def copy_warehouse_config(source_id):
+    """
+    Копирует переменные + все формулы (цена / доставка / себестоимость) с
+    одного склада на один или несколько других. На целевом складе вся
+    предыдущая конфигурация удаляется и замещается копией с источника.
+
+    После копирования цены товаров на целевых складах НЕ пересчитываются
+    автоматически — оператор должен запустить «Пересчитать» руками.
+
+    Body: {"target_ids": [int, ...]}
+    """
+    if not check_admin():
+        return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
+
+    source = Warehouse.query.get(source_id)
+    if not source:
+        return jsonify({'success': False, 'message': 'Склад-источник не найден'}), 404
+
+    data = request.get_json() or {}
+    target_ids = data.get('target_ids') or []
+    if not isinstance(target_ids, list) or not target_ids:
+        return jsonify({'success': False, 'message': 'target_ids обязателен'}), 400
+    target_ids = [int(t) for t in target_ids if t and int(t) != source_id]
+    if not target_ids:
+        return jsonify({'success': False, 'message': 'Нет валидных получателей'}), 400
+
+    src_vars = (WarehouseVariable.query
+                .filter_by(warehouse_id=source_id)
+                .order_by(WarehouseVariable.sort_order)
+                .all())
+    src_formula = WarehouseFormula.query.filter_by(warehouse_id=source_id).first()
+
+    copied = 0
+    skipped = []
+    try:
+        for tid in target_ids:
+            target = Warehouse.query.get(tid)
+            if not target:
+                skipped.append({'id': tid, 'reason': 'не найден'})
+                continue
+
+            # 1. Стираем переменные на целевом складе
+            WarehouseVariable.query.filter_by(warehouse_id=tid).delete(synchronize_session=False)
+
+            # 2. Копируем переменные с источника. id'шники — новые, остальное один-в-один.
+            for v in src_vars:
+                db.session.add(WarehouseVariable(
+                    warehouse_id=tid,
+                    name=v.name,
+                    label=v.label,
+                    formula=v.formula,
+                    sort_order=v.sort_order,
+                ))
+
+            # 3. Стираем формулу на целевом складе (1:1, можно delete)
+            existing_f = WarehouseFormula.query.filter_by(warehouse_id=tid).first()
+            if existing_f:
+                db.session.delete(existing_f)
+
+            # 4. Копируем формулу если на источнике она задана. Если нет —
+            # оставляем целевой склад без формулы.
+            if src_formula:
+                db.session.add(WarehouseFormula(
+                    warehouse_id=tid,
+                    formula=src_formula.formula,
+                    delivery_formula=src_formula.delivery_formula,
+                    cost_formula=src_formula.cost_formula,
+                ))
+
+            copied += 1
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Ошибка копирования: {e}'}), 500
+
+    return jsonify({
+        'success': True,
+        'message': f'Конфигурация скопирована на {copied} склад(ов)',
+        'copied': copied,
+        'skipped': skipped,
+        'source_id': source_id,
+        'source_name': source.name,
+    }), 200
+
+
 # ============ Validate & Preview ============
 
 @warehouses_bp.route('/<int:warehouse_id>/validate-formula', methods=['POST'])
