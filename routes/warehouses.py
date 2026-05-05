@@ -86,7 +86,9 @@ def create_warehouse():
         name=data['name'].strip(),
         city=data.get('city', '').strip() if data.get('city') else None,
         address=data.get('address', '').strip() if data.get('address') else None,
-        currency_id=data['currency_id']
+        currency_id=data['currency_id'],
+        # Если поле не передано — дефолт True (склад с НДС)
+        vat_enabled=bool(data.get('vat_enabled', True)),
     )
     db.session.add(warehouse)
     db.session.commit()
@@ -121,6 +123,8 @@ def update_warehouse(warehouse_id):
         if not currency:
             return jsonify({'success': False, 'message': 'Валюта не найдена'}), 404
         warehouse.currency_id = data['currency_id']
+    if 'vat_enabled' in data:
+        warehouse.vat_enabled = bool(data['vat_enabled'])
 
     db.session.commit()
 

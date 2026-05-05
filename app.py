@@ -235,6 +235,19 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция drivers.image_url: {e}")
 
+        # warehouse.vat_enabled — работает ли склад с НДС. По умолчанию TRUE
+        # для всех существующих складов (сохраняем текущее поведение).
+        # Менеджер потом сам снимет галочку у складов где НДС не нужен.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE warehouse ADD COLUMN IF NOT EXISTS "
+                "vat_enabled BOOLEAN NOT NULL DEFAULT TRUE"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция warehouse.vat_enabled: {e}")
+
         # product_warehouse_cost.quantity — остаток на складе для товара.
         # Бэкфилл: для строк где quantity ещё 0, копируем product.quantity,
         # если supplier товара совпадает с supplier склада (т.е. это «основной»
