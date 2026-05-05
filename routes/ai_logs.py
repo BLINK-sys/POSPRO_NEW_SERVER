@@ -363,29 +363,52 @@ def get_chat_session(session_id):
 @ai_logs_bp.route('/admin/ai-logs/system-users', methods=['GET'])
 def list_logged_system_users():
     """
-    Список системных пользователей, у которых хоть раз были логи импорта
-    или чата. Для UI-фильтра «конкретный юзер» — чтобы не таскать всех
-    системников из основной таблицы (там много неактивных).
+    Список системных пользователей для UI-фильтра «конкретный юзер».
+    Возвращает ВСЕХ актуальных системников из system_users (чтобы можно
+    было выбрать любого, даже у кого ещё 0 логов) ПЛЮС merge с
+    денормализованными user_id из логов — на случай если юзер был
+    удалён, но логи остались.
     """
     _, err = _admin_required()
     if err:
         return err
 
-    # UNION двух подзапросов через подгрузку отдельных списков и merge
+    from models.systemuser import SystemUser
+
+    by_id: dict[int, dict] = {}
+
+    # 1) Все актуальные системники (включая владельца — он тоже логирует
+    #    свои действия, и должен быть выбираем в фильтре)
+    for su in SystemUser.query.all():
+        by_id[su.id] = {
+            'id': su.id,
+            'email': su.email,
+            'full_name': su.full_name or None,
+        }
+
+    # 2) Денормализованные user_id из логов — чтобы юзеры, удалённые
+    #    после записи логов, всё равно отображались (FK у нас SET NULL,
+    #    но в реальности user_id остаётся в исторических записях если
+    #    удаление прошло без cascade — тут страхуемся)
     import_users = db.session.query(
         AIImportLog.user_id, AIImportLog.user_email
-    ).filter(AIImportLog.user_id.isnot(None), AIImportLog.user_role.in_(('admin', 'system'))).distinct().all()
+    ).filter(
+        AIImportLog.user_id.isnot(None),
+        AIImportLog.user_role.in_(('admin', 'system')),
+    ).distinct().all()
 
     chat_users = db.session.query(
         AIChatSession.user_id, AIChatSession.user_email, AIChatSession.user_name
-    ).filter(AIChatSession.user_id.isnot(None), AIChatSession.user_role.in_(('admin', 'system'))).distinct().all()
+    ).filter(
+        AIChatSession.user_id.isnot(None),
+        AIChatSession.user_role.in_(('admin', 'system')),
+    ).distinct().all()
 
-    by_id = {}
     for uid, email in import_users:
-        by_id.setdefault(uid, {'id': uid, 'email': email, 'full_name': None})
+        if uid not in by_id:
+            by_id[uid] = {'id': uid, 'email': email, 'full_name': None}
     for uid, email, name in chat_users:
-        rec = by_id.setdefault(uid, {'id': uid, 'email': email, 'full_name': None})
-        if name and not rec['full_name']:
-            rec['full_name'] = name
+        if uid not in by_id:
+            by_id[uid] = {'id': uid, 'email': email, 'full_name': name}
 
     return jsonify(sorted(by_id.values(), key=lambda u: (u['email'] or '').lower()))
