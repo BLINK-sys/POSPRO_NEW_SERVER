@@ -1,5 +1,11 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    jwt_required,
+    get_jwt_identity,
+    get_jwt,
+)
 from werkzeug.security import check_password_hash
 from extensions import db
 from models.systemuser import SystemUser
@@ -7,6 +13,31 @@ from models.user import User
 import datetime
 
 auth_bp = Blueprint('auth', __name__)
+
+
+# Время жизни токенов:
+#  - access: короткий, обновляется в фоне фронтом — если кто-то умудрится
+#    украсть его, окно атаки минимальное.
+#  - refresh: длинный, лежит в httpOnly + secure cookie. Обновляет access
+#    через POST /auth/refresh. После 30 дней простоя юзер логинится заново.
+ACCESS_TOKEN_TTL = datetime.timedelta(minutes=30)
+REFRESH_TOKEN_TTL = datetime.timedelta(days=30)
+
+
+def _issue_token_pair(identity: str, role: str) -> dict:
+    """Создаёт пару токенов с одинаковыми claims о роли. Используется
+    в login и refresh endpoint'ах — единое место правды."""
+    access = create_access_token(
+        identity=identity,
+        additional_claims={"role": role},
+        expires_delta=ACCESS_TOKEN_TTL,
+    )
+    refresh = create_refresh_token(
+        identity=identity,
+        additional_claims={"role": role},
+        expires_delta=REFRESH_TOKEN_TTL,
+    )
+    return {"token": access, "refresh_token": refresh}
 
 
 @auth_bp.route('/register', methods=['POST'])
@@ -95,14 +126,9 @@ def login():
     # Попробовать найти среди админов
     admin = SystemUser.query.filter(db.func.lower(SystemUser.email) == email_lower).first()
     if admin and check_password_hash(admin.password_hash, password):
-        token = create_access_token(
-            identity=str(admin.id),
-            additional_claims={"role": "admin"},
-            expires_delta=datetime.timedelta(hours=3)
-        )
-
+        tokens = _issue_token_pair(str(admin.id), "admin")
         return jsonify({
-            'token': token,
+            **tokens,
             'user': {
                 'id': admin.id,
                 'email': admin.email,
@@ -116,15 +142,9 @@ def login():
     user = User.query.filter(db.func.lower(User.email) == email_lower).first()
     if user and check_password_hash(user.password_hash, password):
         name = user.full_name or user.ip_name or user.too_name
-
-        token = create_access_token(
-            identity=str(user.id),
-            additional_claims={"role": "client"},
-            expires_delta=datetime.timedelta(hours=3)
-        )
-
+        tokens = _issue_token_pair(str(user.id), "client")
         return jsonify({
-            'token': token,
+            **tokens,
             'user': {
                 'id': user.id,
                 'email': user.email,
@@ -136,6 +156,36 @@ def login():
         })
 
     return jsonify({'error': 'Неверный email или пароль'}), 401
+
+
+@auth_bp.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    """
+    Обмен refresh-токена на новую пару (access + refresh — rotating).
+    Защищён @jwt_required(refresh=True) — пускает только refresh-токены,
+    обычным access-токенам сюда нельзя.
+
+    Зачем rotating refresh: если refresh-токен утёк, владелец получит
+    новую пару при следующем обращении, а старая (которая у злоумышленника)
+    станет одноразовой по факту использования. Полная защита требует
+    черного списка отозванных, но даже без него ротация — best practice.
+    """
+    identity = get_jwt_identity()
+    claims = get_jwt() or {}
+    role = claims.get('role', 'client')
+
+    # Проверка что юзер всё ещё существует — иначе старый токен мог бы
+    # давать доступ удалённому пользователю до истечения refresh.
+    if role == 'admin':
+        if not SystemUser.query.get(int(identity)):
+            return jsonify({'error': 'Пользователь не найден'}), 401
+    else:
+        if not User.query.get(int(identity)):
+            return jsonify({'error': 'Пользователь не найден'}), 401
+
+    tokens = _issue_token_pair(str(identity), role)
+    return jsonify(tokens), 200
 
 
 @auth_bp.route('/me', methods=['GET'])
