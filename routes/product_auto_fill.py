@@ -23,6 +23,8 @@ import requests
 from flask import Blueprint, request, jsonify
 
 from routes.ai_consultant_access import _resolve_viewer, _has_product_import_access
+from extensions import db
+from models.ai_logs import AIImportLog, IMPORT_STATUS_ERROR, IMPORT_STATUS_IMPORTED
 from models.ai_consultant_access import AIConsultantAccess
 
 product_auto_fill_bp = Blueprint('product_auto_fill', __name__)
@@ -294,6 +296,43 @@ def _normalize_extracted(data: dict, source_url: str) -> dict:
     }
 
 
+def _log_import_attempt(viewer, source_url, status, imported_data=None, error_message=None):
+    """
+    Пишет одну строку в ai_import_logs. Тихо подавляет ошибки записи —
+    логирование не должно ломать основной флоу.
+    Возвращает id лога или None.
+    """
+    try:
+        log = AIImportLog(
+            user_id=viewer.get('user_id'),
+            user_email=viewer.get('email') or 'unknown',
+            user_role=viewer.get('kind') or 'system',
+            source_url=source_url,
+            status=status,
+            imported_data=imported_data,
+            error_message=error_message,
+        )
+        db.session.add(log)
+        db.session.commit()
+        return log.id
+    except Exception as e:
+        db.session.rollback()
+        # Логируем в stderr, но в ответе клиенту ничего не теряем
+        print(f"[ai-import-log] failed to record: {type(e).__name__}: {e}")
+        return None
+
+
+def _summarize_for_log(data: dict) -> dict:
+    """Компактное представление вытащенных данных для лога — без полного
+    HTML-описания и без массивов URL'ов чтобы не раздувать БД."""
+    return {
+        'name': (data.get('name') or '')[:255],
+        'description_length': len(data.get('description') or ''),
+        'characteristics_count': len(data.get('characteristics') or []),
+        'images_count': len(data.get('image_urls') or []),
+    }
+
+
 @product_auto_fill_bp.route('/admin/products/auto-fill', methods=['POST'])
 def auto_fill():
     # Access check — same gate as the UI button
@@ -309,19 +348,30 @@ def auto_fill():
 
     ok, err = _validate_url(url)
     if not ok:
+        _log_import_attempt(viewer, url, IMPORT_STATUS_ERROR, error_message=err)
         return jsonify({'error': err}), 400
 
     html, err = _fetch_html(url)
     if err:
+        _log_import_attempt(viewer, url, IMPORT_STATUS_ERROR, error_message=err)
         return jsonify({'error': err}), 400
 
     cleaned = _clean_html(html or '')
     if len(cleaned) < 100:
-        return jsonify({'error': 'Страница пустая или не содержит распознаваемого HTML'}), 400
+        msg = 'Страница пустая или не содержит распознаваемого HTML'
+        _log_import_attempt(viewer, url, IMPORT_STATUS_ERROR, error_message=msg)
+        return jsonify({'error': msg}), 400
 
     extracted, err = _call_claude(cleaned, url)
     if err:
+        _log_import_attempt(viewer, url, IMPORT_STATUS_ERROR, error_message=err)
         return jsonify({'error': err}), 502
 
     data = _normalize_extracted(extracted or {}, url)
-    return jsonify({'success': True, 'data': data}), 200
+    log_id = _log_import_attempt(
+        viewer, url, IMPORT_STATUS_IMPORTED,
+        imported_data=_summarize_for_log(data),
+    )
+    # import_log_id передаётся клиенту, чтобы он PATCH-ом обновил его на
+    # IMPORT_STATUS_SAVED после реального сохранения товара.
+    return jsonify({'success': True, 'data': data, 'import_log_id': log_id}), 200

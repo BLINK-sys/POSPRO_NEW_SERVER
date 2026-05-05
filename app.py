@@ -42,6 +42,7 @@ from routes.public_product_availability_statuses import public_product_availabil
 from routes.help_articles import help_articles_bp
 from routes.drivers import drivers_bp
 from routes.ai_consultant_access import ai_consultant_access_bp
+from routes.ai_logs import ai_logs_bp
 from routes.product_auto_fill import product_auto_fill_bp
 from models.systemuser import SystemUser
 
@@ -103,6 +104,9 @@ def create_app():
 
     # 🔹 AI-парсинг страницы товара донора (POST /api/admin/products/auto-fill)
     app.register_blueprint(product_auto_fill_bp, url_prefix='/api')
+
+    # 🔹 Логи AI-фич: импорт товаров и чат консультанта
+    app.register_blueprint(ai_logs_bp, url_prefix='/api')
 
     # 🔹 Видимость каталогов (публичный + админский под /api)
     app.register_blueprint(catalog_visibility_bp, url_prefix='/api')  # /api/catalog-visibility, /api/admin-catalog-visibility
