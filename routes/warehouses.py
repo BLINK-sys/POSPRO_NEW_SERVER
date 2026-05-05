@@ -461,8 +461,11 @@ def copy_warehouse_config(source_id):
                 skipped.append({'id': tid, 'reason': 'не найден'})
                 continue
 
-            # 1. Стираем переменные на целевом складе
+            # 1. Стираем переменные на целевом складе и flush'им сразу,
+            # чтобы вставляющиеся ниже копии не конфликтовали с UNIQUE
+            # (warehouse_id, name) ещё до коммита.
             WarehouseVariable.query.filter_by(warehouse_id=tid).delete(synchronize_session=False)
+            db.session.flush()
 
             # 2. Копируем переменные с источника. id'шники — новые, остальное один-в-один.
             for v in src_vars:
@@ -474,20 +477,27 @@ def copy_warehouse_config(source_id):
                     sort_order=v.sort_order,
                 ))
 
-            # 3. Стираем формулу на целевом складе (1:1, можно delete)
+            # 3. Формула 1:1 с warehouse_id (UNIQUE). Если есть — апдейтим
+            # в-местe вместо delete+insert. Иначе SQLAlchemy при commit'е
+            # исполняет INSERT раньше DELETE и валится на unique violation.
             existing_f = WarehouseFormula.query.filter_by(warehouse_id=tid).first()
-            if existing_f:
-                db.session.delete(existing_f)
-
-            # 4. Копируем формулу если на источнике она задана. Если нет —
-            # оставляем целевой склад без формулы.
             if src_formula:
-                db.session.add(WarehouseFormula(
-                    warehouse_id=tid,
-                    formula=src_formula.formula,
-                    delivery_formula=src_formula.delivery_formula,
-                    cost_formula=src_formula.cost_formula,
-                ))
+                if existing_f:
+                    existing_f.formula = src_formula.formula
+                    existing_f.delivery_formula = src_formula.delivery_formula
+                    existing_f.cost_formula = src_formula.cost_formula
+                    existing_f.updated_at = datetime.now()
+                else:
+                    db.session.add(WarehouseFormula(
+                        warehouse_id=tid,
+                        formula=src_formula.formula,
+                        delivery_formula=src_formula.delivery_formula,
+                        cost_formula=src_formula.cost_formula,
+                    ))
+            elif existing_f:
+                # У источника формулы нет — стираем и с целевого, чтоб
+                # конфигурации совпадали.
+                db.session.delete(existing_f)
 
             copied += 1
 
