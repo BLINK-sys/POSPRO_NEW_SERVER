@@ -250,7 +250,12 @@ def list_import_logs():
 
     user_role = request.args.get('user_role')
     if user_role and user_role in _VALID_USER_ROLES:
-        q = q.filter(AIImportLog.user_role == user_role)
+        # 'system' в фильтре включает и владельца ('admin') — owner это
+        # частный случай системника, отдельного фильтра у него нет.
+        if user_role == 'system':
+            q = q.filter(AIImportLog.user_role.in_(('system', 'admin')))
+        else:
+            q = q.filter(AIImportLog.user_role == user_role)
 
     date_from = _parse_date(request.args.get('date_from'))
     if date_from:
@@ -303,7 +308,10 @@ def list_chat_sessions():
 
     user_role = request.args.get('user_role')
     if user_role and user_role in _VALID_USER_ROLES:
-        q = q.filter(AIChatSession.user_role == user_role)
+        if user_role == 'system':
+            q = q.filter(AIChatSession.user_role.in_(('system', 'admin')))
+        else:
+            q = q.filter(AIChatSession.user_role == user_role)
 
     user_id = request.args.get('user_id', type=int)
     if user_id:
