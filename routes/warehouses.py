@@ -760,6 +760,20 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
                     if len(status['errors']) < 20:
                         status['errors'].append(f'Commit error: {str(e)[:100]}')
 
+                # Сохраняем прогресс в БД после каждого батча. Polling
+                # GET /recalculate-status может попадать на ЛЮБОЙ из 4-х
+                # gunicorn-воркеров (in-memory _recalc_status есть только
+                # у того процесса где запущен поток), поэтому без записи
+                # в БД 3 из 4 polling-запросов вернут устаревший last_recalc.
+                # Один лишний UPDATE на ~100 товаров — пренебрежимо.
+                try:
+                    wh = Warehouse.query.get(warehouse_id)
+                    if wh:
+                        wh.last_recalc = {**status}
+                        db.session.commit()
+                except Exception:
+                    db.session.rollback()
+
             try:
                 _update_product_prices_from_warehouse(warehouse_id)
             except Exception:
@@ -884,23 +898,46 @@ def recalculate_warehouse(warehouse_id):
 @warehouses_bp.route('/<int:warehouse_id>/recalculate-status', methods=['GET'])
 @jwt_required()
 def recalculate_status(warehouse_id):
-    """Check recalculation progress."""
-    status = _recalc_status.get(warehouse_id)
-    if not status:
-        # Try loading from DB
-        wh = Warehouse.query.get(warehouse_id)
-        if wh and wh.last_recalc:
-            return jsonify({
-                'success': True,
-                'message': f'Последний пересчёт: {wh.last_recalc.get("processed", 0)}/{wh.last_recalc.get("total", 0)}',
-                'data': wh.last_recalc
-            }), 200
+    """Check recalculation progress.
+
+    С 4-я воркерами gunicorn в этот endpoint попадает любой воркер.
+    In-memory _recalc_status есть только у того процесса где запущен
+    тред, поэтому prefer DB last_recalc — она пишется тредом после
+    каждого батча и доступна всем воркерам.
+    """
+    wh = Warehouse.query.get(warehouse_id)
+    db_status = wh.last_recalc if wh and wh.last_recalc else None
+
+    mem_status = _recalc_status.get(warehouse_id)
+
+    # Стратегия выбора: используем тот источник у которого больше processed,
+    # либо более свежий started_at. Это покрывает оба сценария:
+    # 1) Polling попал на воркер-исполнитель → mem_status свежее, его и берём
+    # 2) Polling попал на другой воркер → mem_status пуст / старый, берём БД
+    chosen = None
+    if mem_status and db_status:
+        # Сравниваем по started_at — свежий выигрывает
+        if (mem_status.get('started_at') or '') >= (db_status.get('started_at') or ''):
+            chosen = mem_status
+        else:
+            chosen = db_status
+    else:
+        chosen = mem_status or db_status
+
+    if not chosen:
         return jsonify({'success': True, 'data': None}), 200
+
+    state = chosen.get('status', 'unknown')
+    msg_prefix = {
+        'running': 'Выполняется',
+        'done': 'Завершено',
+        'error': 'Ошибка',
+    }.get(state, 'Последний пересчёт')
 
     return jsonify({
         'success': True,
-        'message': f'{"Завершено" if status["status"] == "done" else "Выполняется"}: {status["processed"]}/{status["total"]}',
-        'data': {**status}
+        'message': f'{msg_prefix}: {chosen.get("processed", 0)}/{chosen.get("total", 0)}',
+        'data': dict(chosen),
     }), 200
 
 
