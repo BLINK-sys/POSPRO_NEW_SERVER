@@ -652,6 +652,7 @@ _recalc_status = {}
 
 def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formula_text, delivery_formula_text, cost_formula_text=None):
     """Background recalculation worker."""
+    print(f"[recalc-thread] start warehouse_id={warehouse_id} items={len(cost_ids)} has_cost_formula={bool(cost_formula_text)}", flush=True)
     status = _recalc_status[warehouse_id]
     try:
         with app.app_context():
@@ -779,8 +780,9 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
             if wh:
                 wh.last_recalc = {k: v for k, v in status.items()}
                 db.session.commit()
-    except Exception:
-        pass
+                print(f"[recalc-thread] last_recalc saved warehouse_id={warehouse_id} status={status['status']} processed={status['processed']}/{status['total']}", flush=True)
+    except Exception as e:
+        print(f"[recalc-thread] FAILED to save last_recalc warehouse_id={warehouse_id}: {e}", flush=True)
 
 
 @warehouses_bp.route('/<int:warehouse_id>/recalculate', methods=['POST'])
@@ -831,6 +833,13 @@ def recalculate_warehouse(warehouse_id):
     var_list = [{'name': v.name, 'formula': v.formula} for v in variables]
 
     cost_ids = [c.id for c in ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).with_entities(ProductWarehouseCost.id).all()]
+
+    # Диагностика: считаем напрямую через count() для перепроверки. Если
+    # cost_ids длина != count() — где-то баг в фильтре. Если оба 0 при
+    # ненулевой "Привязано товаров" в UI — у склада действительно нет pwc-строк
+    # в БД (например, новый склад, импорт продуктов на него ещё не делался).
+    direct_count = ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).count()
+    print(f"[recalculate] warehouse_id={warehouse_id} cost_ids={len(cost_ids)} direct_count={direct_count}", flush=True)
 
     delivery_formula_text = warehouse.formula.delivery_formula
     cost_formula_text = warehouse.formula.cost_formula
