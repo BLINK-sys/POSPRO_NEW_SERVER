@@ -12,6 +12,10 @@ class ProductWarehouseCost(db.Model):
     quantity = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     calculated_price = db.Column(db.Float, nullable=True)
     calculated_delivery = db.Column(db.Float, nullable=True)
+    # Себестоимость без маржи — результат WarehouseFormula.cost_formula.
+    # Используется только для отображения в модалке «Остатки» товара,
+    # дальше нигде не учитывается. NULL = формула не настроена / не считалась.
+    calculated_cost_no_margin = db.Column(db.Float, nullable=True)
     calculated_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
@@ -34,6 +38,7 @@ class ProductWarehouseCost(db.Model):
             'quantity': self.quantity,
             'calculated_price': self.calculated_price,
             'calculated_delivery': self.calculated_delivery,
+            'calculated_cost_no_margin': self.calculated_cost_no_margin,
             'calculated_at': self.calculated_at.isoformat() if self.calculated_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None

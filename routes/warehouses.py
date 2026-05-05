@@ -346,6 +346,7 @@ def save_formula(warehouse_id):
     data = request.get_json()
     formula_text = data.get('formula', '').strip()
     delivery_formula_text = data.get('delivery_formula', '').strip() if data.get('delivery_formula') else None
+    cost_formula_text = data.get('cost_formula', '').strip() if data.get('cost_formula') else None
 
     if not formula_text:
         return jsonify({'success': False, 'message': 'Формула не может быть пустой'}), 400
@@ -368,17 +369,25 @@ def save_formula(warehouse_id):
         if error:
             return jsonify({'success': False, 'message': f'Формула доставки: {error}'}), 400
 
+    # Validate cost (no margin) formula if provided
+    if cost_formula_text:
+        error = validate_formula(cost_formula_text, available_vars)
+        if error:
+            return jsonify({'success': False, 'message': f'Формула себестоимости: {error}'}), 400
+
     # Save or update
     formula = WarehouseFormula.query.filter_by(warehouse_id=warehouse_id).first()
     if formula:
         formula.formula = formula_text
         formula.delivery_formula = delivery_formula_text
+        formula.cost_formula = cost_formula_text
         formula.updated_at = datetime.now()
     else:
         formula = WarehouseFormula(
             warehouse_id=warehouse_id,
             formula=formula_text,
-            delivery_formula=delivery_formula_text
+            delivery_formula=delivery_formula_text,
+            cost_formula=cost_formula_text,
         )
         db.session.add(formula)
 
@@ -541,7 +550,7 @@ import threading
 _recalc_status = {}
 
 
-def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formula_text, delivery_formula_text):
+def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formula_text, delivery_formula_text, cost_formula_text=None):
     """Background recalculation worker."""
     status = _recalc_status[warehouse_id]
     try:
@@ -614,6 +623,26 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
                                 pwc.calculated_delivery = None
                         else:
                             pwc.calculated_delivery = None
+
+                        # Себестоимость без маржи — третья формула, считается за
+                        # тот же проход что и цена/доставка. Опциональна: если
+                        # формула не задана — поле остаётся как было (NULL для
+                        # новых записей, либо ранее посчитанное значение —
+                        # перезаписывать его на NULL не стоит, чтобы не терять
+                        # данные при временной правке формулы).
+                        if cost_formula_text:
+                            try:
+                                cost_no_margin, _ = calculate_product_price(
+                                    cost_price=pwc.cost_price,
+                                    currency_rate=currency_rate,
+                                    product_characteristics=product_chars,
+                                    warehouse_variables=var_list,
+                                    final_formula=cost_formula_text
+                                )
+                                pwc.calculated_cost_no_margin = round(cost_no_margin, 2)
+                                status['cost_no_margin_calculated'] = status.get('cost_no_margin_calculated', 0) + 1
+                            except (FormulaError, Exception):
+                                pwc.calculated_cost_no_margin = None
 
                         status['processed'] += 1
                     except FormulaError as e:
@@ -704,6 +733,7 @@ def recalculate_warehouse(warehouse_id):
     cost_ids = [c.id for c in ProductWarehouseCost.query.filter_by(warehouse_id=warehouse_id).with_entities(ProductWarehouseCost.id).all()]
 
     delivery_formula_text = warehouse.formula.delivery_formula
+    cost_formula_text = warehouse.formula.cost_formula
 
     _recalc_status[warehouse_id] = {
         'status': 'running',
@@ -713,11 +743,13 @@ def recalculate_warehouse(warehouse_id):
         'processed': 0,
         'price_calculated': 0,
         'delivery_calculated': 0,
+        'cost_no_margin_calculated': 0,
         'zero_price': 0,
         'zero_price_reasons': [],
         'error_count': 0,
         'errors': [],
         'has_delivery_formula': bool(delivery_formula_text),
+        'has_cost_formula': bool(cost_formula_text),
         'currency_rate': currency_rate,
         'rate_refreshed': rate_refreshed,
     }
@@ -728,7 +760,7 @@ def recalculate_warehouse(warehouse_id):
     thread = threading.Thread(
         target=_do_recalculate,
         args=(app, warehouse_id, currency_rate, var_list, cost_ids,
-              warehouse.formula.formula, delivery_formula_text),
+              warehouse.formula.formula, delivery_formula_text, cost_formula_text),
         daemon=True
     )
     thread.start()

@@ -259,6 +259,23 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция kp_history.signed_at: {e}")
 
+        # warehouse_formula.cost_formula — формула «Себестоимость без маржи».
+        # Опциональна, считается за один проход с основной формулой и доставкой.
+        # product_warehouse_cost.calculated_cost_no_margin — её результат на товар.
+        # Оба NULL по умолчанию — заполняются только после ручного пересчёта склада.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE warehouse_formula ADD COLUMN IF NOT EXISTS cost_formula TEXT"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE product_warehouse_cost "
+                "ADD COLUMN IF NOT EXISTS calculated_cost_no_margin FLOAT"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция cost_formula / calculated_cost_no_margin: {e}")
+
         # product_warehouse_cost.quantity — остаток на складе для товара.
         # Бэкфилл: для строк где quantity ещё 0, копируем product.quantity,
         # если supplier товара совпадает с supplier склада (т.е. это «основной»

@@ -85,6 +85,10 @@ class WarehouseFormula(db.Model):
     warehouse_id = db.Column(db.Integer, db.ForeignKey('warehouse.id'), nullable=False, unique=True)
     formula = db.Column(db.Text, nullable=False)
     delivery_formula = db.Column(db.Text, nullable=True)  # Formula for delivery per unit
+    # Себестоимость без маржи — отображается только в модалке «Остатки» товара.
+    # Использует те же переменные склада, что и основная формула цены, но без
+    # маржи. Опциональна. NULL = не настроена → в UI прочерк.
+    cost_formula = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -94,6 +98,7 @@ class WarehouseFormula(db.Model):
             'warehouse_id': self.warehouse_id,
             'formula': self.formula,
             'delivery_formula': self.delivery_formula,
+            'cost_formula': self.cost_formula,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
