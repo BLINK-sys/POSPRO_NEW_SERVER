@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from models.kp_history import KPHistory
@@ -141,6 +143,22 @@ def update_kp_history(history_id):
             record.total_amount = data['total_amount']
         if 'calculator_data' in data:
             record.calculator_data = data['calculator_data']
+        # Контракт подписан / разподписан. Принимаем:
+        #   {"signed_at": "now"}        — установить текущее время сервера
+        #   {"signed_at": null}         — очистить (разподписать)
+        #   {"signed_at": "<ISO date>"} — задать явное время
+        if 'signed_at' in data:
+            v = data['signed_at']
+            if v is None:
+                record.signed_at = None
+            elif v == 'now':
+                record.signed_at = datetime.utcnow()
+            else:
+                try:
+                    # Поддерживаем ISO с возможным 'Z' (UTC)
+                    record.signed_at = datetime.fromisoformat(str(v).replace('Z', '+00:00'))
+                except (ValueError, TypeError):
+                    return jsonify({'error': 'signed_at должен быть ISO-датой, "now" или null'}), 400
 
         db.session.commit()
 

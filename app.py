@@ -248,6 +248,17 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция warehouse.vat_enabled: {e}")
 
+        # kp_history.signed_at — отметка о подписанном контракте. Если
+        # задана — КП заморожено, не пересчитывается от изменений в магазине.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE kp_history ADD COLUMN IF NOT EXISTS signed_at TIMESTAMP"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция kp_history.signed_at: {e}")
+
         # product_warehouse_cost.quantity — остаток на складе для товара.
         # Бэкфилл: для строк где quantity ещё 0, копируем product.quantity,
         # если supplier товара совпадает с supplier склада (т.е. это «основной»
