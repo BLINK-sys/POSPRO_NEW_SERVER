@@ -189,6 +189,18 @@ def save_kp_history():
         settings = data.get('settings', {})
         total_amount = data.get('total_amount', 0)
         calculator_data = data.get('calculator_data', None)
+        # client_id — опциональная привязка к адресной книге. None = без клиента.
+        # Если передан несуществующий id — пишем None (не падаем 500).
+        client_id_raw = data.get('client_id')
+        client_id = None
+        if client_id_raw not in (None, '', 0, '0'):
+            try:
+                from models.kp_client import KpClient
+                cid = int(client_id_raw)
+                if KpClient.query.get(cid):
+                    client_id = cid
+            except (ValueError, TypeError):
+                pass
 
         record = KPHistory(
             user_id=user_id,
@@ -198,6 +210,7 @@ def save_kp_history():
             settings=settings,
             total_amount=total_amount,
             calculator_data=calculator_data,
+            client_id=client_id,
         )
         db.session.add(record)
         db.session.commit()
@@ -250,6 +263,18 @@ def update_kp_history(history_id):
             record.total_amount = data['total_amount']
         if 'calculator_data' in data:
             record.calculator_data = data['calculator_data']
+        if 'client_id' in data:
+            v = data['client_id']
+            if v in (None, '', 0, '0'):
+                record.client_id = None
+            else:
+                try:
+                    from models.kp_client import KpClient
+                    cid = int(v)
+                    if KpClient.query.get(cid):
+                        record.client_id = cid
+                except (ValueError, TypeError):
+                    pass
         # Подписать / разподписать контракт. Доступно при edit-доступе.
         if 'signed_at' in data:
             v = data['signed_at']

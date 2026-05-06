@@ -24,3 +24,4 @@ from .help_article import HelpArticle, HelpArticleMedia
 from .driver import Driver
 from .ai_logs import AIImportLog, AIChatSession, AIChatMessage
 from .kp_share import KPShare, KPSuperAdminAccess
+from .kp_client import KpClient

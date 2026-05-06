@@ -31,6 +31,7 @@ from routes.orders import orders_bp
 from routes.kp_settings import kp_settings_bp
 from routes.kp_history import kp_history_bp
 from routes.kp_share import kp_share_bp
+from routes.kp_clients import kp_clients_bp
 from routes.kp_logos import kp_logos_bp
 from routes.dashboard import dashboard_bp
 from routes.catalog_visibility import catalog_visibility_bp
@@ -97,6 +98,7 @@ def create_app():
     app.register_blueprint(kp_settings_bp, url_prefix='/api')  # /api/kp-settings
     app.register_blueprint(kp_history_bp, url_prefix='/api')   # /api/kp-history
     app.register_blueprint(kp_share_bp, url_prefix='/api')     # /api/kp-history/<id>/share, /api/admin/kp-super-admin-access
+    app.register_blueprint(kp_clients_bp, url_prefix='/api')   # /api/kp-clients
     app.register_blueprint(kp_logos_bp, url_prefix='/api')     # /api/kp-logos
 
     # 🔹 Доступ к AI Консультанту (страница /ai)
@@ -291,6 +293,23 @@ def create_app():
         except Exception as e:
             db.session.rollback()
             print(f"⚠️ Миграция kp_share index: {e}")
+
+        # kp_history.client_id — привязка к адресной книге (kp_client).
+        # На старых инсталляциях колонки не было, db.create_all не добавляет
+        # колонки в существующие таблицы — нужен явный ALTER.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE kp_history ADD COLUMN IF NOT EXISTS "
+                "client_id INTEGER REFERENCES kp_client(id)"
+            ))
+            db.session.execute(db.text(
+                "CREATE INDEX IF NOT EXISTS ix_kp_history_client_id "
+                "ON kp_history(client_id)"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция kp_history.client_id: {e}")
 
         # system_users.is_owner — заменяет хардкод по email во всех проверках
         # «главного админа». Бутстрап один раз: ставим TRUE для пользователя

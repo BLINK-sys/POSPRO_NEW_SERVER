@@ -19,6 +19,11 @@ class KPHistory(db.Model):
     # товары — новые товары захватывают актуальные данные на момент
     # добавления и сразу попадают в снимок.
     signed_at = db.Column(db.DateTime, nullable=True)
+    # Привязка к клиенту из адресной книги (kp_client). Не дублируем данные
+    # клиента, ссылаемся только по id — менеджер правит карточку клиента,
+    # все КП тут же подхватывают новые данные. ON DELETE RESTRICT на стороне
+    # БД нет (мы проверяем приложением — даём более понятную ошибку).
+    client_id = db.Column(db.Integer, db.ForeignKey('kp_client.id'), nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self, short=False):
@@ -27,8 +32,25 @@ class KPHistory(db.Model):
             'name': self.name,
             'total_amount': self.total_amount,
             'signed_at': self.signed_at.isoformat() if self.signed_at else None,
+            'client_id': self.client_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
+        # Денормализованные данные клиента — нужны UI для отображения
+        # чипа «Клиент: X» в списке/шапке без отдельного fetch'а каждой
+        # карточки. Тяжёлой нагрузки нет — kp_client это маленькая таблица.
+        if self.client_id:
+            from models.kp_client import KpClient
+            client = KpClient.query.get(self.client_id)
+            if client:
+                result['client'] = {
+                    'id': client.id,
+                    'organization_type': client.organization_type,
+                    'display_name': client.display_name,
+                }
+            else:
+                # Если клиент удалён (что в норме невозможно — есть гард,
+                # но защита от ручных правок БД) — просто null.
+                result['client'] = None
         if not short:
             result['items'] = self.items
             result['settings'] = self.settings
