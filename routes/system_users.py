@@ -14,6 +14,7 @@ def get_system_users():
         'full_name': u.full_name,
         'email': u.email,
         'phone': u.phone,
+        'is_owner': bool(u.is_owner),
         'access': {
             'orders': u.access_orders,
             'catalog': u.access_catalog,
@@ -93,6 +94,13 @@ def create_system_user():
 def update_system_user(user_id):
     user = SystemUser.query.get_or_404(user_id)
     data = request.json
+
+    # Защита owner-флага: его нельзя снять через обычное PUT — иначе случайным
+    # запросом/багом UI можно «обнулить» главного админа. Поле в payload
+    # игнорируется. Если когда-то понадобится передавать признак — заведём
+    # отдельный endpoint с явной проверкой что инициатор тоже owner.
+    if 'is_owner' in (data or {}) and user.is_owner and data.get('is_owner') is False:
+        return jsonify({'error': 'Снятие is_owner через этот endpoint не разрешено'}), 403
     
     # Логируем полученные данные для отладки
     print(f"Update system user data: {data}")
@@ -140,6 +148,11 @@ def update_system_user(user_id):
 @system_users_bp.route('/system-users/<int:user_id>', methods=['DELETE'])
 def delete_system_user(user_id):
     user = SystemUser.query.get_or_404(user_id)
+    # Owner неудаляем — это главный аккаунт системы. Если когда-то понадобится
+    # «передать» owner-роль другому — снять флаг и поставить новому будет
+    # отдельной операцией со своим UI (сейчас не реализовано).
+    if user.is_owner:
+        return jsonify({'error': 'Главного владельца системы нельзя удалить'}), 403
     db.session.delete(user)
     db.session.commit()
     return jsonify({'message': 'User deleted'})

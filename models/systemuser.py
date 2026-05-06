@@ -11,6 +11,12 @@ class SystemUser(db.Model):
     phone = db.Column(db.String(50))
     password_hash = db.Column(db.String(255), nullable=False)
 
+    # Главный владелец системы — видит и может всё, защищён от удаления и
+    # снятия флага. Этот признак заменяет хардкод по email в коде. Бутстрап
+    # выполняется один раз при миграции (см. app.py): берётся пользователь
+    # с email из ENV `OWNER_EMAIL` (или дефолтным `bocan.anton@mail.ru`).
+    is_owner = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
+
     # Права доступа
     access_orders = db.Column(db.Boolean, default=False)
     access_catalog = db.Column(db.Boolean, default=False)

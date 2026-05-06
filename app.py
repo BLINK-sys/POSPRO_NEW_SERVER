@@ -30,6 +30,7 @@ from routes.cart import cart_bp
 from routes.orders import orders_bp
 from routes.kp_settings import kp_settings_bp
 from routes.kp_history import kp_history_bp
+from routes.kp_share import kp_share_bp
 from routes.kp_logos import kp_logos_bp
 from routes.dashboard import dashboard_bp
 from routes.catalog_visibility import catalog_visibility_bp
@@ -95,6 +96,7 @@ def create_app():
     # 🔹 Настройки КП
     app.register_blueprint(kp_settings_bp, url_prefix='/api')  # /api/kp-settings
     app.register_blueprint(kp_history_bp, url_prefix='/api')   # /api/kp-history
+    app.register_blueprint(kp_share_bp, url_prefix='/api')     # /api/kp-history/<id>/share, /api/admin/kp-super-admin-access
     app.register_blueprint(kp_logos_bp, url_prefix='/api')     # /api/kp-logos
 
     # 🔹 Доступ к AI Консультанту (страница /ai)
@@ -275,6 +277,47 @@ def create_app():
         except Exception as e:
             db.session.rollback()
             print(f"⚠️ Миграция cost_formula / calculated_cost_no_margin: {e}")
+
+        # kp_share / kp_super_admin_access — таблицы для функции «Поделиться КП».
+        # db.create_all() выше уже их создаёт, но индекс UNIQUE может не проставиться
+        # на старой инсталляции если раньше таблица создавалась вручную. Защитный
+        # ALTER гарантирует что unique constraint на месте.
+        try:
+            db.session.execute(db.text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_kp_share_target
+                ON kp_share (kp_history_id, shared_with_user_id)
+            """))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция kp_share index: {e}")
+
+        # system_users.is_owner — заменяет хардкод по email во всех проверках
+        # «главного админа». Бутстрап один раз: ставим TRUE для пользователя
+        # с email из ENV OWNER_EMAIL (по умолчанию bocan.anton@mail.ru), но
+        # только если в системе ещё нет ни одного owner'а — это защита от
+        # случайного снятия флага в БД и повторного бутстрапа в чужой email.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE system_users ADD COLUMN IF NOT EXISTS "
+                "is_owner BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            db.session.commit()
+            existing = db.session.execute(
+                db.text("SELECT COUNT(*) FROM system_users WHERE is_owner = TRUE")
+            ).scalar() or 0
+            if existing == 0:
+                bootstrap_email = (os.environ.get('OWNER_EMAIL') or 'bocan.anton@mail.ru').lower()
+                db.session.execute(
+                    db.text("UPDATE system_users SET is_owner = TRUE "
+                            "WHERE LOWER(email) = :em"),
+                    {'em': bootstrap_email}
+                )
+                db.session.commit()
+                print(f"ℹ️ is_owner bootstrap: {bootstrap_email}")
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция system_users.is_owner: {e}")
 
         # product_warehouse_cost.quantity — остаток на складе для товара.
         # Бэкфилл: для строк где quantity ещё 0, копируем product.quantity,

@@ -24,6 +24,24 @@ ACCESS_TOKEN_TTL = datetime.timedelta(minutes=30)
 REFRESH_TOKEN_TTL = datetime.timedelta(days=30)
 
 
+def is_owner_user(user_id) -> bool:
+    """
+    True если пользователь — главный владелец системы (`system_users.is_owner=TRUE`).
+    Заменяет хардкод по email во всех auth/access проверках.
+
+    Принимает int или str id. Безопасно возвращает False для None / клиентов
+    (они в `users`, а не в `system_users` — у них owner-флага в принципе нет).
+    """
+    if user_id is None:
+        return False
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        return False
+    su = SystemUser.query.get(uid)
+    return bool(su and su.is_owner)
+
+
 def _issue_token_pair(identity: str, role: str) -> dict:
     """Создаёт пару токенов с одинаковыми claims о роли. Используется
     в login и refresh endpoint'ах — единое место правды."""
