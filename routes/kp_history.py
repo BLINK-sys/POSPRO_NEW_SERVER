@@ -118,10 +118,24 @@ def get_kp_history_list():
             access = kp_access_level(viewer_id, r) or 'view'
             history.append(_enrich_for_response(r, viewer_id, access, short=True))
 
+        # «Есть ли вообще что-то доступное помимо собственных» — UI на этом
+        # решает показывать ли онбординг-карточку «Список КП пуст». Если
+        # юзеру что-то расшарили (или он super-admin и в системе есть чужие
+        # КП) — онбординг не нужен, должны быть видны фильтр и колонки.
+        if viewer_super:
+            has_other_visible = (
+                KPHistory.query.filter(KPHistory.user_id != viewer_id).first() is not None
+            )
+        else:
+            has_other_visible = (
+                KPShare.query.filter_by(shared_with_user_id=viewer_id).first() is not None
+            )
+
         return jsonify({
             'success': True,
             'history': history,
             'is_super_admin': viewer_super,
+            'has_other_visible': has_other_visible,
         }), 200
 
     except Exception as e:
