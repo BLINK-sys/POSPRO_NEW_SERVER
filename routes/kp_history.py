@@ -41,12 +41,14 @@ def get_kp_history_list():
 
     Query params:
       ?filter=mine    — только свои (default)
-      ?filter=shared  — только расшаренные мне (где я не владелец)
-      ?filter=user&user_id=N — только КП конкретного юзера. Доступно
-                         super-admin'ам и owner'у. Удобно когда нужно
-                         посмотреть документы конкретного менеджера.
-    Без фильтра super-admin'у/owner'у возвращаются ВСЕ КП. Обычному
-    юзеру без фильтра возвращаются свои + расшаренные ему.
+      ?filter=shared  — только реально расшаренные мне через KPShare. Для
+                         super-admin'а трактуется так же как для обычного:
+                         «расшарил» = кто-то явно передал доступ через UI
+                         «Поделиться». Привилегии видеть всё — отдельный
+                         пункт `all`, не путать.
+      ?filter=all     — все КП всех пользователей. Только для super-admin/owner.
+      ?filter=user&user_id=N — все КП конкретного юзера. Только super-admin.
+    Без фильтра super-admin/owner получает все, обычный юзер — свои + расшаренные.
     """
     try:
         viewer_id = int(get_jwt_identity())
@@ -63,24 +65,24 @@ def get_kp_history_list():
                        .order_by(KPHistory.created_at.desc())
                        .all())
         elif flt == 'shared':
-            # КП, где я НЕ владелец, но мне выдан share. Super-admin
-            # тоже видит сюда «всё чужое» — мы трактуем это как «всё на
-            # что у меня доступ кроме своих».
-            if viewer_super:
+            # Только КП, на которые есть запись в KPShare для этого юзера —
+            # одинаково для super-admin'а и обычного юзера.
+            shared_ids = [s.kp_history_id for s in KPShare.query.filter_by(
+                shared_with_user_id=viewer_id).all()]
+            if not shared_ids:
+                records = []
+            else:
                 records = (KPHistory.query
-                           .filter(KPHistory.user_id != viewer_id)
+                           .filter(KPHistory.id.in_(shared_ids))
                            .order_by(KPHistory.created_at.desc())
                            .all())
-            else:
-                shared_ids = [s.kp_history_id for s in KPShare.query.filter_by(
-                    shared_with_user_id=viewer_id).all()]
-                if not shared_ids:
-                    records = []
-                else:
-                    records = (KPHistory.query
-                               .filter(KPHistory.id.in_(shared_ids))
-                               .order_by(KPHistory.created_at.desc())
-                               .all())
+        elif flt == 'all':
+            # Все КП в системе. Доступно только super-admin/owner.
+            if not viewer_super:
+                return jsonify({'error': 'Доступ запрещён'}), 403
+            records = (KPHistory.query
+                       .order_by(KPHistory.created_at.desc())
+                       .all())
         elif flt == 'user':
             if not viewer_super:
                 return jsonify({'error': 'Только super-admin может фильтровать по пользователю'}), 403
