@@ -43,11 +43,21 @@ def create_system_user():
         return jsonify({'error': 'Email обязателен'}), 400
     data['email'] = email
 
-    # Проверка email во всех таблицах (без учёта регистра)
+    # Проверка email во всех таблицах (без учёта регистра). Сообщение
+    # делаем максимально явным — где именно занят email — иначе менеджер
+    # видит «Email уже используется» и не понимает где искать.
     existing_admin = SystemUser.query.filter(db.func.lower(SystemUser.email) == email).first()
     existing_client = User.query.filter(db.func.lower(User.email) == email).first()
-    if existing_admin or existing_client:
-        return jsonify({'error': 'Email уже используется'}), 400
+    if existing_admin:
+        return jsonify({
+            'error': f'Системный пользователь с email «{email}» уже существует. '
+                     f'Откройте его карточку для редактирования или используйте другой email.'
+        }), 400
+    if existing_client:
+        return jsonify({
+            'error': f'Email «{email}» уже зарегистрирован как клиент. '
+                     f'Используйте другой email — один email не может принадлежать одновременно клиенту и системному пользователю.'
+        }), 400
 
     # Безопасная обработка access данных
     access_data = data.get('access', {})
@@ -104,9 +114,27 @@ def update_system_user(user_id):
     
     # Логируем полученные данные для отладки
     print(f"Update system user data: {data}")
-    
+
+    new_email = (data.get('email') or '').strip().lower()
+    if new_email and new_email != (user.email or '').lower():
+        # Меняем email — проверяем что он не занят кем-то другим, иначе
+        # commit упадёт на UNIQUE constraint и юзер увидит непонятную ошибку.
+        clash_admin = SystemUser.query.filter(
+            db.func.lower(SystemUser.email) == new_email,
+            SystemUser.id != user_id,
+        ).first()
+        clash_client = User.query.filter(db.func.lower(User.email) == new_email).first()
+        if clash_admin:
+            return jsonify({
+                'error': f'Системный пользователь с email «{new_email}» уже существует.'
+            }), 400
+        if clash_client:
+            return jsonify({
+                'error': f'Email «{new_email}» уже зарегистрирован как клиент. Используйте другой email.'
+            }), 400
+
     user.full_name = data['full_name']
-    user.email = data['email']
+    user.email = new_email or data['email']
     user.phone = data.get('phone')
     
     # Безопасная обработка access данных
