@@ -35,18 +35,22 @@ class KPHistory(db.Model):
             'client_id': self.client_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
-        # Денормализованные данные клиента — нужны UI для отображения
-        # чипа «Клиент: X» в списке/шапке без отдельного fetch'а каждой
-        # карточки. Тяжёлой нагрузки нет — kp_client это маленькая таблица.
+        # Денормализованные данные клиента. В short-варианте (список карточек)
+        # отдаём минимум — id/тип/display_name для чипа. В полном варианте
+        # (загрузка КП в редактор) отдаём всё, чтобы фронт мог показать
+        # popover «Инфо» с БИН/ФИО/телефоном без дополнительного запроса.
         if self.client_id:
             from models.kp_client import KpClient
             client = KpClient.query.get(self.client_id)
             if client:
-                result['client'] = {
-                    'id': client.id,
-                    'organization_type': client.organization_type,
-                    'display_name': client.display_name,
-                }
+                if short:
+                    result['client'] = {
+                        'id': client.id,
+                        'organization_type': client.organization_type,
+                        'display_name': client.display_name,
+                    }
+                else:
+                    result['client'] = client.to_dict()
             else:
                 # Если клиент удалён (что в норме невозможно — есть гард,
                 # но защита от ручных правок БД) — просто null.
