@@ -1183,7 +1183,24 @@ def search_products():
     if query:
         search_query = search_query.filter(Product.name.ilike(f'%{query}%'))
     if category_id:
-        search_query = search_query.filter(Product.category_id == category_id)
+        # Включаем товары из ВСЕХ потомков выбранной категории — корневые
+        # категории обычно сами не держат товары, всё лежит в дочерних.
+        # Recursive CTE: находим всю ветку (включая саму выбранную).
+        descendant_ids_q = db.session.execute(db.text("""
+            WITH RECURSIVE cat_tree AS (
+                SELECT id FROM category WHERE id = :root
+                UNION ALL
+                SELECT c.id FROM category c
+                JOIN cat_tree t ON c.parent_id = t.id
+            )
+            SELECT id FROM cat_tree
+        """), {"root": category_id})
+        descendant_ids = [row[0] for row in descendant_ids_q]
+        if descendant_ids:
+            search_query = search_query.filter(Product.category_id.in_(descendant_ids))
+        else:
+            # Категория не существует — фильтр по несуществующему id даст пусто
+            search_query = search_query.filter(Product.category_id == category_id)
     if brand_id:
         search_query = search_query.filter(Product.brand_id == brand_id)
 
