@@ -1154,15 +1154,24 @@ def search_products():
     query = request.args.get('q', '').strip()
     category_id = request.args.get('category_id', type=int)
     brand_id = request.args.get('brand_id', type=int)
-    limit = request.args.get('limit', 5000, type=int)
+    limit_param = request.args.get('limit', type=int)
 
     # Должен быть хотя бы один критерий — иначе возвращать всё
     # бессмысленно (это не каталог), отдадим пустой массив.
     if not query and not category_id and not brand_id:
         return jsonify([])
 
-    # Ограничиваем максимальный лимит
-    limit = min(limit, 5000)
+    # Логика лимита:
+    # - явный limit — уважаем (но кепаем разумной верхней планкой 100K
+    #   чтобы не пустить случайный фетч всей таблицы за пределы памяти)
+    # - без limit + текстовый поиск — дефолт 5000 (защита от широкого «а»)
+    # - без limit + category/brand — без ограничения, отдаём всё
+    if limit_param is not None:
+        limit = min(limit_param, 100000)
+    elif category_id or brand_id:
+        limit = None  # отдать всё
+    else:
+        limit = 5000
 
     show_hidden = _is_system_user()
     search_query = Product.query.options(
@@ -1180,7 +1189,9 @@ def search_products():
 
     if not show_hidden:
         search_query = search_query.filter(Product.is_visible == True)
-    products = search_query.limit(limit).all()
+    if limit is not None:
+        search_query = search_query.limit(limit)
+    products = search_query.all()
     
     # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
     product_ids = [p.id for p in products]
