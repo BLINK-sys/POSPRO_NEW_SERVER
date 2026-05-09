@@ -706,14 +706,17 @@ def get_products():
         if per_page:
             per_page = max(1, min(per_page, 200))
             current_page = max(1, page or 1)
-            total_count = query.count()
-            total_pages = math.ceil(total_count / per_page) if total_count else 1
-            if current_page > total_pages and total_pages > 0:
-                current_page = total_pages
+            # paginate(...) сам делает COUNT внутри — не дублируем явным
+            # query.count() выше: на большой выборке с фильтром COUNT —
+            # самая дорогая часть запроса, зачем платить дважды.
             pagination = query.paginate(page=current_page, per_page=per_page, error_out=False)
             products = pagination.items
             total_count = pagination.total
             total_pages = pagination.pages if pagination.pages else 1
+            # Если страница вышла за пределы — paginate сам вернёт пустой
+            # items, current_page оставляем как просили (фронт сам сбросит)
+            if current_page > total_pages and total_pages > 0:
+                current_page = total_pages
             
             # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
             product_ids = [p.id for p in products]
