@@ -456,6 +456,26 @@ def create_app():
                 db.session.rollback()
                 print(f"⚠️ Индекс {idx_name}: {e}")
 
+        # pg_trgm + GIN-индекс по product.name — ускоряет ILIKE '%query%'
+        # в десятки раз. Используется и в /products/search, и в фильтре
+        # «Поиск» на админ-странице товаров. B-tree индекс тут бесполезен —
+        # ведущий % заставляет Postgres делать Seq Scan на всей таблице.
+        # Расширение можно установить только под superuser; на Render-managed
+        # Postgres у нас права есть. На случай если нет — try/except.
+        try:
+            db.session.execute(db.text(
+                "CREATE EXTENSION IF NOT EXISTS pg_trgm"
+            ))
+            db.session.commit()
+            db.session.execute(db.text(
+                "CREATE INDEX IF NOT EXISTS idx_product_name_trgm "
+                "ON product USING gin (name gin_trgm_ops)"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция pg_trgm + idx_product_name_trgm: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 
