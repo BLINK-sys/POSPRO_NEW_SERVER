@@ -404,6 +404,58 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция category.slug UNIQUE: {e}")
 
+        # Bulk-индексы под FK и горячие фильтры. CREATE INDEX IF NOT EXISTS —
+        # идемпотентно, можно гонять при каждом старте. Создание индекса на
+        # большой таблице блокирует её на запись на время — в продакшне это
+        # секунды-десятки секунд, для нашего размера БД безопасно. Если станет
+        # критично — переехать на CREATE INDEX CONCURRENTLY (но он требует
+        # autocommit, нужен будет отдельный коннект вне транзакции).
+        index_migrations = [
+            # product
+            ("idx_product_supplier_id", "product(supplier_id)"),
+            ("idx_product_status_id", "product(status)"),
+            # product_warehouse_cost
+            ("idx_pwc_warehouse_id", "product_warehouse_cost(warehouse_id)"),
+            # product_characteristic / product_document
+            ("idx_product_characteristic_product_id", "product_characteristic(product_id)"),
+            ("idx_product_document_product_id", "product_document(product_id)"),
+            ("idx_product_document_driver_id", "product_document(driver_id)"),
+            # cart
+            ("idx_cart_user_id", "cart(user_id)"),
+            ("idx_cart_product_id", "cart(product_id)"),
+            # orders
+            ("idx_orders_user_id", "orders(user_id)"),
+            ("idx_orders_status_id", "orders(status_id)"),
+            ("idx_order_items_order_id", "order_items(order_id)"),
+            ("idx_order_items_product_id", "order_items(product_id)"),
+            ("idx_order_managers_order_id", "order_managers(order_id)"),
+            ("idx_order_managers_manager_id", "order_managers(manager_id)"),
+            ("idx_order_managers_assigned_by", "order_managers(assigned_by)"),
+            # favorites
+            ("idx_favorites_user_id", "favorites(user_id)"),
+            ("idx_favorites_product_id", "favorites(product_id)"),
+            # kp_history / kp_share
+            ("idx_kp_history_user_id", "kp_history(user_id)"),
+            ("idx_kp_history_created_at", "kp_history(created_at DESC)"),
+            ("idx_kp_share_created_by", "kp_share(created_by)"),
+            # warehouse
+            ("idx_warehouse_supplier_id", "warehouse(supplier_id)"),
+            ("idx_warehouse_variable_warehouse_id", "warehouse_variable(warehouse_id)"),
+            # ai_import_logs
+            ("idx_ai_import_logs_product_id", "ai_import_logs(product_id)"),
+        ]
+        for idx_name, idx_def in index_migrations:
+            try:
+                db.session.execute(db.text(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def}"
+                ))
+                db.session.commit()
+            except Exception as e:
+                # Если таблица/колонка ещё не существует (старая инсталляция
+                # без какой-то миграции) — пропускаем, не валим весь старт.
+                db.session.rollback()
+                print(f"⚠️ Индекс {idx_name}: {e}")
+
         # Создаем системного пользователя по умолчанию
         create_default_system_user()
 
