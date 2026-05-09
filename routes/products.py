@@ -1139,36 +1139,45 @@ def delete_product(product_id):
 @products_bp.route('/search', methods=['GET'])
 def search_products():
     """
-    Поиск товаров по названию
-    
+    Поиск товаров с фильтрами.
+
     Принцип работы:
-    - Регистронезависимый поиск (Стол = стол = СтОл)
-    - Поиск подстроки в любом месте названия (%{query}%)
-    - Поиск только по полю name (название товара)
-    - Отображаются только видимые товары (is_visible = True)
+    - Текстовый поиск по названию: ilike '%query%' (case-insensitive,
+      ускорено через GIN trigram-индекс)
+    - Фильтр по категории: ?category_id=N — отдаёт все товары категории
+    - Фильтр по бренду: ?brand_id=N — отдаёт все товары бренда
+    - Можно комбинировать (q + category_id, q + brand_id и т.п.)
+    - Если ни одного из (q, category_id, brand_id) не передано — пустой
+      ответ (нечего искать).
+    - Скрытые товары видит только system-юзер.
     """
     query = request.args.get('q', '').strip()
+    category_id = request.args.get('category_id', type=int)
+    brand_id = request.args.get('brand_id', type=int)
     limit = request.args.get('limit', 5000, type=int)
 
-    if not query:
+    # Должен быть хотя бы один критерий — иначе возвращать всё
+    # бессмысленно (это не каталог), отдадим пустой массив.
+    if not query and not category_id and not brand_id:
         return jsonify([])
 
     # Ограничиваем максимальный лимит
     limit = min(limit, 5000)
 
-    # ✅ ОПТИМИЗАЦИЯ: Поиск товаров с relationships
-    # ilike - регистронезависимый поиск (case-insensitive)
-    # %{query}% - поиск подстроки в любом месте (начало, середина, конец)
-    # Поиск только по полю name (название товара)
     show_hidden = _is_system_user()
     search_query = Product.query.options(
         joinedload(Product.brand_info),
         joinedload(Product.status_info),
         joinedload(Product.category)
-    ).filter(
-        Product.name.ilike(f'%{query}%'),
-        Product.is_draft == False
-    )
+    ).filter(Product.is_draft == False)
+
+    if query:
+        search_query = search_query.filter(Product.name.ilike(f'%{query}%'))
+    if category_id:
+        search_query = search_query.filter(Product.category_id == category_id)
+    if brand_id:
+        search_query = search_query.filter(Product.brand_id == brand_id)
+
     if not show_hidden:
         search_query = search_query.filter(Product.is_visible == True)
     products = search_query.limit(limit).all()
