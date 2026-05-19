@@ -444,10 +444,28 @@ def _try_calculate(pwc: ProductWarehouseCost):
         else:
             pwc.calculated_delivery = None
 
+        # Себестоимость без маржи — третья формула склада. Считаем тут же,
+        # чтобы upsert закупки сразу перегонял все три значения и не нужно
+        # было после миграций (Equip/BIO) руками жать «Пересчитать склад».
+        # Если формула не задана — не трогаем старое значение (см. bulk recalc).
+        if warehouse.formula.cost_formula:
+            try:
+                cost_no_margin, _ = calculate_product_price(
+                    cost_price=pwc.cost_price,
+                    currency_rate=currency_rate,
+                    product_characteristics=product_chars,
+                    warehouse_variables=var_list,
+                    final_formula=warehouse.formula.cost_formula
+                )
+                pwc.calculated_cost_no_margin = round(cost_no_margin, 2)
+            except (FormulaError, Exception):
+                pwc.calculated_cost_no_margin = None
+
     except (FormulaError, Exception):
         # If calculation fails, leave calculated_price as None
         pwc.calculated_price = None
         pwc.calculated_delivery = None
+        pwc.calculated_cost_no_margin = None
         pwc.calculated_at = None
 
 
