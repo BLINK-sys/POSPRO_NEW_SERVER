@@ -36,6 +36,7 @@ from routes.search_page import search_page_bp
 from routes.kp_logos import kp_logos_bp
 from routes.dashboard import dashboard_bp
 from routes.catalog_visibility import catalog_visibility_bp
+from routes.system_users_presence import presence_bp
 from routes.currencies import currencies_bp
 from routes.warehouses import warehouses_bp
 from routes.product_costs import product_costs_bp
@@ -116,6 +117,7 @@ def create_app():
 
     # 🔹 Видимость каталогов (публичный + админский под /api)
     app.register_blueprint(catalog_visibility_bp, url_prefix='/api')  # /api/catalog-visibility, /api/admin-catalog-visibility
+    app.register_blueprint(presence_bp)  # /auth/heartbeat, /api/admin/system-users/presence
     
     # 🔹 Статусы заказов
     app.register_blueprint(order_statuses_bp, url_prefix='/api/admin')  # /api/admin/order-statuses
@@ -240,6 +242,17 @@ def create_app():
         except Exception as e:
             db.session.rollback()
             print(f"⚠️ Миграция drivers.image_url: {e}")
+
+        # system_users.last_seen — обновляется heartbeat'ом из admin-layout
+        # раз в 60 сек. Используется для страницы «Активность» (owner-only).
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE system_users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция system_users.last_seen: {e}")
 
         # warehouse.vat_enabled — работает ли склад с НДС. По умолчанию TRUE
         # для всех существующих складов (сохраняем текущее поведение).

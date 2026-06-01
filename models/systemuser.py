@@ -11,6 +11,11 @@ class SystemUser(db.Model):
     phone = db.Column(db.String(50))
     password_hash = db.Column(db.String(255), nullable=False)
 
+    # Обновляется heartbeat'ом из admin-layout раз в 60 сек. Используется
+    # для страницы «Активность» (owner-only) — кто сейчас сидит в админке
+    # и когда последний раз был активен.
+    last_seen = db.Column(db.DateTime(timezone=True), nullable=True)
+
     # Главный владелец системы — видит и может всё, защищён от удаления и
     # снятия флага. Этот признак заменяет хардкод по email в коде. Бутстрап
     # выполняется один раз при миграции (см. app.py): берётся пользователь
