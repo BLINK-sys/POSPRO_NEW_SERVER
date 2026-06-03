@@ -9,8 +9,46 @@ from utils.formula_engine import (
     calculate_product_price, extract_product_characteristics, FormulaError
 )
 from datetime import datetime
+import re
 
 product_costs_bp = Blueprint('product_costs', __name__)
+
+
+# Имена «физических» переменных товара. Если хоть одна из формул склада
+# (final / delivery / cost) ИЛИ его переменных косвенно использует одну
+# из них — значит формула требует чтобы у товара были заполнены вес/габариты.
+# \b — word-boundary, чтобы `вес` не матчился внутри `вес_упаковки` или
+# подобных пользовательских имён.
+_PHYSICAL_VAR_NAMES = (
+    'вес', 'длина', 'ширина', 'высота', 'габариты',
+    'Расчётный_вес',
+    'размер_в_упаковке_длина', 'размер_в_упаковке_ширина', 'размер_в_упаковке_высота',
+    'размер_без_упаковки_длина', 'размер_без_упаковки_ширина', 'размер_без_упаковки_высота',
+)
+_PHYSICAL_VAR_RE = re.compile(r'\b(' + '|'.join(_PHYSICAL_VAR_NAMES) + r')\b')
+
+
+def _warehouse_uses_physical_vars(warehouse_formula, warehouse_variables):
+    """Хоть одна из формул склада или его переменных ссылается на вес/габариты?"""
+    formulas = [
+        warehouse_formula.formula,
+        warehouse_formula.delivery_formula,
+        warehouse_formula.cost_formula,
+    ]
+    formulas.extend(v.formula for v in warehouse_variables)
+    combined = ' '.join(f for f in formulas if f)
+    return bool(_PHYSICAL_VAR_RE.search(combined))
+
+
+def _product_has_dimensions(product_chars):
+    """True если у товара есть вес ИЛИ хотя бы какие-то габариты (pack или nopack)."""
+    if product_chars.get('вес', 0) > 0:
+        return True
+    for side in ('длина', 'ширина', 'высота'):
+        if (product_chars.get(f'размер_в_упаковке_{side}', 0) > 0 or
+            product_chars.get(f'размер_без_упаковки_{side}', 0) > 0):
+            return True
+    return False
 
 
 def check_admin():
@@ -400,17 +438,22 @@ def _try_calculate(pwc: ProductWarehouseCost):
         currency_rate = warehouse.currency.rate_to_tenge if warehouse.currency else 1.0
         product_chars = extract_product_characteristics(pwc.product_id)
 
-        # Раньше тут был ранний return если у товара нет веса И габаритов:
-        # ставили calculated_price=0 и выходили. Это ломало кейс с простыми
-        # формулами вида `себестоимость * маржа` — формула вес/габариты
-        # не использует, считаться должна нормально. Сам calculate_product_price
-        # отсутствующие хары трактует как 0.0 (см. utils/formula_engine.py),
-        # так что для простых формул выход корректный. Если у формулы есть
-        # ссылки на вес — пользователь увидит подозрительно низкую цену и
-        # дозаполнит характеристики.
-
         variables = WarehouseVariable.query.filter_by(warehouse_id=pwc.warehouse_id) \
             .order_by(WarehouseVariable.sort_order).all()
+
+        # Умная защита: если хоть одна формула склада (цена/доставка/себестоимость/
+        # переменные) использует физические переменные товара (вес, габариты),
+        # а у товара они не заполнены — не считаем, ставим розницу в 0. Это
+        # сигнализирует в админке и на витрине что товару нужны характеристики.
+        # Для простых формул типа `себестоимость * маржа` блок не активируется
+        # и расчёт идёт как обычно.
+        if _warehouse_uses_physical_vars(warehouse.formula, variables) \
+                and not _product_has_dimensions(product_chars):
+            pwc.calculated_price = 0
+            pwc.calculated_delivery = None
+            pwc.calculated_cost_no_margin = None
+            pwc.calculated_at = datetime.now()
+            return
         var_list = [{'name': v.name, 'formula': v.formula} for v in variables]
 
         price, all_vars = calculate_product_price(

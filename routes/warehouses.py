@@ -654,6 +654,16 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
     """Background recalculation worker."""
     print(f"[recalc-thread] start warehouse_id={warehouse_id} items={len(cost_ids)} has_cost_formula={bool(cost_formula_text)}", flush=True)
     status = _recalc_status[warehouse_id]
+    # Один раз считаем нужны ли вес/габариты для этого склада: сканим текст
+    # всех формул (final + delivery + cost) + переменных склада на упоминание
+    # физических имён. Для простых формул `cost * markup` будет False — тогда
+    # проверку «есть ли габариты у товара» в цикле вообще не делаем.
+    from routes.product_costs import _PHYSICAL_VAR_RE, _product_has_dimensions
+    _all_formula_text = ' '.join(t for t in [
+        formula_text, delivery_formula_text, cost_formula_text,
+        *(v.get('formula') or '' for v in var_list),
+    ] if t)
+    formula_needs_physical = bool(_PHYSICAL_VAR_RE.search(_all_formula_text))
     try:
         with app.app_context():
             BATCH_SIZE = 100
@@ -681,16 +691,14 @@ def _do_recalculate(app, warehouse_id, currency_rate, var_list, cost_ids, formul
                 for pwc in batch_costs:
                     try:
                         product_chars = all_chars.get(pwc.product_id, {})
-                        has_weight = product_chars.get('вес', 0) > 0
-                        has_dims = any(
-                            product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
-                            product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
-                            for s in ['длина', 'ширина', 'высота']
-                        )
 
-                        if not has_weight and not has_dims:
+                        # Защита только если формула РЕАЛЬНО требует вес/габариты.
+                        # Для простых формул `cost * markup` пропускаем этот блок
+                        # и считаем как обычно (отсутствующие хары → 0.0 в AST).
+                        if formula_needs_physical and not _product_has_dimensions(product_chars):
                             pwc.calculated_price = 0
                             pwc.calculated_delivery = None
+                            pwc.calculated_cost_no_margin = None
                             pwc.calculated_at = datetime.now()
                             status['zero_price'] += 1
                             product_name = pwc.product.name if pwc.product else f'ID {pwc.product_id}'
