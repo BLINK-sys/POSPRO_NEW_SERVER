@@ -23,6 +23,7 @@ from routes.upload import upload_bp
 from routes.brands_statuses import bp as brands_statuses_bp
 from routes.suppliers import suppliers_bp
 import os
+import shutil
 
 from routes.upload_admin import upload_admin_bp
 from routes.favorites import favorites_bp
@@ -163,6 +164,30 @@ def create_app():
     # Создаём папку для загрузок при первом запуске
     print(f"Creating uploads folder: {app.config['UPLOAD_FOLDER']}")
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+    # Bootstrap PosPro Desk binaries: на проде UPLOAD_FOLDER = /disk/uploads
+    # (persistent disk Render'а), а git-репо лежит в другом месте. Файлы
+    # установщиков, закоммиченные в repo/uploads/posprodesk/, надо при
+    # каждом старте сверять с persistent disk'ом и при необходимости копировать.
+    # Сравниваем по size — если в git свежее (новая версия) → перезаписываем.
+    try:
+        _src_dir = os.path.join(os.path.dirname(__file__), 'uploads', 'posprodesk')
+        _dst_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'posprodesk')
+        if os.path.isdir(_src_dir):
+            os.makedirs(_dst_dir, exist_ok=True)
+            for _fname in os.listdir(_src_dir):
+                _src_f = os.path.join(_src_dir, _fname)
+                _dst_f = os.path.join(_dst_dir, _fname)
+                if not os.path.isfile(_src_f):
+                    continue
+                if (not os.path.exists(_dst_f) or
+                        os.path.getsize(_src_f) != os.path.getsize(_dst_f)):
+                    shutil.copy2(_src_f, _dst_f)
+                    print(f"[posprodesk] copied {_fname} to {_dst_dir}")
+                else:
+                    print(f"[posprodesk] {_fname} already up-to-date")
+    except Exception as e:
+        print(f"⚠️ PosPro Desk bootstrap failed: {e}")
 
     with app.app_context():
         db.create_all()
