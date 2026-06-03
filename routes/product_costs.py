@@ -400,18 +400,14 @@ def _try_calculate(pwc: ProductWarehouseCost):
         currency_rate = warehouse.currency.rate_to_tenge if warehouse.currency else 1.0
         product_chars = extract_product_characteristics(pwc.product_id)
 
-        # If no weight and no dimensions — price = 0, skip formula
-        has_weight = product_chars.get('вес', 0) > 0
-        has_dims = any(
-            product_chars.get(f'размер_в_упаковке_{s}', 0) > 0 or
-            product_chars.get(f'размер_без_упаковки_{s}', 0) > 0
-            for s in ['длина', 'ширина', 'высота']
-        )
-
-        if not has_weight and not has_dims:
-            pwc.calculated_price = 0
-            pwc.calculated_at = datetime.now()
-            return
+        # Раньше тут был ранний return если у товара нет веса И габаритов:
+        # ставили calculated_price=0 и выходили. Это ломало кейс с простыми
+        # формулами вида `себестоимость * маржа` — формула вес/габариты
+        # не использует, считаться должна нормально. Сам calculate_product_price
+        # отсутствующие хары трактует как 0.0 (см. utils/formula_engine.py),
+        # так что для простых формул выход корректный. Если у формулы есть
+        # ссылки на вес — пользователь увидит подозрительно низкую цену и
+        # дозаполнит характеристики.
 
         variables = WarehouseVariable.query.filter_by(warehouse_id=pwc.warehouse_id) \
             .order_by(WarehouseVariable.sort_order).all()
