@@ -133,8 +133,12 @@ dmypy.json
 *.sqlite
 *.sqlite3
 
-# Uploads folder (может содержать большие файлы)
-uploads/
+# Uploads folder (может содержать большие файлы).
+# Исключаем содержимое, но НЕ саму папку (иначе re-include через ! не сработает).
+uploads/*
+# Исключение из исключения: установочники PosPro Desk — раздаются клиентам публично.
+!uploads/posprodesk/
+!uploads/posprodesk/**
 
 # IDE files
 .vscode/
