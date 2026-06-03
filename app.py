@@ -279,6 +279,18 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция system_users.last_seen: {e}")
 
+        # product_warehouse_cost.note — свободный текст-комментарий менеджера
+        # к конкретной строке (склад × товар). Редактируется через модалку
+        # «Примечание» в форме товара.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE product_warehouse_cost ADD COLUMN IF NOT EXISTS note TEXT"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция product_warehouse_cost.note: {e}")
+
         # warehouse.vat_enabled — работает ли склад с НДС. По умолчанию TRUE
         # для всех существующих складов (сохраняем текущее поведение).
         # Менеджер потом сам снимет галочку у складов где НДС не нужен.

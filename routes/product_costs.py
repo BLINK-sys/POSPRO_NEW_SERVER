@@ -159,11 +159,16 @@ def create_product_cost():
     except (TypeError, ValueError):
         quantity = 0
 
+    note = data.get('note')
+    if note is not None and not isinstance(note, str):
+        note = None
+
     pwc = ProductWarehouseCost(
         product_id=product_id,
         warehouse_id=warehouse_id,
         cost_price=float(cost_price),
-        quantity=quantity
+        quantity=quantity,
+        note=note,
     )
 
     # Try to calculate price immediately
@@ -204,6 +209,10 @@ def update_product_cost(cost_id):
             pwc.quantity = max(0, int(data['quantity'] or 0))
         except (TypeError, ValueError):
             pwc.quantity = 0
+
+    if 'note' in data:
+        note = data.get('note')
+        pwc.note = note if isinstance(note, str) else None
 
     db.session.commit()
 
@@ -378,11 +387,18 @@ def upsert_many_costs():
         except (TypeError, ValueError):
             qty = 0
 
+        # note опционально — если передали (даже пустую строку),
+        # перетираем; если ключа нет — оставляем как было.
+        note = item.get('note') if 'note' in item else None
+        has_note_key = 'note' in item
+
         sent_warehouse_ids.add(wh_id)
         pwc = existing_by_wh.get(wh_id)
         if pwc:
             pwc.cost_price = float(cost_price)
             pwc.quantity = qty
+            if has_note_key:
+                pwc.note = note if isinstance(note, str) else None
             _try_calculate(pwc)
             updated += 1
         else:
@@ -391,6 +407,7 @@ def upsert_many_costs():
                 warehouse_id=wh_id,
                 cost_price=float(cost_price),
                 quantity=qty,
+                note=note if has_note_key and isinstance(note, str) else None,
             )
             _try_calculate(pwc)
             db.session.add(pwc)
