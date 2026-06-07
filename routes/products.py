@@ -1175,6 +1175,25 @@ def search_products():
     query = request.args.get('q', '').strip()
     category_id = request.args.get('category_id', type=int)
     brand_id = request.args.get('brand_id', type=int)
+    # Множественные ID через CSV (`?category_ids=1,2,3`). Используются когда
+    # юзер выбрал несколько чек-боксов фильтра. Если переданы — старые
+    # category_id/brand_id игнорируются.
+    def _csv_ids(name):
+        raw = (request.args.get(name) or '').strip()
+        if not raw:
+            return []
+        out = []
+        for piece in raw.split(','):
+            piece = piece.strip()
+            if not piece:
+                continue
+            try:
+                out.append(int(piece))
+            except ValueError:
+                pass
+        return out
+    category_ids = _csv_ids('category_ids')
+    brand_ids = _csv_ids('brand_ids')
     limit_param = request.args.get('limit', type=int)
     page = request.args.get('page', type=int)
     per_page = request.args.get('per_page', type=int)
@@ -1203,7 +1222,7 @@ def search_products():
 
     # Должен быть хотя бы один критерий — иначе возвращать всё
     # бессмысленно (это не каталог), отдадим пустой массив.
-    if not query and not category_id and not brand_id:
+    if not query and not category_id and not brand_id and not category_ids and not brand_ids:
         return empty_response()
 
     show_hidden = _is_system_user()
@@ -1234,22 +1253,27 @@ def search_products():
     if query:
         base_query = apply_text_search(base_query, query)
 
-    # Resolve category descendants один раз — используется в final query
-    # и в категорийном facet.
+    # Resolve category descendants — для каждой выбранной категории берём
+    # её ветку. Plural `category_ids` имеет приоритет над singular
+    # `category_id` (UI с чек-боксами шлёт plural).
+    effective_category_ids = list(category_ids) if category_ids else ([category_id] if category_id else [])
     descendant_ids = None
-    if category_id:
+    if effective_category_ids:
         descendant_ids_q = db.session.execute(db.text("""
             WITH RECURSIVE cat_tree AS (
-                SELECT id FROM category WHERE id = :root
+                SELECT id FROM category WHERE id = ANY(:roots)
                 UNION ALL
                 SELECT c.id FROM category c
                 JOIN cat_tree t ON c.parent_id = t.id
             )
             SELECT id FROM cat_tree
-        """), {"root": category_id})
+        """), {"roots": effective_category_ids})
         descendant_ids = [row[0] for row in descendant_ids_q]
         if not descendant_ids:
-            descendant_ids = [category_id]  # категория не существует — фильтр даст пусто
+            descendant_ids = effective_category_ids  # категории не существуют — фильтр даст пусто
+
+    # Plural brand_ids приоритет над singular.
+    effective_brand_ids = list(brand_ids) if brand_ids else ([brand_id] if brand_id else [])
 
     def apply_category(q_obj):
         if descendant_ids:
@@ -1257,8 +1281,8 @@ def search_products():
         return q_obj
 
     def apply_brand(q_obj):
-        if brand_id:
-            return q_obj.filter(Product.brand_id == brand_id)
+        if effective_brand_ids:
+            return q_obj.filter(Product.brand_id.in_(effective_brand_ids))
         return q_obj
 
     def apply_price(q_obj):
