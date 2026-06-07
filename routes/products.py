@@ -599,7 +599,31 @@ def get_products():
         query = Product.query
 
         if search:
-            query = query.filter(Product.name.ilike(f'%{search}%'))
+            # Smart-search идентичный публичному /products/search:
+            # 1) пробуем точную фразу по name+article
+            # 2) если 0 матчей и в запросе >1 токена — fallback на AND
+            #    по каждому токену (находит «Polair 110» в «Шкаф Polair CV110-G»)
+            # 3) cap токенов 5 — больше осмысленных запросов не бывает
+            phrase_filter = db.or_(
+                Product.name.ilike(f'%{search}%'),
+                Product.article.ilike(f'%{search}%'),
+            )
+            phrase_q = query.filter(phrase_filter)
+            if phrase_q.with_entities(Product.id).limit(1).first() is not None:
+                query = phrase_q
+            else:
+                tokens = [t for t in re.split(r'\s+', search) if t]
+                if len(tokens) > 1:
+                    tokens = tokens[:5]
+                    tok_q = query
+                    for t in tokens:
+                        tok_q = tok_q.filter(db.or_(
+                            Product.name.ilike(f'%{t}%'),
+                            Product.article.ilike(f'%{t}%'),
+                        ))
+                    query = tok_q
+                else:
+                    query = phrase_q  # один токен → пустой результат, как было
 
         if category_param:
             if category_param == 'no-category':
