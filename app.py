@@ -291,6 +291,73 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция product_warehouse_cost.note: {e}")
 
+        # kp_client — упрощение модели клиента. До 2026-06: TOO/ИП/физлицо
+        # с organization_name/bin/iin/phone/whatsapp/note. После: только
+        # full_name + object + contacts (JSONB-массив `[{phone, note}]`).
+        # Миграция данных: phone+whatsapp → contacts, ostalnoe теряем.
+        # ВАЖНО: операции идут одной транзакцией (если DROP упадёт — ADD/UPDATE
+        # тоже откатятся), но т.к. каждая защищена IF NOT EXISTS / IF EXISTS,
+        # повторный запуск не проблема.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client ADD COLUMN IF NOT EXISTS object TEXT"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client ADD COLUMN IF NOT EXISTS contacts JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ))
+            # Переливаем phone/whatsapp в contacts. Используем UPDATE с
+            # проверкой существования колонки через information_schema —
+            # на свежей БД (без legacy полей) это просто no-op.
+            db.session.execute(db.text("""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name='kp_client' AND column_name='phone') THEN
+                        UPDATE kp_client
+                        SET contacts = contacts || jsonb_build_array(
+                            jsonb_build_object('phone', phone, 'note', '')
+                        )
+                        WHERE phone IS NOT NULL AND phone <> '';
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name='kp_client' AND column_name='whatsapp') THEN
+                        UPDATE kp_client
+                        SET contacts = contacts || jsonb_build_array(
+                            jsonb_build_object('phone', whatsapp, 'note', 'WhatsApp')
+                        )
+                        WHERE whatsapp IS NOT NULL AND whatsapp <> '';
+                    END IF;
+                END$$;
+            """))
+            # Сброс NOT NULL на organization_type, чтобы DROP не упирался
+            # в зависимые констрейнты (хотя на самом деле DROP COLUMN
+            # уносит свои констрейнты сам — но подстраховка).
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client DROP COLUMN IF EXISTS organization_type"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client DROP COLUMN IF EXISTS organization_name"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client DROP COLUMN IF EXISTS bin"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client DROP COLUMN IF EXISTS iin"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client DROP COLUMN IF EXISTS phone"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client DROP COLUMN IF EXISTS whatsapp"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE kp_client DROP COLUMN IF EXISTS note"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция kp_client (упрощение схемы): {e}")
+
         # warehouse.vat_enabled — работает ли склад с НДС. По умолчанию TRUE
         # для всех существующих складов (сохраняем текущее поведение).
         # Менеджер потом сам снимет галочку у складов где НДС не нужен.

@@ -46,7 +46,6 @@ class KPHistory(db.Model):
                 if short:
                     result['client'] = {
                         'id': client.id,
-                        'organization_type': client.organization_type,
                         'display_name': client.display_name,
                     }
                 else:
