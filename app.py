@@ -33,6 +33,7 @@ from routes.kp_settings import kp_settings_bp
 from routes.kp_history import kp_history_bp
 from routes.kp_share import kp_share_bp
 from routes.kp_clients import kp_clients_bp
+from routes.kp_templates import kp_templates_bp
 from routes.search_page import search_page_bp
 from routes.kp_logos import kp_logos_bp
 from routes.dashboard import dashboard_bp
@@ -50,6 +51,8 @@ from routes.ai_consultant_access import ai_consultant_access_bp
 from routes.ai_logs import ai_logs_bp
 from routes.product_auto_fill import product_auto_fill_bp
 from models.systemuser import SystemUser
+# Импорт нужен чтобы db.create_all() увидел модель шаблонов на свежей БД.
+from models.kp_template import KpTemplate  # noqa: F401
 
 
 def create_app():
@@ -102,6 +105,7 @@ def create_app():
     app.register_blueprint(kp_history_bp, url_prefix='/api')   # /api/kp-history
     app.register_blueprint(kp_share_bp, url_prefix='/api')     # /api/kp-history/<id>/share, /api/admin/kp-super-admin-access
     app.register_blueprint(kp_clients_bp, url_prefix='/api')   # /api/kp-clients
+    app.register_blueprint(kp_templates_bp, url_prefix='/api') # /api/kp-templates
     app.register_blueprint(search_page_bp, url_prefix='/api')  # /api/public/search-page, /api/admin/search-page/*
     app.register_blueprint(kp_logos_bp, url_prefix='/api')     # /api/kp-logos
 

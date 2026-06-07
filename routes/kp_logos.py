@@ -114,5 +114,18 @@ def delete_logo(filename):
     if not os.path.exists(filepath):
         return jsonify({'success': False, 'message': 'Файл не найден'}), 404
 
+    # Защита от удаления файла, на который ссылается хоть один шаблон
+    # КП. Иначе после удаления автором шаблона все импортированные ранее
+    # КП у других менеджеров получат битые ссылки.
+    from models.kp_template import KpTemplate
+    in_use_count = KpTemplate.file_is_in_use(filename)
+    if in_use_count > 0:
+        return jsonify({
+            'success': False,
+            'message': f'Файл используется в {in_use_count} шаблоне(ах) КП. '
+                       f'Сначала уберите его из этих шаблонов или удалите шаблоны.',
+            'in_use_template_count': in_use_count,
+        }), 409
+
     os.remove(filepath)
     return jsonify({'success': True, 'message': 'Логотип удалён'}), 200
