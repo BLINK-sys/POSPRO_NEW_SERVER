@@ -7,11 +7,13 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import verify_jwt_in_request, get_jwt
 import logging
 from sqlalchemy.orm import joinedload
+from sqlalchemy import func
 from extensions import db
 from models import ProductDocument, ProductCharacteristic
 from models.product import Product
 from models.media import ProductMedia
 from models.brand import Brand
+from models.category import Category
 from models.supplier import Supplier
 from models.product_availability_status import ProductAvailabilityStatus
 from models.favorite import Favorite
@@ -1147,83 +1149,95 @@ def search_products():
       2. Если 0 результатов и токенов >1 — разбиваем на токены и ищем
          AND по каждому в имени (находит «Polair 110» в «Шкаф Polair CV110-G»)
       ускорено через GIN trigram-индекс на product.name
-    - Фильтр по категории: ?category_id=N — отдаёт все товары категории
-    - Фильтр по бренду: ?brand_id=N — отдаёт все товары бренда
+    - Фильтры: category_id, brand_id, pmin/pmax (по цене)
     - Можно комбинировать (q + category_id, q + brand_id и т.п.)
     - Если ни одного из (q, category_id, brand_id) не передано — пустой
       ответ (нечего искать).
     - Скрытые товары видит только system-юзер.
 
-    Параметры ответа:
-    - ?with_count=1 → возвращает `{items: [...], total_count: N}`
-      где total_count — реальное число матчей ДО лимита. UI может
-      показать «найдено 500+ товаров, уточните запрос». Без параметра —
-      legacy-формат (просто массив items).
+    Серверная пагинация и facets:
+    - ?page=N&per_page=M — отдаём страницу карточек (default per_page=20)
+    - ?with_facets=1 — добавляет в ответ агрегаты для UI-фильтров.
+      Counts «честные» (с учётом других фильтров кроме своего), считаются
+      по полному отфильтрованному набору, не по странице. Это значит:
+      выбрав бренд X, в категориях увидишь «сколько товаров бренда X
+      в каждой категории», но в брендах список считается БЕЗ фильтра
+      бренда — иначе там был бы виден только X.
+    - ?with_count=1 — короткий вариант: возвращает только total_count
+      без facets (для случаев когда фильтры не нужны).
+
+    Форматы ответа:
+    - Базовый (без with_count/with_facets/page): legacy-массив items
+      (старый код не сломается).
+    - С with_count/with_facets/page: объект
+      {items, total_count, facets?, page?, per_page?}.
     """
     query = request.args.get('q', '').strip()
     category_id = request.args.get('category_id', type=int)
     brand_id = request.args.get('brand_id', type=int)
     limit_param = request.args.get('limit', type=int)
+    page = request.args.get('page', type=int)
+    per_page = request.args.get('per_page', type=int)
+    pmin = request.args.get('pmin', type=float)
+    pmax = request.args.get('pmax', type=float)
     with_count = request.args.get('with_count', '').strip() in ('1', 'true', 'yes')
+    with_facets = request.args.get('with_facets', '').strip() in ('1', 'true', 'yes')
+
+    # При page/per_page включается «пагинированный» режим — ответ всегда объектом.
+    paginated = page is not None or per_page is not None
+    if paginated:
+        page = max(1, page or 1)
+        per_page = max(1, min(per_page or 20, 100))
+
+    structured_response = with_count or with_facets or paginated
+
+    def empty_response():
+        if structured_response:
+            return jsonify({
+                'items': [],
+                'total_count': 0,
+                **({'facets': {'categories': [], 'brands': [], 'price_min': 0, 'price_max': 0}} if with_facets else {}),
+                **({'page': page, 'per_page': per_page} if paginated else {}),
+            })
+        return jsonify([])
 
     # Должен быть хотя бы один критерий — иначе возвращать всё
     # бессмысленно (это не каталог), отдадим пустой массив.
     if not query and not category_id and not brand_id:
-        return jsonify({'items': [], 'total_count': 0}) if with_count else jsonify([])
-
-    # Логика лимита:
-    # - явный limit — уважаем (но кепаем разумной верхней планкой 100K
-    #   чтобы не пустить случайный фетч всей таблицы за пределы памяти)
-    # - без limit + текстовый поиск — дефолт 500 (live-search показывает первые
-    #   N карточек, остальное юзер дозагружает скроллом; передача 5000 карточек
-    #   по сети — несколько MB JSON, ощутимая задержка для каждого нажатия клавиши)
-    # - без limit + category/brand — без ограничения, отдаём всё
-    if limit_param is not None:
-        limit = min(limit_param, 100000)
-    elif category_id or brand_id:
-        limit = None  # отдать всё
-    else:
-        limit = 500
+        return empty_response()
 
     show_hidden = _is_system_user()
-    base_query = Product.query.options(
-        joinedload(Product.brand_info),
-        joinedload(Product.status_info),
-        joinedload(Product.category)
-    ).filter(Product.is_draft == False)
 
     def apply_text_search(q_obj, q_text: str):
         """Smart-search по Product.name.
         Сначала пробуем точный substring всей фразы; если 0 матчей и
         в запросе >1 токена — fallback на AND по токенам.
-        Возвращает (query_with_filter, total_count).
+        Возвращает query с применённым фильтром.
         """
-        # Стратегия 1: полная фраза substring
         phrase_q = q_obj.filter(Product.name.ilike(f'%{q_text}%'))
-        total = phrase_q.count()
-        if total > 0:
-            return phrase_q, total
-        # Стратегия 2: токены AND. Разделяем по любому пробелу/пунктуации
-        # которая часто встречается в моделях («CV-110» как два токена 'CV' и '110').
-        # Берём максимум 5 токенов — больше осмысленных запросов не бывает.
+        if phrase_q.with_entities(Product.id).limit(1).first() is not None:
+            return phrase_q
         tokens = [t for t in re.split(r'\s+', q_text) if t]
         if len(tokens) <= 1:
-            return phrase_q, 0  # пусто, нечего fallback'ать
+            return phrase_q  # пусто, нечего fallback'ать
         tokens = tokens[:5]
         tok_q = q_obj
         for t in tokens:
             tok_q = tok_q.filter(Product.name.ilike(f'%{t}%'))
-        return tok_q, tok_q.count()
+        return tok_q
 
+    # Базовый query без category/brand/price-фильтров — отсюда стартуют
+    # и финальный query, и каждый facet (свой со своим вычитанием).
+    base_query = Product.query.filter(Product.is_draft == False)
+    if not show_hidden:
+        base_query = base_query.filter(Product.is_visible == True)
     if query:
-        search_query, text_total = apply_text_search(base_query, query)
-    else:
-        search_query = base_query
-        text_total = None  # будем считать ниже после остальных фильтров
+        base_query = apply_text_search(base_query, query)
+
+    # Resolve category descendants один раз — используется в final query
+    # и в категорийном facet.
+    descendant_ids = None
     if category_id:
-        # Включаем товары из ВСЕХ потомков выбранной категории — корневые
-        # категории обычно сами не держат товары, всё лежит в дочерних.
-        # Recursive CTE: находим всю ветку (включая саму выбранную).
         descendant_ids_q = db.session.execute(db.text("""
             WITH RECURSIVE cat_tree AS (
                 SELECT id FROM category WHERE id = :root
@@ -1234,26 +1248,86 @@ def search_products():
             SELECT id FROM cat_tree
         """), {"root": category_id})
         descendant_ids = [row[0] for row in descendant_ids_q]
+        if not descendant_ids:
+            descendant_ids = [category_id]  # категория не существует — фильтр даст пусто
+
+    def apply_category(q_obj):
         if descendant_ids:
-            search_query = search_query.filter(Product.category_id.in_(descendant_ids))
-        else:
-            # Категория не существует — фильтр по несуществующему id даст пусто
-            search_query = search_query.filter(Product.category_id == category_id)
-    if brand_id:
-        search_query = search_query.filter(Product.brand_id == brand_id)
+            return q_obj.filter(Product.category_id.in_(descendant_ids))
+        return q_obj
 
-    if not show_hidden:
-        search_query = search_query.filter(Product.is_visible == True)
+    def apply_brand(q_obj):
+        if brand_id:
+            return q_obj.filter(Product.brand_id == brand_id)
+        return q_obj
 
-    # total_count считаем только если фронт явно попросил — лишний COUNT(*)
-    # запрос на каждое нажатие клавиши не нужен. Видимость учитывается уже
-    # в search_query.
+    def apply_price(q_obj):
+        if pmin is not None:
+            q_obj = q_obj.filter(Product.price >= pmin)
+        if pmax is not None:
+            q_obj = q_obj.filter(Product.price <= pmax)
+        return q_obj
+
+    # Финальный query — все фильтры применены. Используется и для total_count,
+    # и для постраничной выгрузки items. Total считаем ДО joinedload — иначе
+    # left join'ы могут раздуть count.
+    search_query = apply_price(apply_brand(apply_category(base_query)))
+
     total_count = None
-    if with_count:
-        total_count = search_query.count()
+    if with_count or with_facets or paginated:
+        total_count = search_query.with_entities(func.count(Product.id)).scalar() or 0
 
-    if limit is not None:
-        search_query = search_query.limit(limit)
+    # Eager loading для финального set'а. На facet-запросах не нужны.
+    search_query = search_query.options(
+        joinedload(Product.brand_info),
+        joinedload(Product.status_info),
+        joinedload(Product.category),
+    )
+
+    # Facets. Каждый считается БЕЗ своего фильтра, но с учётом остальных —
+    # «честные» counts (что увижу если переключусь на другой бренд при
+    # текущей категории).
+    facets = None
+    if with_facets:
+        # categories facet — без category-фильтра
+        cat_q = apply_price(apply_brand(base_query))
+        cat_rows = (cat_q
+            .join(Category, Category.id == Product.category_id)
+            .with_entities(Category.id, Category.name, func.count(Product.id))
+            .group_by(Category.id, Category.name)
+            .order_by(Category.name)
+            .all())
+        # brands facet — без brand-фильтра
+        brand_q = apply_price(apply_category(base_query))
+        brand_rows = (brand_q
+            .join(Brand, Brand.id == Product.brand_id)
+            .with_entities(Brand.id, Brand.name, func.count(Product.id))
+            .group_by(Brand.id, Brand.name)
+            .order_by(Brand.name)
+            .all())
+        # price min/max — без price-фильтра
+        price_q = apply_brand(apply_category(base_query))
+        price_row = price_q.with_entities(
+            func.min(Product.price), func.max(Product.price)
+        ).first()
+        facets = {
+            'categories': [{'id': r[0], 'name': r[1], 'count': r[2]} for r in cat_rows],
+            'brands': [{'id': r[0], 'name': r[1], 'count': r[2]} for r in brand_rows],
+            'price_min': float(price_row[0]) if price_row and price_row[0] is not None else 0,
+            'price_max': float(price_row[1]) if price_row and price_row[1] is not None else 0,
+        }
+
+    # Пагинация / limit для items.
+    if paginated:
+        offset = (page - 1) * per_page
+        search_query = search_query.order_by(Product.id).limit(per_page).offset(offset)
+    elif limit_param is not None:
+        search_query = search_query.limit(min(limit_param, 100000))
+    elif category_id or brand_id:
+        pass  # без лимита — отдать всё (legacy)
+    else:
+        search_query = search_query.limit(500)  # legacy cap для чистого текстового поиска
+
     products = search_query.all()
     
     # ✅ ОПТИМИЗАЦИЯ: Загружаем все изображения одним запросом
@@ -1330,8 +1404,17 @@ def search_products():
             'availability_status': compute_availability_status(p.quantity or 0, supplier_id=p.supplier_id)
         })
 
-    if with_count:
-        return jsonify({'items': result, 'total_count': total_count if total_count is not None else len(result)})
+    if structured_response:
+        out = {
+            'items': result,
+            'total_count': total_count if total_count is not None else len(result),
+        }
+        if with_facets and facets is not None:
+            out['facets'] = facets
+        if paginated:
+            out['page'] = page
+            out['per_page'] = per_page
+        return jsonify(out)
     return jsonify(result)
 
 @products_bp.route('/brand/<string:brand_name>', methods=['GET'])
