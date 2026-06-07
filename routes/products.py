@@ -1142,46 +1142,84 @@ def search_products():
     Поиск товаров с фильтрами.
 
     Принцип работы:
-    - Текстовый поиск по названию: ilike '%query%' (case-insensitive,
-      ускорено через GIN trigram-индекс)
+    - Smart-search по названию (см. apply_text_search ниже):
+      1. Сначала ищем точный substring всей фразы (Product.name ILIKE '%q%')
+      2. Если 0 результатов и токенов >1 — разбиваем на токены и ищем
+         AND по каждому в имени (находит «Polair 110» в «Шкаф Polair CV110-G»)
+      ускорено через GIN trigram-индекс на product.name
     - Фильтр по категории: ?category_id=N — отдаёт все товары категории
     - Фильтр по бренду: ?brand_id=N — отдаёт все товары бренда
     - Можно комбинировать (q + category_id, q + brand_id и т.п.)
     - Если ни одного из (q, category_id, brand_id) не передано — пустой
       ответ (нечего искать).
     - Скрытые товары видит только system-юзер.
+
+    Параметры ответа:
+    - ?with_count=1 → возвращает `{items: [...], total_count: N}`
+      где total_count — реальное число матчей ДО лимита. UI может
+      показать «найдено 500+ товаров, уточните запрос». Без параметра —
+      legacy-формат (просто массив items).
     """
     query = request.args.get('q', '').strip()
     category_id = request.args.get('category_id', type=int)
     brand_id = request.args.get('brand_id', type=int)
     limit_param = request.args.get('limit', type=int)
+    with_count = request.args.get('with_count', '').strip() in ('1', 'true', 'yes')
 
     # Должен быть хотя бы один критерий — иначе возвращать всё
     # бессмысленно (это не каталог), отдадим пустой массив.
     if not query and not category_id and not brand_id:
-        return jsonify([])
+        return jsonify({'items': [], 'total_count': 0}) if with_count else jsonify([])
 
     # Логика лимита:
     # - явный limit — уважаем (но кепаем разумной верхней планкой 100K
     #   чтобы не пустить случайный фетч всей таблицы за пределы памяти)
-    # - без limit + текстовый поиск — дефолт 5000 (защита от широкого «а»)
+    # - без limit + текстовый поиск — дефолт 500 (live-search показывает первые
+    #   N карточек, остальное юзер дозагружает скроллом; передача 5000 карточек
+    #   по сети — несколько MB JSON, ощутимая задержка для каждого нажатия клавиши)
     # - без limit + category/brand — без ограничения, отдаём всё
     if limit_param is not None:
         limit = min(limit_param, 100000)
     elif category_id or brand_id:
         limit = None  # отдать всё
     else:
-        limit = 5000
+        limit = 500
 
     show_hidden = _is_system_user()
-    search_query = Product.query.options(
+    base_query = Product.query.options(
         joinedload(Product.brand_info),
         joinedload(Product.status_info),
         joinedload(Product.category)
     ).filter(Product.is_draft == False)
 
+    def apply_text_search(q_obj, q_text: str):
+        """Smart-search по Product.name.
+        Сначала пробуем точный substring всей фразы; если 0 матчей и
+        в запросе >1 токена — fallback на AND по токенам.
+        Возвращает (query_with_filter, total_count).
+        """
+        # Стратегия 1: полная фраза substring
+        phrase_q = q_obj.filter(Product.name.ilike(f'%{q_text}%'))
+        total = phrase_q.count()
+        if total > 0:
+            return phrase_q, total
+        # Стратегия 2: токены AND. Разделяем по любому пробелу/пунктуации
+        # которая часто встречается в моделях («CV-110» как два токена 'CV' и '110').
+        # Берём максимум 5 токенов — больше осмысленных запросов не бывает.
+        tokens = [t for t in re.split(r'\s+', q_text) if t]
+        if len(tokens) <= 1:
+            return phrase_q, 0  # пусто, нечего fallback'ать
+        tokens = tokens[:5]
+        tok_q = q_obj
+        for t in tokens:
+            tok_q = tok_q.filter(Product.name.ilike(f'%{t}%'))
+        return tok_q, tok_q.count()
+
     if query:
-        search_query = search_query.filter(Product.name.ilike(f'%{query}%'))
+        search_query, text_total = apply_text_search(base_query, query)
+    else:
+        search_query = base_query
+        text_total = None  # будем считать ниже после остальных фильтров
     if category_id:
         # Включаем товары из ВСЕХ потомков выбранной категории — корневые
         # категории обычно сами не держат товары, всё лежит в дочерних.
@@ -1206,6 +1244,14 @@ def search_products():
 
     if not show_hidden:
         search_query = search_query.filter(Product.is_visible == True)
+
+    # total_count считаем только если фронт явно попросил — лишний COUNT(*)
+    # запрос на каждое нажатие клавиши не нужен. Видимость учитывается уже
+    # в search_query.
+    total_count = None
+    if with_count:
+        total_count = search_query.count()
+
     if limit is not None:
         search_query = search_query.limit(limit)
     products = search_query.all()
@@ -1284,6 +1330,8 @@ def search_products():
             'availability_status': compute_availability_status(p.quantity or 0, supplier_id=p.supplier_id)
         })
 
+    if with_count:
+        return jsonify({'items': result, 'total_count': total_count if total_count is not None else len(result)})
     return jsonify(result)
 
 @products_bp.route('/brand/<string:brand_name>', methods=['GET'])
