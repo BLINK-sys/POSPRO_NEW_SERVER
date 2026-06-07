@@ -74,6 +74,20 @@ def create_product_availability_status():
         if supplier_id is not None:
             supplier_id = int(supplier_id) if supplier_id else None
 
+        # Поле arrival_days храним только если is_arrival_status=True. Если
+        # юзер выключил флаг — обнуляем, иначе словим путаницу при следующем
+        # редактировании.
+        is_arrival_status = bool(data.get('is_arrival_status', False))
+        arrival_days = None
+        if is_arrival_status:
+            try:
+                ad_raw = data.get('arrival_days')
+                arrival_days = int(ad_raw) if ad_raw is not None and ad_raw != '' else 0
+                if arrival_days < 0:
+                    return jsonify({'error': 'Дней до поступления не может быть отрицательным'}), 400
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Дней до поступления должно быть числом'}), 400
+
         new_status = ProductAvailabilityStatus(
             status_name=data['status_name'],
             condition_operator=data['condition_operator'],
@@ -82,7 +96,9 @@ def create_product_availability_status():
             text_color=data.get('text_color', '#000000'),
             order=max_order + 1,
             active=data.get('active', True),
-            supplier_id=supplier_id
+            supplier_id=supplier_id,
+            is_arrival_status=is_arrival_status,
+            arrival_days=arrival_days,
         )
         
         db.session.add(new_status)
@@ -149,7 +165,26 @@ def update_product_availability_status(status_id):
             status.active = data['active']
         if 'supplier_id' in data:
             status.supplier_id = int(data['supplier_id']) if data['supplier_id'] else None
-        
+
+        # is_arrival_status + arrival_days. Если флаг выключен — обнуляем
+        # arrival_days чтобы не остался «висячий хвост» от прошлой настройки.
+        if 'is_arrival_status' in data:
+            status.is_arrival_status = bool(data['is_arrival_status'])
+            if not status.is_arrival_status:
+                status.arrival_days = None
+        if 'arrival_days' in data and status.is_arrival_status:
+            ad_raw = data.get('arrival_days')
+            if ad_raw is None or ad_raw == '':
+                status.arrival_days = 0
+            else:
+                try:
+                    ad = int(ad_raw)
+                    if ad < 0:
+                        return jsonify({'error': 'Дней до поступления не может быть отрицательным'}), 400
+                    status.arrival_days = ad
+                except (ValueError, TypeError):
+                    return jsonify({'error': 'Дней до поступления должно быть числом'}), 400
+
         db.session.commit()
         
         return jsonify({

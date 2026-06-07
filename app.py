@@ -295,6 +295,24 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция product_warehouse_cost.note: {e}")
 
+        # product_availability_statuses: режим «Поступление». При включённом
+        # is_arrival_status шильдик на карточке товара показывает не только
+        # имя статуса, но и дату ожидаемого поступления (today + arrival_days).
+        # arrival_days — int, обычно 0..30. NULL для обычных статусов.
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE product_availability_statuses "
+                "ADD COLUMN IF NOT EXISTS is_arrival_status BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE product_availability_statuses "
+                "ADD COLUMN IF NOT EXISTS arrival_days INTEGER"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция product_availability_statuses.arrival: {e}")
+
         # kp_client — упрощение модели клиента. До 2026-06: TOO/ИП/физлицо
         # с organization_name/bin/iin/phone/whatsapp/note. После: только
         # full_name + object + contacts (JSONB-массив `[{phone, note}]`).

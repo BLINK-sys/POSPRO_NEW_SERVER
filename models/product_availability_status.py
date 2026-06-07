@@ -14,6 +14,14 @@ class ProductAvailabilityStatus(db.Model):
     active = db.Column(db.Boolean, default=True)  # Активен ли статус
     supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id', ondelete='SET NULL'), nullable=True)  # Поставщик
 
+    # Режим «Поступление»: шильдик дополняется датой ожидаемого поступления
+    # (сегодня + arrival_days). Условие срабатывания (operator/value) остаётся
+    # как было — это просто другой формат отображения, не альтернативное правило.
+    # arrival_days хранится в днях; nullable чтобы поле не было обязательным для
+    # обычных (не-arrival) статусов.
+    is_arrival_status = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    arrival_days = db.Column(db.Integer, nullable=True)
+
     supplier = db.relationship('Supplier', backref='availability_statuses', lazy=True)
 
     def to_dict(self):
@@ -27,7 +35,9 @@ class ProductAvailabilityStatus(db.Model):
             'order': self.order,
             'active': self.active,
             'supplier_id': self.supplier_id,
-            'supplier_name': self.supplier.name if self.supplier else None
+            'supplier_name': self.supplier.name if self.supplier else None,
+            'is_arrival_status': bool(self.is_arrival_status),
+            'arrival_days': self.arrival_days,
         }
 
     def get_formula_display(self):
