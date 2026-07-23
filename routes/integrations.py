@@ -207,6 +207,58 @@ def trigger_integration(type_):
     return jsonify({'success': True, 'command_id': cmd.id}), 201
 
 
+@integrations_bp.route('/<type_>/cancel', methods=['POST'])
+@jwt_required()
+def cancel_integration(type_):
+    """
+    Отменить выполнение / удалить из очереди.
+
+    Три случая:
+    1. Есть active_run того же типа → создаём IntegrationCommand(command='cancel').
+       Воркер поймает через poll_commands и убьёт subprocess. После завершения
+       run.status = 'cancelled'.
+    2. Есть pending run_now (в очереди, ещё не начался) → удаляем команду,
+       воркер не подхватит.
+    3. Ни того ни другого → 400.
+    """
+    if not _check_admin():
+        return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
+    if not _valid_type(type_):
+        return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
+
+    active = IntegrationRun.query.filter_by(type=type_, status='running').first()
+    pending = IntegrationCommand.query.filter_by(
+        type=type_, command='run_now', consumed_at=None,
+    ).first()
+
+    if not active and not pending:
+        return jsonify({'success': False, 'message': 'Нечего отменять'}), 400
+
+    jwt_data = get_jwt()
+    user_email = jwt_data.get('email') or jwt_data.get('sub')
+
+    actions = []
+    if pending:
+        db.session.delete(pending)
+        actions.append('pending removed')
+
+    if active:
+        # Дедупликация: если cancel уже в очереди — не плодим дубли.
+        existing_cancel = IntegrationCommand.query.filter_by(
+            type=type_, command='cancel', consumed_at=None,
+        ).first()
+        if not existing_cancel:
+            db.session.add(IntegrationCommand(
+                type=type_,
+                command='cancel',
+                created_by=user_email,
+            ))
+        actions.append('cancel signal queued')
+
+    db.session.commit()
+    return jsonify({'success': True, 'message': '; '.join(actions)}), 200
+
+
 @integrations_bp.route('/<type_>/current', methods=['GET'])
 @jwt_required()
 def get_current_run(type_):

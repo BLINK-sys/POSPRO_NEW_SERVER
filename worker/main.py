@@ -271,6 +271,13 @@ class MigrationRunner:
         self.type = type_
         self.cfg = INTEGRATIONS[type_]
         self.dir = self.cfg["dir"]
+        # Текущий subprocess (bio_api / migrate_from_products_db / etc.).
+        # Устанавливается перед wait, стирается после. Внешний код (poll_commands
+        # cancel handler) читает это чтобы убить процесс при отмене.
+        self.current_proc: subprocess.Popen | None = None
+        # Флаг «оператор нажал Отменить» — устанавливается извне через
+        # active_runs[type_]['cancelled'] и проверяется в блоке finally run().
+        self.cancelled = False
 
     def _run_stage(self, run_id: int, stage_name: str, args: list[str], phase: str) -> bool:
         log.info("[%s] стадия %s: %s", self.type, stage_name, " ".join(args))
@@ -297,10 +304,19 @@ class MigrationRunner:
                     stderr=subprocess.STDOUT,
                     env=script_env,
                 )
+                self.current_proc = proc
                 rc = proc.wait()
+                self.current_proc = None
         except Exception as e:
             log.exception("[%s] стадия %s упала: %s", self.type, stage_name, e)
+            self.current_proc = None
             client.update_run(self.type, run_id, error=str(e), log_excerpt=str(e))
+            return False
+
+        # Если оператор нажал «Отменить» — процесс был убит .terminate(),
+        # rc не будет 0, но это не «ошибка стадии», это осмысленная отмена.
+        if self.cancelled:
+            log.info("[%s] стадия %s прервана оператором", self.type, stage_name)
             return False
 
         if rc != 0:
@@ -317,25 +333,37 @@ class MigrationRunner:
         return True
 
     def run(self, run_id: int) -> None:
-        # Регистрируем активный run — теперь /report'ы будут мержиться сюда.
+        # Регистрируем активный run — теперь /report'ы будут мержиться сюда,
+        # а внешний cancel-хендлер получит доступ к self через 'runner'.
         with active_lock:
-            active_runs[self.type] = {"run_id": run_id, "progress": _empty_progress()}
+            active_runs[self.type] = {
+                "run_id": run_id,
+                "progress": _empty_progress(),
+                "runner": self,
+            }
 
         try:
-            # Инициализируем прогресс — сбрасываем предыдущие данные если были
             report_progress(self.type, {
                 "current_step": "starting",
                 "current_message": "Запускаем сбор данных...",
             })
 
             if not self._run_stage(run_id, "stage1_fetch", self.cfg["stage1"], "fetch_products"):
-                client.update_run(self.type, run_id, status="failed")
+                # Различаем «отменил оператор» и «упала стадия».
+                if self.cancelled:
+                    client.update_run(self.type, run_id, status="cancelled",
+                                      log_excerpt="Отменено оператором на стадии сбора данных")
+                else:
+                    client.update_run(self.type, run_id, status="failed")
                 return
             if not self._run_stage(run_id, "stage2_upload", self.cfg["stage2"], "upload_products"):
-                client.update_run(self.type, run_id, status="failed")
+                if self.cancelled:
+                    client.update_run(self.type, run_id, status="cancelled",
+                                      log_excerpt="Отменено оператором на стадии выгрузки")
+                else:
+                    client.update_run(self.type, run_id, status="failed")
                 return
 
-            # Финальный статус — обе стадии успешно.
             report_progress(self.type, {
                 "current_step": "done",
                 "current_message": "Выгрузка завершена",
@@ -448,6 +476,41 @@ class Orchestrator:
         в очередь через _enqueue. Реальное выполнение — в consumer'е.
         """
         self._enqueue(type_, trigger, triggered_by)
+
+    def _handle_cancel(self, type_: str) -> None:
+        """
+        Оператор нажал «Отменить» — прод пометил cancel-команду для этого
+        типа. Тут:
+          1. Ставим флаг cancelled на активный runner (проверяется после
+             завершения subprocess — определяет status='cancelled' vs 'failed').
+          2. Убиваем текущий subprocess (bio_api / migrate / equip_api / etc.).
+             .terminate() на Windows = TerminateProcess (жёстко), скрипт не
+             успеет доделать текущую итерацию — но нам это и надо.
+        Если run в этот момент не запущен (например уже успел завершиться
+        сам), просто пишем предупреждение — вредить нечему.
+        """
+        with active_lock:
+            state = active_runs.get(type_)
+
+        if not state:
+            log.warning("[%s] cancel: активного run нет, игнор", type_)
+            return
+
+        runner: MigrationRunner | None = state.get("runner")
+        if runner is None:
+            log.warning("[%s] cancel: runner не установлен, игнор", type_)
+            return
+
+        runner.cancelled = True
+        proc = runner.current_proc
+        if proc is not None:
+            try:
+                proc.terminate()
+                log.info("[%s] cancel: subprocess PID=%s убит .terminate()", type_, proc.pid)
+            except Exception as e:
+                log.warning("[%s] cancel: не удалось убить subprocess: %s", type_, e)
+        else:
+            log.info("[%s] cancel: subprocess ещё не запущен (между стадиями), флаг установлен", type_)
 
     def _apply_schedule(self, type_: str, settings: dict):
         job_id = f"{type_}_schedule"
@@ -577,10 +640,14 @@ class Orchestrator:
                 )
                 if r.ok:
                     cmd = r.json().get("command")
-                    if cmd and cmd.get("command") == "run_now":
-                        log.info("[%s] получена команда run_now от %s", type_, cmd.get("created_by"))
-                        # Не в отдельном thread — теперь через FIFO очередь.
-                        self._enqueue(type_, "manual", cmd.get("created_by"))
+                    if cmd:
+                        cmd_name = cmd.get("command")
+                        if cmd_name == "run_now":
+                            log.info("[%s] получена команда run_now от %s", type_, cmd.get("created_by"))
+                            self._enqueue(type_, "manual", cmd.get("created_by"))
+                        elif cmd_name == "cancel":
+                            log.info("[%s] получена команда cancel от %s", type_, cmd.get("created_by"))
+                            self._handle_cancel(type_)
                 else:
                     success = False
             except Exception:
