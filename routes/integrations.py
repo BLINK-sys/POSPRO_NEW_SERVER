@@ -39,7 +39,10 @@ integrations_bp = Blueprint('integrations', __name__)
 # ============ Общие хелперы ============
 
 INTEGRATION_KEY = os.getenv('INTEGRATION_KEY', 'CHANGE_ME_IN_ENV')
-HEARTBEAT_TIMEOUT_SEC = 120  # если heartbeat старше 2 минут — воркер оффлайн
+# Воркер шлёт heartbeat каждые 5 сек. 20 сек = 4 пропущенных подряд —
+# упал (сетевая моргалка на секунду не роняет статус). Плюс polling
+# админки 5 сек → макс задержка до обновления UI ~25 сек.
+HEARTBEAT_TIMEOUT_SEC = 20
 
 
 def _check_admin():

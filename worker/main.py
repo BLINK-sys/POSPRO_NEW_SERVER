@@ -71,6 +71,16 @@ HEARTBEAT_INTERVAL = 5
 COMMAND_POLL_INTERVAL = 10
 SETTINGS_REFRESH_INTERVAL = 60
 
+# При недоступности прод-сервера (например DNS ещё не поднят после ребута
+# или интернет моргнул) — экспоненциальный backoff вместо тактового ретрая.
+# Успешный ответ сбрасывает backoff обратно к нормальному интервалу.
+BACKOFF_MAX = 30
+# Логировать каждую неудачу спамом бессмысленно. Пишем в лог только:
+#   - Первую неудачу (переход online → offline)
+#   - Каждые LOG_FAILURE_EVERY_SEC при устойчивом даунтайме
+#   - Восстановление (offline → online)
+LOG_FAILURE_EVERY_SEC = 60
+
 # ── Logging ─────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -98,11 +108,11 @@ class PosProClient:
         return f"{self.base}/{type_}/{path.lstrip('/')}"
 
     def heartbeat(self, type_: str) -> bool:
+        # Ошибки не логируем здесь — backoff-loop сам решит когда шуметь.
         try:
             r = self.session.post(self._url(type_, "heartbeat"), headers=self.headers, timeout=10)
             return r.ok
-        except requests.RequestException as e:
-            log.warning("heartbeat %s failed: %s", type_, e)
+        except requests.RequestException:
             return False
 
     def get_settings(self, type_: str) -> dict | None:
@@ -110,8 +120,8 @@ class PosProClient:
             r = self.session.get(self._url(type_, "settings"), headers=self.headers, timeout=10)
             if r.ok:
                 return r.json()
-        except requests.RequestException as e:
-            log.warning("get_settings %s failed: %s", type_, e)
+        except requests.RequestException:
+            pass
         return None
 
     def get_pending_command(self, type_: str) -> dict | None:
@@ -119,8 +129,8 @@ class PosProClient:
             r = self.session.get(self._url(type_, "pending-command"), headers=self.headers, timeout=10)
             if r.ok:
                 return r.json().get("command")
-        except requests.RequestException as e:
-            log.warning("get_pending_command %s failed: %s", type_, e)
+        except requests.RequestException:
+            pass
         return None
 
     def create_run(self, type_: str, trigger: str, triggered_by: str | None = None) -> int | None:
@@ -419,7 +429,43 @@ class Orchestrator:
         except Exception as e:
             log.exception("[%s] ошибка применения расписания: %s", type_, e)
 
+    def _sleep_with_backoff(self, type_: str, loop_name: str, base_interval: int,
+                            success: bool, state: dict) -> None:
+        """
+        Единая логика ожидания следующего тика для всех poll-циклов.
+        Если запрос удачный — спим base_interval и сбрасываем backoff.
+        Если ошибка — экспоненциальный backoff до BACKOFF_MAX, логируем
+        только при переходе состояния и раз в LOG_FAILURE_EVERY_SEC.
+        """
+        now = time.time()
+        if success:
+            if state.get("was_failing"):
+                downtime = now - state.get("first_fail_at", now)
+                log.info("[%s] %s: связь восстановлена (даунтайм %.0f сек)", type_, loop_name, downtime)
+            state["was_failing"] = False
+            state["last_log_at"] = 0
+            state["first_fail_at"] = 0
+            state["backoff"] = base_interval
+            interval = base_interval
+        else:
+            if not state.get("was_failing"):
+                log.warning("[%s] %s: связь с сервером потеряна, начинаю retry", type_, loop_name)
+                state["was_failing"] = True
+                state["first_fail_at"] = now
+                state["last_log_at"] = now
+                state["backoff"] = base_interval
+            elif now - state.get("last_log_at", 0) > LOG_FAILURE_EVERY_SEC:
+                downtime = now - state.get("first_fail_at", now)
+                log.warning("[%s] %s: всё ещё нет связи (%.0f сек)", type_, loop_name, downtime)
+                state["last_log_at"] = now
+            # Экспоненциально: 5 → 10 → 20 → 30 (capped BACKOFF_MAX)
+            state["backoff"] = min(state.get("backoff", base_interval) * 2, BACKOFF_MAX)
+            interval = state["backoff"]
+
+        self.stop_event.wait(interval)
+
     def _poll_settings_loop(self, type_: str):
+        state = {"was_failing": False, "last_log_at": 0, "first_fail_at": 0, "backoff": SETTINGS_REFRESH_INTERVAL}
         while not self.stop_event.is_set():
             settings = client.get_settings(type_)
             if settings:
@@ -427,24 +473,41 @@ class Orchestrator:
                 if sig != self.state[type_]["settings_hash"]:
                     self.state[type_]["settings_hash"] = sig
                     self._apply_schedule(type_, settings)
-            self.stop_event.wait(SETTINGS_REFRESH_INTERVAL)
+            self._sleep_with_backoff(type_, "settings", SETTINGS_REFRESH_INTERVAL, settings is not None, state)
 
     def _poll_commands_loop(self, type_: str):
+        state = {"was_failing": False, "last_log_at": 0, "first_fail_at": 0, "backoff": COMMAND_POLL_INTERVAL}
         while not self.stop_event.is_set():
-            cmd = client.get_pending_command(type_)
-            if cmd and cmd.get("command") == "run_now":
-                log.info("[%s] получена команда run_now от %s", type_, cmd.get("created_by"))
-                threading.Thread(
-                    target=self._run_integration,
-                    args=[type_, "manual", cmd.get("created_by")],
-                    daemon=True,
-                ).start()
-            self.stop_event.wait(COMMAND_POLL_INTERVAL)
+            # None = ошибка сети, [] или {} = пустая очередь (успешный запрос).
+            # Отличить успех от ошибки — client.get_pending_command вернёт None
+            # только при exception (проверено ниже). Пустая очередь = None
+            # тоже. Значит используем flag через локальный try.
+            success = True
+            try:
+                r = client.session.get(
+                    client._url(type_, "pending-command"),
+                    headers=client.headers, timeout=10,
+                )
+                if r.ok:
+                    cmd = r.json().get("command")
+                    if cmd and cmd.get("command") == "run_now":
+                        log.info("[%s] получена команда run_now от %s", type_, cmd.get("created_by"))
+                        threading.Thread(
+                            target=self._run_integration,
+                            args=[type_, "manual", cmd.get("created_by")],
+                            daemon=True,
+                        ).start()
+                else:
+                    success = False
+            except requests.RequestException:
+                success = False
+            self._sleep_with_backoff(type_, "commands", COMMAND_POLL_INTERVAL, success, state)
 
     def _heartbeat_loop(self, type_: str):
+        state = {"was_failing": False, "last_log_at": 0, "first_fail_at": 0, "backoff": HEARTBEAT_INTERVAL}
         while not self.stop_event.is_set():
-            client.heartbeat(type_)
-            self.stop_event.wait(HEARTBEAT_INTERVAL)
+            ok = client.heartbeat(type_)
+            self._sleep_with_backoff(type_, "heartbeat", HEARTBEAT_INTERVAL, ok, state)
 
     def start(self):
         log.info("Worker starting. API=%s, integrations=%s", API_URL, list(INTEGRATIONS.keys()))
