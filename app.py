@@ -50,6 +50,7 @@ from routes.drivers import drivers_bp
 from routes.ai_consultant_access import ai_consultant_access_bp
 from routes.ai_logs import ai_logs_bp
 from routes.product_auto_fill import product_auto_fill_bp
+from routes.integrations import integrations_bp
 from models.systemuser import SystemUser
 # Импорт нужен чтобы db.create_all() увидел модель шаблонов на свежей БД.
 from models.kp_template import KpTemplate  # noqa: F401
@@ -119,6 +120,11 @@ def create_app():
 
     # 🔹 Логи AI-фич: импорт товаров и чат консультанта
     app.register_blueprint(ai_logs_bp, url_prefix='/api')
+
+    # 🔹 Автоматические выгрузки BIO / Equip (worker на локалке)
+    # Публичные ручки: /api/admin/integrations/*  (JWT admin/system)
+    # Internal ручки:  /api/admin/integrations/internal/*  (X-Integration-Key)
+    app.register_blueprint(integrations_bp, url_prefix='/api/admin/integrations')
 
     # 🔹 Видимость каталогов (публичный + админский под /api)
     app.register_blueprint(catalog_visibility_bp, url_prefix='/api')  # /api/catalog-visibility, /api/admin-catalog-visibility
