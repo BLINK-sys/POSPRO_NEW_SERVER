@@ -168,10 +168,36 @@ def delete_warehouse(warehouse_id):
     if not warehouse:
         return jsonify({'success': False, 'message': 'Склад не найден'}), 404
 
+    # Собираем product_id со всех PWC этого склада ДО удаления —
+    # каскадное удаление снесёт PWC вместе со складом, и после этого
+    # мы не сможем найти какие товары были затронуты.
+    affected_product_ids = [
+        pid for (pid,) in db.session.query(ProductWarehouseCost.product_id)
+        .filter(ProductWarehouseCost.warehouse_id == warehouse_id)
+        .distinct()
+        .all()
+    ]
+
     db.session.delete(warehouse)
+    db.session.flush()
+
+    # Пересчитываем min-price для всех затронутых товаров: если у товара
+    # остались PWC на других складах — product.price возьмётся из минимума;
+    # если товар был только на этом складе — цена/quantity останутся как есть.
+    from routes.product_costs import _apply_min_price
+    for pid in affected_product_ids:
+        try:
+            _apply_min_price(pid)
+        except Exception:
+            pass  # не рвём транзакцию из-за одного товара
+
     db.session.commit()
 
-    return jsonify({'success': True, 'message': 'Склад удалён'}), 200
+    return jsonify({
+        'success': True,
+        'message': 'Склад удалён',
+        'affected_products': len(affected_product_ids),
+    }), 200
 
 
 # ============ Variables ============
