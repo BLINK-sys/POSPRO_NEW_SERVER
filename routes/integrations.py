@@ -92,16 +92,20 @@ def list_integrations():
     result = []
     for t in INTEGRATION_TYPES:
         settings = _get_or_create_settings(t)
-        # Последний run для карточки (успех/ошибка/сейчас идёт)
         last_run = IntegrationRun.query.filter_by(type=t).order_by(desc(IntegrationRun.started_at)).first()
-        # Активный (running) run — если есть, карточка «сейчас идёт выгрузка»
         active_run = IntegrationRun.query.filter_by(type=t, status='running').first()
+        # Есть ли пенднинг-команда «запустить сейчас» — для отображения
+        # «В очереди» на карточке пока идёт другая интеграция.
+        pending_cmd = IntegrationCommand.query.filter_by(
+            type=t, command='run_now', consumed_at=None,
+        ).first()
         result.append({
             'type': t,
             'online': _is_online(settings),
             'settings': settings.to_dict(),
             'last_run': last_run.to_dict() if last_run else None,
             'active_run': active_run.to_dict() if active_run else None,
+            'pending_command': pending_cmd.to_dict() if pending_cmd else None,
         })
     return jsonify({'success': True, 'data': result}), 200
 
@@ -281,13 +285,33 @@ def stream_integration(type_):
 
 
 def _make_snapshot(type_):
-    """Собирает полное состояние интеграции для SSE / polling ручек."""
+    """
+    Собирает полное состояние интеграции для SSE / polling ручек.
+    Также включает `other_running` — если ДРУГОЙ тип интеграции сейчас
+    активен, фронт покажет кнопку «Запустить после завершения X»
+    (в воркере глобальная FIFO очередь — параллельно не запустится).
+    """
     settings = _get_or_create_settings(type_)
     active_run = IntegrationRun.query.filter_by(type=type_, status='running').first()
     last_run = IntegrationRun.query.filter_by(type=type_).order_by(desc(IntegrationRun.started_at)).first()
     pending_cmd = IntegrationCommand.query.filter_by(
         type=type_, command='run_now', consumed_at=None,
     ).first()
+
+    # Активный run соседней интеграции (для UI-логики "запустить после X")
+    other_types = [t for t in INTEGRATION_TYPES if t != type_]
+    other_running = None
+    for other_type in other_types:
+        other_active = IntegrationRun.query.filter_by(type=other_type, status='running').first()
+        if other_active:
+            other_running = {
+                'type': other_type,
+                'run_id': other_active.id,
+                'phase': other_active.phase,
+                'started_at': other_active.started_at.isoformat() if other_active.started_at else None,
+            }
+            break
+
     return {
         'type': type_,
         'online': _is_online(settings),
@@ -295,6 +319,7 @@ def _make_snapshot(type_):
         'active_run': active_run.to_dict() if active_run else None,
         'last_run': last_run.to_dict() if last_run else None,
         'pending_command': pending_cmd.to_dict() if pending_cmd else None,
+        'other_running': other_running,
     }
 
 

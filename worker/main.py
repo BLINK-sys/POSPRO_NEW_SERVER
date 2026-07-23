@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -362,26 +363,90 @@ def _tail_file(path: Path, n: int = 30) -> str:
 
 
 class Orchestrator:
+    """
+    Единая FIFO-очередь выполнения интеграций. Только один run активен
+    в любой момент времени — второй ждёт своей очереди.
+
+    Триггеры (расписание + ручные команды) кладут задачу в `self.run_queue`.
+    Один consumer thread `_queue_consumer_loop` берёт задачи по одной,
+    запускает `MigrationRunner.run` (эта операция долгая — час-два) и
+    только после её завершения берёт следующую из очереди.
+
+    Порядок гарантированно FIFO. Дедупликация: если тот же тип уже в
+    очереди или уже идёт — новый триггер игнорируется чтобы не набить
+    очередь одинаковыми задачами при частом polling.
+    """
+
     def __init__(self):
         self.scheduler = BackgroundScheduler(timezone="Asia/Almaty")
         self.scheduler.start()
-        self.state = {t: {"lock": threading.Lock(), "settings_hash": None} for t in INTEGRATIONS}
+        self.state = {t: {"settings_hash": None} for t in INTEGRATIONS}
         self.stop_event = threading.Event()
 
+        # FIFO очередь запусков. Кладём tuple (type_, trigger, triggered_by).
+        self.run_queue: "queue.Queue[tuple[str, str, str | None]]" = queue.Queue()
+        # Что consumer сейчас выполняет (для дедупликации + логов).
+        self._current_running_type: str | None = None
+        # Множество типов уже стоящих в очереди — для дедупликации.
+        self._queued_types: set[str] = set()
+        self._queue_lock = threading.Lock()
+
+    def _enqueue(self, type_: str, trigger: str, triggered_by: str | None) -> str:
+        """
+        Ставит задачу в очередь. Возвращает 'started' / 'queued' / 'duplicate'.
+        """
+        with self._queue_lock:
+            if self._current_running_type == type_ or type_ in self._queued_types:
+                log.info("[%s] %s: уже в работе или очереди, игнор", type_, trigger)
+                return "duplicate"
+            self._queued_types.add(type_)
+            self.run_queue.put((type_, trigger, triggered_by))
+            other_running = self._current_running_type
+            queued_count = self.run_queue.qsize()
+
+        if other_running and other_running != type_:
+            log.info("[%s] %s: сейчас идёт %s → встал в очередь (позиция %d)",
+                     type_, trigger, other_running, queued_count)
+            return "queued"
+        log.info("[%s] %s: добавлен в очередь (%d в очереди)", type_, trigger, queued_count)
+        return "started"
+
+    def _queue_consumer_loop(self):
+        """
+        Основной цикл выполнения. Блокирующе берёт задачу из очереди,
+        запускает MigrationRunner, освобождается для следующей.
+        """
+        while not self.stop_event.is_set():
+            try:
+                type_, trigger, triggered_by = self.run_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+
+            with self._queue_lock:
+                self._current_running_type = type_
+                self._queued_types.discard(type_)
+
+            try:
+                run_id = client.create_run(type_, trigger, triggered_by)
+                if run_id is None:
+                    log.error("[%s] не удалось создать run, отмена", type_)
+                else:
+                    log.info("[%s] стартую run #%d (trigger=%s)", type_, run_id, trigger)
+                    MigrationRunner(type_).run(run_id)
+                    log.info("[%s] run #%d завершён", type_, run_id)
+            except Exception as e:
+                log.exception("[%s] run failed: %s", type_, e)
+            finally:
+                with self._queue_lock:
+                    self._current_running_type = None
+                self.run_queue.task_done()
+
     def _run_integration(self, type_: str, trigger: str, triggered_by: str | None):
-        lock = self.state[type_]["lock"]
-        if not lock.acquire(blocking=False):
-            log.warning("[%s] уже идёт выгрузка, пропускаю новый запуск", type_)
-            return
-        try:
-            run_id = client.create_run(type_, trigger, triggered_by)
-            if run_id is None:
-                log.error("[%s] не удалось создать run, отмена", type_)
-                return
-            log.info("[%s] стартую run #%d (trigger=%s)", type_, run_id, trigger)
-            MigrationRunner(type_).run(run_id)
-        finally:
-            lock.release()
+        """
+        Совместимость с APScheduler и внешними вызовами — просто ставит
+        в очередь через _enqueue. Реальное выполнение — в consumer'е.
+        """
+        self._enqueue(type_, trigger, triggered_by)
 
     def _apply_schedule(self, type_: str, settings: dict):
         job_id = f"{type_}_schedule"
@@ -516,6 +581,10 @@ class Orchestrator:
             return
 
         _start_progress_server()
+
+        # Единый consumer очереди — только один run одновременно (BIO и
+        # Equip идут строго последовательно, не могут пересекаться).
+        threading.Thread(target=self._queue_consumer_loop, daemon=True, name="run_queue_consumer").start()
 
         for type_ in INTEGRATIONS:
             for target in (self._heartbeat_loop, self._poll_settings_loop, self._poll_commands_loop):
