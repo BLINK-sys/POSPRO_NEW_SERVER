@@ -515,8 +515,8 @@ def _try_calculate(pwc: ProductWarehouseCost):
         else:
             pwc.calculated_delivery = None
 
-        # В расчёт цены пробрасываем `доставка` как дополнительную переменную.
-        price_var_list = var_list + [{'name': 'доставка', 'formula': str(delivery_value)}]
+        # В расчёт цены пробрасываем `Доставка` как дополнительную переменную.
+        price_var_list = var_list + [{'name': 'Доставка', 'formula': str(delivery_value)}]
 
         price, all_vars = calculate_product_price(
             cost_price=pwc.cost_price,
