@@ -8,6 +8,7 @@ from models.media import ProductMedia
 from utils.formula_engine import (
     calculate_product_price, extract_product_characteristics, FormulaError
 )
+from utils.pricing_presets import MARGIN_VAR_NAME
 from datetime import datetime
 import re
 
@@ -74,6 +75,22 @@ def get_product_costs():
 
     costs = query.all()
 
+    # Пре-фетчим переменную коэф_наценки для всех складов из выборки —
+    # нужна корп.расчётнику чтобы инициализировать per-row наценку из
+    # склада товара при добавлении в КП.
+    warehouse_ids = list({c.warehouse_id for c in costs})
+    margin_coefs = {}  # {warehouse_id: float | None}
+    if warehouse_ids:
+        margin_vars = WarehouseVariable.query.filter(
+            WarehouseVariable.warehouse_id.in_(warehouse_ids),
+            WarehouseVariable.name == MARGIN_VAR_NAME,
+        ).all()
+        for v in margin_vars:
+            try:
+                margin_coefs[v.warehouse_id] = float((v.formula or '').replace(',', '.').strip())
+            except (ValueError, TypeError):
+                margin_coefs[v.warehouse_id] = None
+
     result = []
     for c in costs:
         data = c.to_dict()
@@ -94,6 +111,10 @@ def get_product_costs():
             data['supplier_name'] = None
             data['currency_code'] = 'KZT'
             data['vat_enabled'] = True
+        # Множитель торговой наценки со склада (переменная коэф_наценки).
+        # Если переменная не задана простой константой — None; фронт
+        # использует глобальный дефолт из шапки корп.расчётника.
+        data['margin_coef'] = margin_coefs.get(c.warehouse_id)
         result.append(data)
 
     return jsonify({
@@ -473,32 +494,40 @@ def _try_calculate(pwc: ProductWarehouseCost):
             return
         var_list = [{'name': v.name, 'formula': v.formula} for v in variables]
 
-        price, all_vars = calculate_product_price(
-            cost_price=pwc.cost_price,
-            currency_rate=currency_rate,
-            product_characteristics=product_chars,
-            warehouse_variables=var_list,
-            final_formula=warehouse.formula.formula
-        )
-
-        pwc.calculated_price = round(price, 2)
-        pwc.calculated_at = datetime.now()
-
-        # Calculate delivery if delivery_formula exists
+        # Сначала считаем доставку — её результат становится переменной
+        # `доставка`, доступной в формуле розничной цены. Это позволяет
+        # шаблонам розницы (РФ / КЗ_с_НДС / КЗ_без_НДС) ссылаться на
+        # доставку простым именем без дублирования выражения.
+        delivery_value = 0.0
         if warehouse.formula.delivery_formula:
             try:
-                delivery, _ = calculate_product_price(
+                delivery_value, _ = calculate_product_price(
                     cost_price=pwc.cost_price,
                     currency_rate=currency_rate,
                     product_characteristics=product_chars,
                     warehouse_variables=var_list,
                     final_formula=warehouse.formula.delivery_formula
                 )
-                pwc.calculated_delivery = round(delivery, 2)
+                pwc.calculated_delivery = round(delivery_value, 2)
             except (FormulaError, Exception):
                 pwc.calculated_delivery = None
+                delivery_value = 0.0
         else:
             pwc.calculated_delivery = None
+
+        # В расчёт цены пробрасываем `доставка` как дополнительную переменную.
+        price_var_list = var_list + [{'name': 'доставка', 'formula': str(delivery_value)}]
+
+        price, all_vars = calculate_product_price(
+            cost_price=pwc.cost_price,
+            currency_rate=currency_rate,
+            product_characteristics=product_chars,
+            warehouse_variables=price_var_list,
+            final_formula=warehouse.formula.formula
+        )
+
+        pwc.calculated_price = round(price, 2)
+        pwc.calculated_at = datetime.now()
 
         # Себестоимость без маржи — третья формула склада. Считаем тут же,
         # чтобы upsert закупки сразу перегонял все три значения и не нужно

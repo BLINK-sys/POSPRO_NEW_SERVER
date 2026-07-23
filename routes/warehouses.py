@@ -9,6 +9,10 @@ from utils.formula_engine import (
     extract_product_characteristics, bulk_extract_product_characteristics,
     BUILTIN_VARIABLE_NAMES, FormulaError
 )
+from utils.pricing_presets import (
+    MARGIN_VAR_NAME, MARGIN_VAR_DEFAULT, MARGIN_VAR_LABEL,
+    select_price_formula,
+)
 from datetime import datetime
 
 warehouses_bp = Blueprint('warehouses', __name__)
@@ -81,6 +85,7 @@ def create_warehouse():
     if not currency:
         return jsonify({'success': False, 'message': 'Валюта не найдена'}), 404
 
+    vat_enabled = bool(data.get('vat_enabled', True))
     warehouse = Warehouse(
         supplier_id=data['supplier_id'],
         name=data['name'].strip(),
@@ -88,15 +93,33 @@ def create_warehouse():
         address=data.get('address', '').strip() if data.get('address') else None,
         currency_id=data['currency_id'],
         # Если поле не передано — дефолт True (склад с НДС)
-        vat_enabled=bool(data.get('vat_enabled', True)),
+        vat_enabled=vat_enabled,
     )
     db.session.add(warehouse)
+    db.session.flush()  # получить warehouse.id
+
+    # Автоприменение пресета формулы + переменной коэф_наценки.
+    # Тип пресета определяется по (currency.code, vat_enabled).
+    warehouse.formula = WarehouseFormula(
+        warehouse_id=warehouse.id,
+        formula=select_price_formula(currency.code, vat_enabled),
+        delivery_formula=None,
+        cost_formula=None,
+    )
+    db.session.add(warehouse.formula)
+    db.session.add(WarehouseVariable(
+        warehouse_id=warehouse.id,
+        name=MARGIN_VAR_NAME,
+        label=MARGIN_VAR_LABEL,
+        formula=MARGIN_VAR_DEFAULT,
+        sort_order=0,
+    ))
     db.session.commit()
 
     return jsonify({
         'success': True,
         'message': 'Склад создан',
-        'data': warehouse.to_dict()
+        'data': warehouse.to_dict_full()
     }), 201
 
 
