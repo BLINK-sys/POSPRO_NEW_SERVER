@@ -29,16 +29,7 @@ BUILTIN_VARIABLE_NAMES = {
     'вес',
     # Габариты: произведение ДxШxВ с fallback (упаковка → без упаковки), 0 если оба пусты
     'габариты',
-    # НДС: множитель ставки (16% → 1.16). Одинаковый на все склады, зашит константой.
-    # Используется в формулах импорта: `себестоимость × курс_валюты × НДС + Доставка`.
-    'НДС',
-    # Доставка: результат вычисления WarehouseFormula.delivery_formula за единицу.
-    # Подставляется в переменные при расчёте розничной формулы (см. _try_calculate).
-    'Доставка',
 }
-
-# Константа ставки НДС в мультипликаторе (16% → 1.16). Если поменяется — правим тут.
-VAT_MUL = 1.16
 
 # Mapping from formula variable names to characteristic search patterns
 CHARACTERISTIC_MAPPING = {
@@ -268,7 +259,6 @@ def calculate_product_price(
     variables = {
         'себестоимость': cost_price,
         'курс_валюты': currency_rate,
-        'НДС': VAT_MUL,   # 1.16 = множитель ставки НДС для формул импорта
     }
 
     # Add product characteristics

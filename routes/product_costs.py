@@ -494,11 +494,11 @@ def _try_calculate(pwc: ProductWarehouseCost):
             return
         var_list = [{'name': v.name, 'formula': v.formula} for v in variables]
 
-        # Сначала считаем доставку — её результат становится переменной
-        # `доставка`, доступной в формуле розничной цены. Это позволяет
-        # шаблонам розницы (РФ / КЗ_с_НДС / КЗ_без_НДС) ссылаться на
-        # доставку простым именем без дублирования выражения.
-        delivery_value = 0.0
+        # Сначала считаем delivery_formula — только для того чтобы записать
+        # `pwc.calculated_delivery` (отображается в UI как «Доставка за ед.»).
+        # В саму розничную формулу `Доставка` НЕ подставляется — юзер сам
+        # заводит на складе переменную `Доставка` со своей логикой (у BIO это
+        # диапазоны по расчётному весу, у Equip — что-то другое).
         if warehouse.formula.delivery_formula:
             try:
                 delivery_value, _ = calculate_product_price(
@@ -511,18 +511,14 @@ def _try_calculate(pwc: ProductWarehouseCost):
                 pwc.calculated_delivery = round(delivery_value, 2)
             except (FormulaError, Exception):
                 pwc.calculated_delivery = None
-                delivery_value = 0.0
         else:
             pwc.calculated_delivery = None
-
-        # В расчёт цены пробрасываем `Доставка` как дополнительную переменную.
-        price_var_list = var_list + [{'name': 'Доставка', 'formula': str(delivery_value)}]
 
         price, all_vars = calculate_product_price(
             cost_price=pwc.cost_price,
             currency_rate=currency_rate,
             product_characteristics=product_chars,
-            warehouse_variables=price_var_list,
+            warehouse_variables=var_list,
             final_formula=warehouse.formula.formula
         )
 
