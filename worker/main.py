@@ -109,11 +109,12 @@ class PosProClient:
         return f"{self.base}/{type_}/{path.lstrip('/')}"
 
     def heartbeat(self, type_: str) -> bool:
-        # Ошибки не логируем здесь — backoff-loop сам решит когда шуметь.
+        # Ловим ВСЕ исключения (не только RequestException) — иначе тред падает
+        # молча на неожиданных вещах типа ConnectionAbortedError / OSError / SSL.
         try:
             r = self.session.post(self._url(type_, "heartbeat"), headers=self.headers, timeout=10)
             return r.ok
-        except requests.RequestException:
+        except Exception:
             return False
 
     def get_settings(self, type_: str) -> dict | None:
@@ -121,7 +122,7 @@ class PosProClient:
             r = self.session.get(self._url(type_, "settings"), headers=self.headers, timeout=10)
             if r.ok:
                 return r.json()
-        except requests.RequestException:
+        except Exception:
             pass
         return None
 
@@ -130,7 +131,7 @@ class PosProClient:
             r = self.session.get(self._url(type_, "pending-command"), headers=self.headers, timeout=10)
             if r.ok:
                 return r.json().get("command")
-        except requests.RequestException:
+        except Exception:
             pass
         return None
 
@@ -529,6 +530,31 @@ class Orchestrator:
 
         self.stop_event.wait(interval)
 
+    def _safe_loop(self, target, type_: str, name: str):
+        """
+        Обёртка над poll-циклом: если тред умер по uncaught exception —
+        логирует stacktrace и рестартит через 5 сек. Без этой защиты
+        падение одного тика убивало весь heartbeat/settings/commands loop
+        молча, статус в UI застывал а причины было не найти.
+        """
+        while not self.stop_event.is_set():
+            try:
+                target(type_)
+                return  # чистый выход (stop_event set)
+            except Exception as e:
+                log.exception("[%s] loop %s CRASHED, рестарт через 5 сек: %s", type_, name, e)
+                self.stop_event.wait(5)
+
+    def _safe_loop_no_type(self, target, name: str):
+        """То же что _safe_loop, но для функций без type_ (например consumer)."""
+        while not self.stop_event.is_set():
+            try:
+                target()
+                return
+            except Exception as e:
+                log.exception("loop %s CRASHED, рестарт через 5 сек: %s", name, e)
+                self.stop_event.wait(5)
+
     def _poll_settings_loop(self, type_: str):
         state = {"was_failing": False, "last_log_at": 0, "first_fail_at": 0, "backoff": SETTINGS_REFRESH_INTERVAL}
         while not self.stop_event.is_set():
@@ -543,10 +569,6 @@ class Orchestrator:
     def _poll_commands_loop(self, type_: str):
         state = {"was_failing": False, "last_log_at": 0, "first_fail_at": 0, "backoff": COMMAND_POLL_INTERVAL}
         while not self.stop_event.is_set():
-            # None = ошибка сети, [] или {} = пустая очередь (успешный запрос).
-            # Отличить успех от ошибки — client.get_pending_command вернёт None
-            # только при exception (проверено ниже). Пустая очередь = None
-            # тоже. Значит используем flag через локальный try.
             success = True
             try:
                 r = client.session.get(
@@ -557,14 +579,11 @@ class Orchestrator:
                     cmd = r.json().get("command")
                     if cmd and cmd.get("command") == "run_now":
                         log.info("[%s] получена команда run_now от %s", type_, cmd.get("created_by"))
-                        threading.Thread(
-                            target=self._run_integration,
-                            args=[type_, "manual", cmd.get("created_by")],
-                            daemon=True,
-                        ).start()
+                        # Не в отдельном thread — теперь через FIFO очередь.
+                        self._enqueue(type_, "manual", cmd.get("created_by"))
                 else:
                     success = False
-            except requests.RequestException:
+            except Exception:
                 success = False
             self._sleep_with_backoff(type_, "commands", COMMAND_POLL_INTERVAL, success, state)
 
@@ -584,11 +603,21 @@ class Orchestrator:
 
         # Единый consumer очереди — только один run одновременно (BIO и
         # Equip идут строго последовательно, не могут пересекаться).
-        threading.Thread(target=self._queue_consumer_loop, daemon=True, name="run_queue_consumer").start()
+        threading.Thread(
+            target=self._safe_loop_no_type, args=[self._queue_consumer_loop, "queue_consumer"],
+            daemon=True, name="run_queue_consumer",
+        ).start()
 
         for type_ in INTEGRATIONS:
-            for target in (self._heartbeat_loop, self._poll_settings_loop, self._poll_commands_loop):
-                threading.Thread(target=target, args=[type_], daemon=True, name=f"{target.__name__}_{type_}").start()
+            for target, loop_name in (
+                (self._heartbeat_loop, "heartbeat"),
+                (self._poll_settings_loop, "settings"),
+                (self._poll_commands_loop, "commands"),
+            ):
+                threading.Thread(
+                    target=self._safe_loop, args=[target, type_, loop_name],
+                    daemon=True, name=f"{loop_name}_{type_}",
+                ).start()
 
         def _stop(*_):
             log.info("Received stop signal, shutting down...")
