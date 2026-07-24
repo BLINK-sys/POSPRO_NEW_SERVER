@@ -135,18 +135,37 @@ class PosProClient:
             pass
         return None
 
-    def create_run(self, type_: str, trigger: str, triggered_by: str | None = None) -> int | None:
+    def create_run(self, type_: str, trigger: str, triggered_by: str | None = None,
+                   status: str = "running") -> int | None:
         try:
             r = self.session.post(
                 self._url(type_, "run"),
                 headers=self.headers,
-                json={"trigger": trigger, "triggered_by": triggered_by, "phase": "starting"},
+                json={
+                    "trigger": trigger,
+                    "triggered_by": triggered_by,
+                    "phase": "starting" if status == "running" else "queued",
+                    "status": status,
+                },
                 timeout=10,
             )
             if r.ok:
                 return r.json().get("id")
         except requests.RequestException as e:
             log.warning("create_run %s failed: %s", type_, e)
+        return None
+
+    def get_run(self, type_: str, run_id: int) -> dict | None:
+        try:
+            r = self.session.get(
+                self._url(type_, f"run/{run_id}"),
+                headers=self.headers,
+                timeout=10,
+            )
+            if r.ok:
+                return r.json()
+        except Exception:
+            pass
         return None
 
     def update_run(self, type_: str, run_id: int, **fields) -> bool:
@@ -412,8 +431,10 @@ class Orchestrator:
         self.state = {t: {"settings_hash": None} for t in INTEGRATIONS}
         self.stop_event = threading.Event()
 
-        # FIFO очередь запусков. Кладём tuple (type_, trigger, triggered_by).
-        self.run_queue: "queue.Queue[tuple[str, str, str | None]]" = queue.Queue()
+        # FIFO очередь запусков. Кладём tuple (type_, run_id, trigger, triggered_by).
+        # run_id создаётся в _enqueue со status='queued' — так UI видит очередь
+        # сразу же, а не только когда consumer доберётся до задачи.
+        self.run_queue: "queue.Queue[tuple[str, int, str, str | None]]" = queue.Queue()
         # Что consumer сейчас выполняет (для дедупликации + логов).
         self._current_running_type: str | None = None
         # Множество типов уже стоящих в очереди — для дедупликации.
@@ -423,21 +444,38 @@ class Orchestrator:
     def _enqueue(self, type_: str, trigger: str, triggered_by: str | None) -> str:
         """
         Ставит задачу в очередь. Возвращает 'started' / 'queued' / 'duplicate'.
+
+        Создаёт IntegrationRun со status='queued' на сервере — так UI видит
+        карточку «В очереди» сразу, а не после того как consumer возьмётся за неё.
+        Consumer потом переведёт run в 'running' и запустит MigrationRunner.
         """
         with self._queue_lock:
             if self._current_running_type == type_ or type_ in self._queued_types:
                 log.info("[%s] %s: уже в работе или очереди, игнор", type_, trigger)
                 return "duplicate"
+
+            # Создаём queued run ЗА пределами lock'а нельзя (гонка), но и внутри
+            # держать HTTP-запрос грязно. Компромисс: помечаем тип как queued
+            # прямо сейчас (защита от гонок), затем создаём run.
             self._queued_types.add(type_)
-            self.run_queue.put((type_, trigger, triggered_by))
             other_running = self._current_running_type
-            queued_count = self.run_queue.qsize()
+
+        run_id = client.create_run(type_, trigger, triggered_by, status="queued")
+        if run_id is None:
+            log.error("[%s] не удалось создать queued run, снимаю с очереди", type_)
+            with self._queue_lock:
+                self._queued_types.discard(type_)
+            return "duplicate"
+
+        self.run_queue.put((type_, run_id, trigger, triggered_by))
+        queued_count = self.run_queue.qsize()
 
         if other_running and other_running != type_:
-            log.info("[%s] %s: сейчас идёт %s → встал в очередь (позиция %d)",
-                     type_, trigger, other_running, queued_count)
+            log.info("[%s] %s: run #%d поставлен в очередь (сейчас идёт %s, позиция %d)",
+                     type_, trigger, run_id, other_running, queued_count)
             return "queued"
-        log.info("[%s] %s: добавлен в очередь (%d в очереди)", type_, trigger, queued_count)
+        log.info("[%s] %s: run #%d добавлен в очередь (%d в очереди)",
+                 type_, trigger, run_id, queued_count)
         return "started"
 
     def _queue_consumer_loop(self):
@@ -447,7 +485,7 @@ class Orchestrator:
         """
         while not self.stop_event.is_set():
             try:
-                type_, trigger, triggered_by = self.run_queue.get(timeout=1)
+                type_, run_id, trigger, triggered_by = self.run_queue.get(timeout=1)
             except queue.Empty:
                 continue
 
@@ -456,15 +494,23 @@ class Orchestrator:
                 self._queued_types.discard(type_)
 
             try:
-                run_id = client.create_run(type_, trigger, triggered_by)
-                if run_id is None:
-                    log.error("[%s] не удалось создать run, отмена", type_)
+                # Проверяем не отменили ли run пока он ждал в очереди —
+                # админ мог нажать «Отменить» на queued карточке.
+                snapshot = client.get_run(type_, run_id)
+                if snapshot and snapshot.get("status") == "cancelled":
+                    log.info("[%s] run #%d был отменён во время ожидания в очереди, пропускаю",
+                             type_, run_id)
+                elif snapshot is None:
+                    log.warning("[%s] не удалось прочитать run #%d, пропускаю (защита от гонок)",
+                                type_, run_id)
                 else:
+                    # Переводим queued → running и запускаем миграцию.
+                    client.update_run(type_, run_id, status="running", phase="starting")
                     log.info("[%s] стартую run #%d (trigger=%s)", type_, run_id, trigger)
                     MigrationRunner(type_).run(run_id)
                     log.info("[%s] run #%d завершён", type_, run_id)
             except Exception as e:
-                log.exception("[%s] run failed: %s", type_, e)
+                log.exception("[%s] run #%d failed: %s", type_, run_id, e)
             finally:
                 with self._queue_lock:
                     self._current_running_type = None

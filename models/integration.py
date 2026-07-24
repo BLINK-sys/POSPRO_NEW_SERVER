@@ -20,8 +20,11 @@ INTEGRATION_TYPES = ('bio', 'equip')
 # - interval: {"days": 14, "time": "04:00", "anchor": "2026-07-24"}  — каждые N дней
 SCHEDULE_MODES = ('weekly', 'interval')
 
-# Статусы run'ов
-RUN_STATUSES = ('running', 'success', 'failed', 'cancelled')
+# Статусы run'ов.
+# 'queued' — попал в FIFO-очередь воркера, ещё не стартовал (нужно, чтобы UI видел
+# «в очереди» с кнопкой Отмены; сама очередь FIFO живёт в памяти воркера,
+# но её видимая проекция — record'ы IntegrationRun со status='queued').
+RUN_STATUSES = ('queued', 'running', 'success', 'failed', 'cancelled')
 
 # Фазы run'ов (для UI прогресса)
 RUN_PHASES = (

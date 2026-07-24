@@ -94,8 +94,10 @@ def list_integrations():
         settings = _get_or_create_settings(t)
         last_run = IntegrationRun.query.filter_by(type=t).order_by(desc(IntegrationRun.started_at)).first()
         active_run = IntegrationRun.query.filter_by(type=t, status='running').first()
-        # Есть ли пенднинг-команда «запустить сейчас» — для отображения
-        # «В очереди» на карточке пока идёт другая интеграция.
+        queued_run = IntegrationRun.query.filter_by(type=t, status='queued').order_by(IntegrationRun.started_at).first()
+        # pending_command — команда, которая ещё не подхвачена воркером.
+        # Как только воркер её подхватывает и заводит IntegrationRun(status='queued'),
+        # мы показываем на карточке уже queued_run, а не pending_command.
         pending_cmd = IntegrationCommand.query.filter_by(
             type=t, command='run_now', consumed_at=None,
         ).first()
@@ -105,6 +107,7 @@ def list_integrations():
             'settings': settings.to_dict(),
             'last_run': last_run.to_dict() if last_run else None,
             'active_run': active_run.to_dict() if active_run else None,
+            'queued_run': queued_run.to_dict() if queued_run else None,
             'pending_command': pending_cmd.to_dict() if pending_cmd else None,
         })
     return jsonify({'success': True, 'data': result}), 200
@@ -121,8 +124,12 @@ def get_integration_detail(type_):
 
     settings = _get_or_create_settings(type_)
     active_run = IntegrationRun.query.filter_by(type=type_, status='running').first()
+    queued_run = IntegrationRun.query.filter_by(type=type_, status='queued').order_by(IntegrationRun.started_at).first()
+    # История — только завершённые (running/queued отдаются отдельно, чтобы UI
+    # не дублировал текущий/ожидающий run в списке истории).
     history = (
         IntegrationRun.query.filter_by(type=type_)
+        .filter(IntegrationRun.status.notin_(('running', 'queued')))
         .order_by(desc(IntegrationRun.started_at))
         .limit(30)
         .all()
@@ -134,6 +141,7 @@ def get_integration_detail(type_):
             'online': _is_online(settings),
             'settings': settings.to_dict(),
             'active_run': active_run.to_dict() if active_run else None,
+            'queued_run': queued_run.to_dict() if queued_run else None,
             'history': [r.to_dict() for r in history],
         },
     }), 200
@@ -175,7 +183,10 @@ def trigger_integration(type_):
     if not _valid_type(type_):
         return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
 
-    # Не даём поставить вторую команду если уже идёт run — избегаем гонки.
+    # Дедупликация: если этот тип уже active/queued/pending — не плодим дубли.
+    # Само разрешение параллелизма (BIO+Equip нельзя вместе) — на стороне
+    # воркера через FIFO queue; сюда команда всегда упадёт, воркер её либо
+    # запустит сразу, либо поставит в очередь и вернёт запись queued run'а.
     active = IntegrationRun.query.filter_by(type=type_, status='running').first()
     if active:
         return jsonify({
@@ -184,7 +195,14 @@ def trigger_integration(type_):
             'active_run_id': active.id,
         }), 409
 
-    # Не даём вторую pending-команду — если оператор уже нажал.
+    queued = IntegrationRun.query.filter_by(type=type_, status='queued').first()
+    if queued:
+        return jsonify({
+            'success': True,
+            'message': 'Уже в очереди.',
+            'queued_run_id': queued.id,
+        }), 200
+
     pending = IntegrationCommand.query.filter_by(
         type=type_, command='run_now', consumed_at=None,
     ).first()
@@ -213,13 +231,15 @@ def cancel_integration(type_):
     """
     Отменить выполнение / удалить из очереди.
 
-    Три случая:
+    Случаи:
     1. Есть active_run того же типа → создаём IntegrationCommand(command='cancel').
        Воркер поймает через poll_commands и убьёт subprocess. После завершения
        run.status = 'cancelled'.
-    2. Есть pending run_now (в очереди, ещё не начался) → удаляем команду,
-       воркер не подхватит.
-    3. Ни того ни другого → 400.
+    2. Есть queued run (уже в очереди воркера, но ещё не стартовал) →
+       помечаем его status='cancelled'. Consumer при извлечении из очереди
+       проверит статус в БД и пропустит.
+    3. Есть pending run_now (воркер ещё не подхватил команду) → удаляем команду.
+    4. Ни одного из трёх → 400.
     """
     if not _check_admin():
         return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
@@ -227,11 +247,12 @@ def cancel_integration(type_):
         return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
 
     active = IntegrationRun.query.filter_by(type=type_, status='running').first()
+    queued = IntegrationRun.query.filter_by(type=type_, status='queued').first()
     pending = IntegrationCommand.query.filter_by(
         type=type_, command='run_now', consumed_at=None,
     ).first()
 
-    if not active and not pending:
+    if not active and not queued and not pending:
         return jsonify({'success': False, 'message': 'Нечего отменять'}), 400
 
     jwt_data = get_jwt()
@@ -241,6 +262,12 @@ def cancel_integration(type_):
     if pending:
         db.session.delete(pending)
         actions.append('pending removed')
+
+    if queued:
+        queued.status = 'cancelled'
+        queued.finished_at = datetime.utcnow()
+        queued.error = f'Отменено пользователем {user_email} до начала выполнения'
+        actions.append('queued cancelled')
 
     if active:
         # Дедупликация: если cancel уже в очереди — не плодим дубли.
@@ -345,12 +372,19 @@ def _make_snapshot(type_):
     """
     settings = _get_or_create_settings(type_)
     active_run = IntegrationRun.query.filter_by(type=type_, status='running').first()
-    last_run = IntegrationRun.query.filter_by(type=type_).order_by(desc(IntegrationRun.started_at)).first()
+    queued_run = IntegrationRun.query.filter_by(type=type_, status='queued').order_by(IntegrationRun.started_at).first()
+    # last_run — только завершённые; иначе UI дублирует active/queued в «последнем запуске».
+    last_run = (
+        IntegrationRun.query.filter_by(type=type_)
+        .filter(IntegrationRun.status.notin_(('running', 'queued')))
+        .order_by(desc(IntegrationRun.started_at))
+        .first()
+    )
     pending_cmd = IntegrationCommand.query.filter_by(
         type=type_, command='run_now', consumed_at=None,
     ).first()
 
-    # Активный run соседней интеграции (для UI-логики "запустить после X")
+    # Активный/ожидающий run соседней интеграции (для UI-логики "запустить после X")
     other_types = [t for t in INTEGRATION_TYPES if t != type_]
     other_running = None
     for other_type in other_types:
@@ -369,6 +403,7 @@ def _make_snapshot(type_):
         'online': _is_online(settings),
         'settings': settings.to_dict(),
         'active_run': active_run.to_dict() if active_run else None,
+        'queued_run': queued_run.to_dict() if queued_run else None,
         'last_run': last_run.to_dict() if last_run else None,
         'pending_command': pending_cmd.to_dict() if pending_cmd else None,
         'other_running': other_running,
@@ -453,17 +488,33 @@ def internal_create_run(type_):
         return jsonify({'error': 'unknown_type'}), 404
 
     data = request.get_json() or {}
+    status = data.get('status', 'running')
+    if status not in RUN_STATUSES:
+        return jsonify({'error': 'bad_status'}), 400
     run = IntegrationRun(
         type=type_,
         trigger=data.get('trigger', 'scheduled'),
         triggered_by=data.get('triggered_by'),
-        status='running',
+        status=status,
         phase=data.get('phase', 'starting'),
         progress=data.get('progress'),
     )
     db.session.add(run)
     db.session.commit()
     return jsonify({'id': run.id}), 201
+
+
+@integrations_bp.route('/internal/<type_>/run/<int:run_id>', methods=['GET'])
+def internal_get_run(type_, run_id):
+    """Воркер читает статус run'а — нужно чтобы consumer знал, не отменили ли queued run пока он ждал в очереди."""
+    if not _check_integration_key():
+        return jsonify({'error': 'forbidden'}), 403
+    if not _valid_type(type_):
+        return jsonify({'error': 'unknown_type'}), 404
+    run = IntegrationRun.query.filter_by(id=run_id, type=type_).first()
+    if not run:
+        return jsonify({'error': 'not_found'}), 404
+    return jsonify(run.to_dict()), 200
 
 
 @integrations_bp.route('/internal/<type_>/run/<int:run_id>', methods=['POST'])
