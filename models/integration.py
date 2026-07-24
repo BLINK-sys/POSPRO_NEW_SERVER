@@ -12,6 +12,17 @@ from extensions import db
 from datetime import datetime
 
 
+def _utc_iso(dt):
+    """
+    Возвращает ISO8601 с суффиксом 'Z' — иначе JS `new Date(str)` парсит
+    строку без tz как локальное время браузера (у казахстанских клиентов
+    смещение +5 → активный run в 05:30 UTC отображался как 00:30 и «шёл
+    5 часов»). Все timestamp'ы в БД сохраняются через utcnow — тут просто
+    делаем это явным для клиента.
+    """
+    return dt.isoformat() + 'Z' if dt else None
+
+
 # Типы интеграций. Хардкод — их всего две, вложенных enum-таблицы делать нет смысла.
 INTEGRATION_TYPES = ('bio', 'equip')
 
@@ -61,8 +72,8 @@ class IntegrationSettings(db.Model):
             'enabled': bool(self.enabled),
             'schedule_mode': self.schedule_mode,
             'schedule_data': self.schedule_data,
-            'last_heartbeat_at': self.last_heartbeat_at.isoformat() if self.last_heartbeat_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'last_heartbeat_at': _utc_iso(self.last_heartbeat_at),
+            'updated_at': _utc_iso(self.updated_at),
         }
 
 
@@ -91,8 +102,8 @@ class IntegrationRun(db.Model):
             'type': self.type,
             'trigger': self.trigger,
             'triggered_by': self.triggered_by,
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+            'started_at': _utc_iso(self.started_at),
+            'finished_at': _utc_iso(self.finished_at),
             'status': self.status,
             'phase': self.phase,
             'progress': self.progress,
@@ -122,7 +133,7 @@ class IntegrationCommand(db.Model):
             'id': self.id,
             'type': self.type,
             'command': self.command,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_at': _utc_iso(self.created_at),
             'created_by': self.created_by,
-            'consumed_at': self.consumed_at.isoformat() if self.consumed_at else None,
+            'consumed_at': _utc_iso(self.consumed_at),
         }

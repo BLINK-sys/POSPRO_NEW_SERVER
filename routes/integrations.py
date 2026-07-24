@@ -31,6 +31,7 @@ from models.integration import (
     IntegrationSettings, IntegrationRun, IntegrationCommand,
     INTEGRATION_TYPES, SCHEDULE_MODES, RUN_STATUSES,
 )
+from models.systemuser import SystemUser
 
 
 integrations_bp = Blueprint('integrations', __name__)
@@ -53,6 +54,27 @@ def _check_admin():
 def _check_integration_key():
     key = request.headers.get('X-Integration-Key') or ''
     return key == INTEGRATION_KEY and INTEGRATION_KEY != 'CHANGE_ME_IN_ENV'
+
+
+def _get_current_admin_email(jwt_data):
+    """
+    JWT кладёт identity=str(user.id) в `sub` — email в claims не хранится.
+    Резолвим по SystemUser чтобы в triggered_by писать email админа, а не '1'.
+    Fallback: строка с `sub` (лучше чем None если пользователь удалён).
+    """
+    email_claim = jwt_data.get('email')
+    if email_claim:
+        return email_claim
+    sub = jwt_data.get('sub')
+    if not sub:
+        return None
+    try:
+        user = SystemUser.query.get(int(sub))
+        if user and user.email:
+            return user.email
+    except (ValueError, TypeError):
+        pass
+    return str(sub)
 
 
 def _valid_type(t):
@@ -214,7 +236,7 @@ def trigger_integration(type_):
         }), 200
 
     jwt_data = get_jwt()
-    user_email = jwt_data.get('email') or jwt_data.get('sub')
+    user_email = _get_current_admin_email(jwt_data)
     cmd = IntegrationCommand(
         type=type_,
         command='run_now',
@@ -256,7 +278,7 @@ def cancel_integration(type_):
         return jsonify({'success': False, 'message': 'Нечего отменять'}), 400
 
     jwt_data = get_jwt()
-    user_email = jwt_data.get('email') or jwt_data.get('sub')
+    user_email = _get_current_admin_email(jwt_data)
 
     actions = []
     if pending:
@@ -394,7 +416,9 @@ def _make_snapshot(type_):
                 'type': other_type,
                 'run_id': other_active.id,
                 'phase': other_active.phase,
-                'started_at': other_active.started_at.isoformat() if other_active.started_at else None,
+                # 'Z' — все datetimes хранятся как UTC (см. модель), фронту
+                # нужен явный tz-суффикс чтобы браузер не парсил как локальное.
+                'started_at': (other_active.started_at.isoformat() + 'Z') if other_active.started_at else None,
             }
             break
 
