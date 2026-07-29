@@ -455,29 +455,50 @@ def worker_status():
     }), 200
 
 
+# Справочник городов Казахстана — захардкожен в бэке, чтобы не тащить
+# gis2_collector на Render (либа нужна только воркеру на локалке). Взято
+# из cities.json в gis2_collector/engine/data + CITY_CODE_OVERRIDES:
+#   * nur_sultan → astana (подтверждено выгрузкой 1248 записей по Астане)
+#   * kyzylorda в справочнике либы стоит с domain=ru — реально работает
+#     как 2gis.kz/kyzylorda, поэтому здесь домен kz.
+COLLECTOR_CITIES_KZ = [
+    {'code': 'aktau',         'name': 'Актау',            'domain': 'kz'},
+    {'code': 'aktobe',        'name': 'Актобе',           'domain': 'kz'},
+    {'code': 'almaty',        'name': 'Алматы',           'domain': 'kz'},
+    {'code': 'astana',        'name': 'Астана',           'domain': 'kz'},
+    {'code': 'atyrau',        'name': 'Атырау',           'domain': 'kz'},
+    {'code': 'zhezkazgan',    'name': 'Жезказган',        'domain': 'kz'},
+    {'code': 'karaganda',     'name': 'Караганда',        'domain': 'kz'},
+    {'code': 'kokshetau',     'name': 'Кокшетау',         'domain': 'kz'},
+    {'code': 'kostanay',      'name': 'Костанай',         'domain': 'kz'},
+    {'code': 'kyzylorda',     'name': 'Кызылорда',        'domain': 'kz'},
+    {'code': 'pavlodar',      'name': 'Павлодар',         'domain': 'kz'},
+    {'code': 'petropavlovsk', 'name': 'Петропавловск',    'domain': 'kz'},
+    {'code': 'semey',         'name': 'Семей',            'domain': 'kz'},
+    {'code': 'shymkent',      'name': 'Шымкент',          'domain': 'kz'},
+    {'code': 'taraz',         'name': 'Тараз',            'domain': 'kz'},
+    {'code': 'turkestan',     'name': 'Туркестан',        'domain': 'kz'},
+    {'code': 'uralsk',        'name': 'Уральск',          'domain': 'kz'},
+    {'code': 'ustkam',        'name': 'Усть-Каменогорск', 'domain': 'kz'},
+]
+
+COLLECTOR_CITIES = {
+    'kz': COLLECTOR_CITIES_KZ,
+}
+
+
 @collector_bp.route('/catalog/cities', methods=['GET'])
 @jwt_required()
 def catalog_cities():
-    """Обёртка над gis2_collector.catalogs — справочник городов для UI."""
+    """
+    Справочник городов для формы создания задачи. Отдаём хардкод чтобы не
+    тащить gis2_collector на прод. При добавлении новых стран — расширить
+    COLLECTOR_CITIES.
+    """
     if not _check_admin():
         return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
     country = (request.args.get('country') or 'kz').lower()
-    try:
-        # Импорт локальный — так endpoints грузятся быстрее, и падение импорта
-        # не роняет весь модуль endpoints.
-        from gis2_collector import cities_by_country
-    except ImportError:
-        return jsonify({
-            'success': False,
-            'message': 'gis2_collector не установлен на прод-сервере (нужен только на воркере)',
-        }), 501
-
-    try:
-        raw = cities_by_country(country)
-    except Exception as e:
-        return jsonify({'success': False, 'message': f'Ошибка справочника: {e}'}), 500
-
-    data = [{'code': c.code, 'name': c.name, 'domain': c.domain} for c in raw]
+    data = list(COLLECTOR_CITIES.get(country, []))
     data.sort(key=lambda x: x['name'])
     return jsonify({'success': True, 'data': data}), 200
 
