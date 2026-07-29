@@ -1,7 +1,7 @@
 """
 Локальный воркер 2GIS-сбора. Живёт на резервном ПК
 (`R:\\integration\\collector\\worker\\collector_main.py`), запускается
-Task Scheduler'ом при логоне юзера Алина — не Windows Service, потому что
+Task Scheduler'ом при логоне юзера admin — не Windows Service, потому что
 `gis2_collector.collect()` с `headless=False` требует живой desktop-сессии.
 
 Взаимодействие с прод-магазином — только исходящее HTTP на

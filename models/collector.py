@@ -5,7 +5,7 @@
 - Задачи per-user (owner_id), а не глобальные интеграции.
 - Расписания нет — только on-demand запуск через админку.
 - Свой heartbeat (`CollectorWorker`) — воркер отдельный от BIO/Equip:
-  живёт под logon-сессией Алины на резервном ПК (для не-headless Chrome).
+  живёт под logon-сессией admin на резервном ПК (для не-headless Chrome).
 - Файлы .xlsx хранятся на локалке; прод только знает пути и проксирует
   скачивание через X-Integration-Key.
 
@@ -194,7 +194,7 @@ class CollectorCommand(db.Model):
 class CollectorWorker(db.Model):
     """
     Heartbeat отдельного collector-воркера. Отдельно от IntegrationSettings,
-    потому что живёт на другом процессе (Task Scheduler под юзером Алина,
+    потому что живёт на другом процессе (Task Scheduler под юзером admin,
     не Windows Service под LocalSystem) — их состояние независимо.
 
     Единственная запись, id=1.
