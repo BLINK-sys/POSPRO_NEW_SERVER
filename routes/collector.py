@@ -479,6 +479,7 @@ COLLECTOR_CITIES_KZ = [
     {'code': 'almaty',        'name': 'Алматы',           'domain': 'kz'},
     {'code': 'astana',        'name': 'Астана',           'domain': 'kz'},
     {'code': 'atyrau',        'name': 'Атырау',           'domain': 'kz'},
+    {'code': 'ekibastuz',     'name': 'Экибастуз',        'domain': 'kz'},
     {'code': 'zhezkazgan',    'name': 'Жезказган',        'domain': 'kz'},
     {'code': 'karaganda',     'name': 'Караганда',        'domain': 'kz'},
     {'code': 'kokshetau',     'name': 'Кокшетау',         'domain': 'kz'},
