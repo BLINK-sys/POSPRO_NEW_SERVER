@@ -306,12 +306,15 @@ class MigrationRunner:
 
         # Env для скрипта: INTEGRATION_PROGRESS_URL и INTEGRATION_TYPE —
         # скрипты используют модуль progress_reporter (см. BIO/Equip репо).
+        # Плюс stage_env из INTEGRATIONS[type] — для интеграционно-специфичных
+        # переменных (напр. BIO_PRODUCTS_LIMIT для тестового ограничения).
         script_env = {
             **os.environ,
             "PYTHONUNBUFFERED": "1",
             "PYTHONIOENCODING": "utf-8",
             "INTEGRATION_PROGRESS_URL": PROGRESS_URL,
             "INTEGRATION_TYPE": self.type,
+            **(self.cfg.get("stage_env") or {}),
         }
 
         try:
