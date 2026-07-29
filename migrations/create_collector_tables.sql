@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS collector_task (
     id                      SERIAL PRIMARY KEY,
     owner_id                INTEGER NOT NULL REFERENCES system_users(id) ON DELETE CASCADE,
 
+    name                    VARCHAR(200) NOT NULL DEFAULT '',
     cities                  JSONB NOT NULL DEFAULT '[]'::jsonb,
     queries                 JSONB NOT NULL DEFAULT '[]'::jsonb,
     custom_url              TEXT NULL,
@@ -90,3 +91,8 @@ CREATE TABLE IF NOT EXISTS collector_worker (
 INSERT INTO collector_worker (id, last_heartbeat_at, hostname)
 VALUES (1, NULL, NULL)
 ON CONFLICT (id) DO NOTHING;
+
+-- Идёмпотентные ALTER'ы для расширения существующих таблиц (PG 9.6+).
+-- Скрипт разбивается apply_collector_tables.py по ';' построчно, поэтому
+-- не используем DO $$ ... $$ (там ';' внутри) — только плоские ALTER'ы.
+ALTER TABLE collector_task ADD COLUMN IF NOT EXISTS name VARCHAR(200) NOT NULL DEFAULT '';

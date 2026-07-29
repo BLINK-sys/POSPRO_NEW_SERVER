@@ -95,7 +95,7 @@ def _current_user():
         uid = None
     if uid is None:
         return None, False, None
-    user = SystemUser.query.get(uid)
+    user = db.session.get(SystemUser, uid)
     if user is None:
         return uid, False, None
     return uid, bool(user.is_owner), user.email
@@ -103,7 +103,7 @@ def _current_user():
 
 def _worker():
     """Единственная запись collector_worker (id=1). Создаёт при отсутствии."""
-    w = CollectorWorker.query.get(1)
+    w = db.session.get(CollectorWorker, 1)
     if w is None:
         w = CollectorWorker(id=1)
         db.session.add(w)
@@ -146,6 +146,12 @@ def _parse_custom_url(url):
 def _validate_task_input(data):
     """Проверяет входные данные задачи. Возвращает список ошибок (пуст → ок)."""
     errors = []
+    name = (data.get('name') or '').strip()
+    if not name:
+        errors.append('Название задачи обязательно.')
+    elif len(name) > 200:
+        errors.append('Название длиннее 200 символов.')
+
     custom_url = (data.get('custom_url') or '').strip() or None
     cities = data.get('cities') or []
     queries = data.get('queries') or []
@@ -203,6 +209,7 @@ def create_task():
 
     task = CollectorTask(
         owner_id=uid,
+        name=(data.get('name') or '').strip(),
         cities=cities,
         queries=queries,
         custom_url=custom_url,
@@ -224,7 +231,7 @@ def create_task():
     jwt_data = get_jwt()
     email = None
     try:
-        user = SystemUser.query.get(int(jwt_data.get('sub'))) if jwt_data.get('sub') else None
+        user = db.session.get(SystemUser, int(jwt_data.get('sub'))) if jwt_data.get('sub') else None
         email = user.email if user else None
     except (TypeError, ValueError):
         pass
@@ -235,7 +242,7 @@ def create_task():
     ))
     db.session.commit()
 
-    return jsonify({'success': True, 'data': task.to_dict()}), 201
+    return jsonify({'success': True, 'data': _enrich_task_dict(task.to_dict())}), 201
 
 
 @collector_bp.route('/tasks', methods=['GET'])
@@ -259,7 +266,7 @@ def list_tasks():
 
     result = []
     for t in q.all():
-        d = t.to_dict()
+        d = _enrich_task_dict(t.to_dict())
         # Добавим короткую сводку по файлам без полного списка.
         files_ok = sum(1 for f in t.files if f.status == 'ok')
         d['files_count'] = len(t.files)
@@ -276,7 +283,7 @@ def get_task(task_id):
         return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
     uid, is_owner, _ = _current_user()
 
-    task = CollectorTask.query.get(task_id)
+    task = db.session.get(CollectorTask, task_id)
     if not task:
         return jsonify({'success': False, 'message': 'Не найдено'}), 404
     if not is_owner and task.owner_id != uid:
@@ -284,7 +291,7 @@ def get_task(task_id):
 
     return jsonify({
         'success': True,
-        'data': task.to_dict(include_files=True),
+        'data': _enrich_task_dict(task.to_dict(include_files=True)),
         'online': _worker_online(),
     }), 200
 
@@ -304,7 +311,7 @@ def cancel_task(task_id):
         return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
     uid, is_owner, email = _current_user()
 
-    task = CollectorTask.query.get(task_id)
+    task = db.session.get(CollectorTask, task_id)
     if not task:
         return jsonify({'success': False, 'message': 'Не найдено'}), 404
     if not is_owner and task.owner_id != uid:
@@ -360,7 +367,7 @@ def stream_task(task_id):
         return jsonify({'error': 'forbidden'}), 403
 
     uid, is_owner, _ = _current_user()
-    task = CollectorTask.query.get(task_id)
+    task = db.session.get(CollectorTask, task_id)
     if not task:
         return jsonify({'error': 'not_found'}), 404
     if not is_owner and task.owner_id != uid:
@@ -375,11 +382,11 @@ def stream_task(task_id):
             while True:
                 # Пересобираем снимок каждую секунду. Не кэшируем инстанс task —
                 # он может протухнуть.
-                t = CollectorTask.query.get(task_id)
+                t = db.session.get(CollectorTask, task_id)
                 if t is None:
                     yield 'event: gone\ndata: {}\n\n'
                     break
-                snap = t.to_dict(include_files=True)
+                snap = _enrich_task_dict(t.to_dict(include_files=True))
                 snap['online'] = _worker_online()
                 snap_json = json.dumps(snap, ensure_ascii=False, default=str)
                 event_type = 'initial' if last_snap is None else 'update'
@@ -420,7 +427,7 @@ def download_file(task_id, file_id):
         return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
     uid, is_owner, _ = _current_user()
 
-    file_row = CollectorFile.query.get(file_id)
+    file_row = db.session.get(CollectorFile, file_id)
     if not file_row or file_row.task_id != task_id:
         return jsonify({'success': False, 'message': 'Файл не найден'}), 404
     if not is_owner and file_row.task.owner_id != uid:
@@ -485,6 +492,25 @@ COLLECTOR_CITIES_KZ = [
 COLLECTOR_CITIES = {
     'kz': COLLECTOR_CITIES_KZ,
 }
+
+# Быстрый lookup code → русское имя (для резолвинга при отдаче задач).
+_CITY_CODE_TO_NAME: dict[str, str] = {}
+for _country_cities in COLLECTOR_CITIES.values():
+    for _c in _country_cities:
+        _CITY_CODE_TO_NAME[_c['code']] = _c['name']
+
+
+def _resolve_city_names(codes):
+    """['astana', 'almaty', 'foo'] → ['Астана', 'Алматы', 'foo']."""
+    if not codes:
+        return []
+    return [_CITY_CODE_TO_NAME.get(c, c) for c in codes]
+
+
+def _enrich_task_dict(d: dict) -> dict:
+    """Добавляет city_names — русские названия для UI, без второго роунд-трипа."""
+    d['city_names'] = _resolve_city_names(d.get('cities') or [])
+    return d
 
 
 @collector_bp.route('/catalog/cities', methods=['GET'])
@@ -583,7 +609,7 @@ def internal_next_task():
             return jsonify({'task': None}), 200
 
         cmd.consumed_at = datetime.utcnow()
-        task = CollectorTask.query.get(cmd.task_id)
+        task = db.session.get(CollectorTask, cmd.task_id)
 
         if task is None or task.status in ('cancelled', 'success', 'failed'):
             # Задача уже недействительна, коммитим consume и берём следующую.
@@ -601,7 +627,7 @@ def internal_next_task():
 def internal_progress(task_id):
     if not _check_integration_key():
         return jsonify({'error': 'forbidden'}), 403
-    task = CollectorTask.query.get(task_id)
+    task = db.session.get(CollectorTask, task_id)
     if not task:
         return jsonify({'error': 'not_found'}), 404
     data = request.get_json() or {}
@@ -621,7 +647,7 @@ def internal_log(task_id):
     """
     if not _check_integration_key():
         return jsonify({'error': 'forbidden'}), 403
-    task = CollectorTask.query.get(task_id)
+    task = db.session.get(CollectorTask, task_id)
     if not task:
         return jsonify({'error': 'not_found'}), 404
     data = request.get_json() or {}
@@ -652,7 +678,7 @@ def internal_add_file(task_id):
     """
     if not _check_integration_key():
         return jsonify({'error': 'forbidden'}), 403
-    task = CollectorTask.query.get(task_id)
+    task = db.session.get(CollectorTask, task_id)
     if not task:
         return jsonify({'error': 'not_found'}), 404
 
@@ -713,7 +739,7 @@ def internal_complete(task_id):
     """Финальный тик от воркера — status='success'/'failed'/'cancelled'."""
     if not _check_integration_key():
         return jsonify({'error': 'forbidden'}), 403
-    task = CollectorTask.query.get(task_id)
+    task = db.session.get(CollectorTask, task_id)
     if not task:
         return jsonify({'error': 'not_found'}), 404
     data = request.get_json() or {}

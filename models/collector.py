@@ -41,6 +41,11 @@ class CollectorTask(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     owner_id = db.Column(db.Integer, db.ForeignKey('system_users.id'), nullable=False, index=True)
 
+    # Человекочитаемое имя задачи — обязательное, показывается в списке
+    # и на карточке. Юзер задаёт при создании (например «Кофейни Алматы, август»),
+    # чтобы через месяц в истории было понятно что это был за прогон.
+    name = db.Column(db.String(200), nullable=False, default='', server_default='')
+
     # Вход: либо cities + queries, либо custom_url (парсится на пары).
     cities = db.Column(db.JSON, nullable=False, default=list, server_default=db.text("'[]'::jsonb"))
     queries = db.Column(db.JSON, nullable=False, default=list, server_default=db.text("'[]'::jsonb"))
@@ -83,6 +88,7 @@ class CollectorTask(db.Model):
         result = {
             'id': self.id,
             'owner_id': self.owner_id,
+            'name': self.name or '',
             'cities': self.cities or [],
             'queries': self.queries or [],
             'custom_url': self.custom_url,
