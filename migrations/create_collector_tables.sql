@@ -92,7 +92,6 @@ INSERT INTO collector_worker (id, last_heartbeat_at, hostname)
 VALUES (1, NULL, NULL)
 ON CONFLICT (id) DO NOTHING;
 
--- Идёмпотентные ALTER'ы для расширения существующих таблиц (PG 9.6+).
--- Скрипт разбивается apply_collector_tables.py по ';' построчно, поэтому
--- не используем DO $$ ... $$ (там ';' внутри) — только плоские ALTER'ы.
+-- Идёмпотентные ALTERы для развития схемы (PG 9.6+).
+-- Только плоские ALTER TABLE ... ADD COLUMN IF NOT EXISTS — без DO блоков.
 ALTER TABLE collector_task ADD COLUMN IF NOT EXISTS name VARCHAR(200) NOT NULL DEFAULT '';

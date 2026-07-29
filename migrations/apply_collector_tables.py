@@ -8,6 +8,7 @@
 """
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,11 +21,19 @@ from sqlalchemy import text
 SQL_PATH = os.path.join(os.path.dirname(__file__), 'create_collector_tables.sql')
 
 
+def _strip_line_comments(sql: str) -> str:
+    """Убирает `-- ...` до конца строки. Так '';' внутри комментария больше
+    не путает наивный `split(';')` — было же: комментарий `по ';' построчно`
+    рубился ровно на этом `';`, кусок после становился псевдо-statement'ом,
+    PG падал с syntax error."""
+    return re.sub(r'--[^\n]*', '', sql)
+
+
 def apply():
     with open(SQL_PATH, encoding='utf-8') as f:
-        sql = f.read()
+        sql = _strip_line_comments(f.read())
 
-    statements = [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]
+    statements = [s.strip() for s in sql.split(';') if s.strip()]
     print(f'Statements to execute: {len(statements)}', flush=True)
     for i, stmt in enumerate(statements, 1):
         first_line = stmt.splitlines()[0][:80]
