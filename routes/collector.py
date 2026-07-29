@@ -380,8 +380,13 @@ def stream_task(task_id):
             last_snap = None
             last_ping = time.time()
             while True:
-                # Пересобираем снимок каждую секунду. Не кэшируем инстанс task —
-                # он может протухнуть.
+                # expire_all ПЕРЕД каждым .get(): без этого SQLAlchemy
+                # identity map отдаёт закэшированный объект, воркер обновляет
+                # запись из другого коннекта — а UI получает начальный
+                # snapshot и потом «замирает» до перезагрузки страницы.
+                # Аналогично протухают `t.files` (lazy relationship) — expire
+                # сбрасывает и их.
+                db.session.expire_all()
                 t = db.session.get(CollectorTask, task_id)
                 if t is None:
                     yield 'event: gone\ndata: {}\n\n'
