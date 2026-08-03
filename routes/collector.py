@@ -28,7 +28,7 @@ import json
 import time
 import re
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt, verify_jwt_in_request
@@ -348,6 +348,70 @@ def cancel_task(task_id):
 
     db.session.commit()
     return jsonify({'success': True, 'message': '; '.join(actions) or 'noop'}), 200
+
+
+@collector_bp.route('/tasks/<int:task_id>', methods=['DELETE'])
+@jwt_required()
+def delete_task(task_id):
+    """
+    Ручное удаление задачи админом. Свою — любой admin, чужую — только
+    owner. Если задача сейчас active — сначала отменяет, потом уже удаляет
+    (иначе воркер продолжит писать в удалённый task_id).
+
+    Каскадно удаляет collector_file (ON DELETE CASCADE в schema) + физически
+    сносит папку /disk/uploads/collector/<task_id>/ с локальными .xlsx.
+    Восстановить нельзя — операция односторонняя, поэтому на фронте
+    обёрнута в AlertDialog.
+    """
+    if not _check_admin():
+        return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
+    uid, is_owner, _ = _current_user()
+
+    task = db.session.get(CollectorTask, task_id)
+    if not task:
+        return jsonify({'success': False, 'message': 'Не найдено'}), 404
+    if not is_owner and task.owner_id != uid:
+        return jsonify({'success': False, 'message': 'Нет доступа'}), 403
+
+    # Активную сначала отменяем — иначе воркер продолжит слать progress/files
+    # на удалённый id и словит 404 (мусор в его логах, не критично, но лишний).
+    if task.status in ('queued', 'running'):
+        jwt_data = get_jwt()
+        email = _get_current_admin_email(jwt_data)
+        # queued → сразу cancelled, run_now-команда удаляется
+        pending_run = CollectorCommand.query.filter_by(
+            task_id=task_id, command='run_now', consumed_at=None,
+        ).first()
+        if pending_run:
+            db.session.delete(pending_run)
+        if task.status == 'running':
+            # для running — cancel-команда, воркер увидит через ~2 сек
+            exists_cancel = CollectorCommand.query.filter_by(
+                task_id=task_id, command='cancel', consumed_at=None,
+            ).first()
+            if not exists_cancel:
+                db.session.add(CollectorCommand(
+                    task_id=task_id, command='cancel', created_by=email,
+                ))
+            db.session.commit()
+            return jsonify({
+                'success': False,
+                'message': 'Задача сейчас выполняется. Дождитесь отмены (~10 сек) и удалите снова.',
+            }), 409
+
+    # Собираем пути ДО удаления — после cascade объекты пропадут.
+    task_dir = os.path.join(_collector_root(), str(task_id))
+
+    db.session.delete(task)
+    db.session.commit()
+
+    # Физически чистим папку задачи. Если её нет (у старых заданий rel_path
+    # мог не заполниться) — ок, ошибку не считаем.
+    if os.path.isdir(task_dir):
+        import shutil
+        shutil.rmtree(task_dir, ignore_errors=True)
+
+    return jsonify({'success': True, 'message': 'Удалено'}), 200
 
 
 @collector_bp.route('/tasks/<int:task_id>/stream', methods=['GET'])
@@ -784,3 +848,56 @@ def internal_should_stop(task_id):
         db.session.commit()
         return jsonify({'stop': True}), 200
     return jsonify({'stop': False}), 200
+
+
+# Порог автоочистки. При изменении здесь — обнови в обсидиан-волте
+# (`22 2GIS сбор данных.md`) и в POSPRO_INTEGRATION_WORKER (документация
+# job'а). Триггер — раз в сутки из воркера, endpoint возвращает count.
+COLLECTOR_RETENTION_DAYS = 14
+
+
+@collector_bp.route('/internal/cleanup', methods=['POST'])
+def internal_cleanup():
+    """
+    Автоочистка старых задач. Удаляет collector_task, где
+    finished_at < now - RETENTION дней (незавершённые НЕ трогает).
+    CASCADE снесёт collector_file и collector_command. После этого
+    физически удаляются папки /disk/uploads/collector/<task_id>/.
+
+    Вызывается раз в сутки из POSPRO_INTEGRATION_WORKER — job
+    'collector_cleanup' по расписанию. Idempotent — можно бить сколько
+    угодно раз в сутки без побочек.
+    """
+    if not _check_integration_key():
+        return jsonify({'error': 'forbidden'}), 403
+
+    threshold = datetime.utcnow() - timedelta(days=COLLECTOR_RETENTION_DAYS)
+    old_tasks = (
+        CollectorTask.query
+        .filter(CollectorTask.finished_at.isnot(None))
+        .filter(CollectorTask.finished_at < threshold)
+        .all()
+    )
+    if not old_tasks:
+        return jsonify({'deleted': 0, 'retention_days': COLLECTOR_RETENTION_DAYS}), 200
+
+    root = _collector_root()
+    deleted_ids = []
+    for t in old_tasks:
+        task_dir = os.path.join(root, str(t.id))
+        deleted_ids.append(t.id)
+        db.session.delete(t)
+
+    db.session.commit()
+
+    import shutil
+    for tid in deleted_ids:
+        d = os.path.join(root, str(tid))
+        if os.path.isdir(d):
+            shutil.rmtree(d, ignore_errors=True)
+
+    return jsonify({
+        'deleted': len(deleted_ids),
+        'retention_days': COLLECTOR_RETENTION_DAYS,
+        'ids': deleted_ids,
+    }), 200
