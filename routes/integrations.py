@@ -452,6 +452,75 @@ def list_runs(type_):
     return jsonify({'success': True, 'data': [r.to_dict() for r in runs]}), 200
 
 
+@integrations_bp.route('/<type_>/runs/<int:run_id>', methods=['DELETE'])
+@jwt_required()
+def delete_run(type_, run_id):
+    """
+    Удалить одну запись истории выгрузки. Файлы у BIO/Equip не создаются
+    (данные летят прямо в прод-БД через API), поэтому чистим только
+    запись `IntegrationRun`.
+
+    Активные (queued/running) не даём удалить — сначала cancel. По UI
+    у активной записи кнопка удаления не отрисовывается, но защита нужна
+    от прямого дёрганья endpoint'а.
+    """
+    if not _check_admin():
+        return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
+    if not _valid_type(type_):
+        return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
+
+    run = IntegrationRun.query.filter_by(id=run_id, type=type_).first()
+    if not run:
+        return jsonify({'success': False, 'message': 'Запись не найдена'}), 404
+    if run.status in ('queued', 'running'):
+        return jsonify({
+            'success': False,
+            'message': 'Задача активна. Сначала отмените её, потом удалите.',
+        }), 409
+
+    db.session.delete(run)
+    db.session.commit()
+    return jsonify({'success': True, 'message': 'Удалено'}), 200
+
+
+# Порог автоочистки истории интеграций. Держим тот же 14 дней что у
+# collector'а для единообразия. Меняется здесь → воркер сам подхватит
+# на следующем тике cron-job'а (никакого редеплоя не нужно).
+INTEGRATIONS_RETENTION_DAYS = 14
+
+
+@integrations_bp.route('/internal/cleanup', methods=['POST'])
+def internal_cleanup():
+    """
+    Автоочистка старых `IntegrationRun`. Удаляет записи с
+    `finished_at < now - INTEGRATIONS_RETENTION_DAYS` для ВСЕХ типов
+    интеграций (bio + equip и т.д.). Активные (running/queued) не трогает.
+
+    Вызывается раз в сутки из POSPRO_INTEGRATION_WORKER — job
+    'integrations_cleanup', вместе с collector cleanup. Idempotent.
+    """
+    if not _check_integration_key():
+        return jsonify({'error': 'forbidden'}), 403
+
+    threshold = datetime.utcnow() - timedelta(days=INTEGRATIONS_RETENTION_DAYS)
+    old_runs = (
+        IntegrationRun.query
+        .filter(IntegrationRun.finished_at.isnot(None))
+        .filter(IntegrationRun.finished_at < threshold)
+        .all()
+    )
+    ids = [r.id for r in old_runs]
+    for r in old_runs:
+        db.session.delete(r)
+    db.session.commit()
+
+    return jsonify({
+        'deleted': len(ids),
+        'retention_days': INTEGRATIONS_RETENTION_DAYS,
+        'ids': ids,
+    }), 200
+
+
 # ============ INTERNAL endpoints (для локального воркера) ============
 
 @integrations_bp.route('/internal/<type_>/settings', methods=['GET'])
