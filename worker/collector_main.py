@@ -21,7 +21,6 @@ import queue
 import signal
 import socket
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime
@@ -183,17 +182,20 @@ client = Client()
 # ── Chrome cleanup ──────────────────────────────────────────────────
 
 # Наши Chrome-инстансы, которые запускает gis2_collector, стартуют с флагом
-# --user-data-dir=<TEMP path> (tempfile.mkdtemp()). Штатное закрытие в
-# engine дёргает subprocess.terminate() на root chrome.exe, но дочерние
-# renderer/gpu/utility процессы Windows не убивает вместе с ним — они
-# остаются orphaned и висят после каждой пары. К 10 городам скапливается
-# ~30 висящих процессов Chrome, каждый по 100-200 МБ. При 4 ГБ ОЗУ ПК
-# начинает свопить.
+# --user-data-dir=<TEMP path>, где TEMP path создан через tempfile.mkdtemp()
+# → всегда имеет вид `<TEMP>\tmpXXXXXXXX`. Штатное закрытие в engine
+# дёргает subprocess.terminate() на root chrome.exe, но:
+#   1) Windows не каскадит kill на дочерние renderer/gpu/utility процессы
+#      — они остаются orphaned после каждой пары.
+#   2) На практике сам root chrome тоже не всегда закрывается (Chrome
+#      делает double-fork при launch: реальный chrome.exe уже не связан
+#      с Popen-хендлом). Юзер видит окна Chrome вживую после task'а.
+# Значит убираем всех chrome-ов с временным профилем в TEMP\tmp.
 #
-# Отличаем «свои» Chrome от юзерских: только те, где в cmdline есть
-# --user-data-dir=<TEMP>, никогда не трогаем chrome под %USERPROFILE%.
-
-_TEMP_ROOT = tempfile.gettempdir().replace('\\', '\\\\').lower()
+# Отличаем «свои» от юзерских — по маркеру `\Temp\tmp` в args. Юзерский
+# Chrome держит профиль в %USERPROFILE%\...\Google\Chrome\User Data\.
+# Работает и когда путь пишется в 8.3-short-name (`C:\Users\8ADB~1\...`)
+# из-за кириллицы в имени юзера — совпадает по подстроке `\temp\tmp`.
 
 def kill_orphan_chrome() -> int:
     """Убивает Chrome-процессы, запущенные gis2_collector'ом. Возвращает
@@ -204,14 +206,18 @@ def kill_orphan_chrome() -> int:
             name = (p.info.get('name') or '').lower()
             if 'chrome' not in name:
                 continue
-            cmdline = ' '.join(p.info.get('cmdline') or []).lower()
-            # Наш маркер — --user-data-dir с путём внутри TEMP.
-            if '--user-data-dir=' not in cmdline:
-                continue
-            if _TEMP_ROOT not in cmdline:
-                continue
-            p.kill()
-            killed += 1
+            args = p.info.get('cmdline') or []
+            # Ищем любой arg содержащий --user-data-dir=..\Temp\tmp... —
+            # маркер tempfile.mkdtemp(). Точный путь может быть в 8.3
+            # short-form (Windows делает так когда в parent-dir кириллица),
+            # поэтому не сравниваем с tempfile.gettempdir() напрямую.
+            is_ours = any(
+                '--user-data-dir' in a.lower() and '\\temp\\tmp' in a.lower().replace('/', '\\')
+                for a in args
+            )
+            if is_ours:
+                p.kill()
+                killed += 1
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
     return killed
