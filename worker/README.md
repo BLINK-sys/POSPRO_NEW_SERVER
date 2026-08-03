@@ -1,42 +1,30 @@
-# Локальные воркеры
+# Локальный воркер интеграций (BIO/Equip)
 
-На резервном ПК живут **два независимых воркера** — у каждого своя роль и своя изоляция.
-
-## `main.py` — воркер интеграций (BIO/Equip)
-Windows Service `PosProIntegrationWorker` (nssm, под LocalSystem). APScheduler по расписанию, поллинг команд, subprocess-запуск скриптов миграции (`bio_api.py`, `migrate_from_products_db.py`, аналогично Equip), локальный HTTP-сервер на 9876 для прогресс-репортов.
-
-## `collector_main.py` — воркер сервиса сбора 2GIS
-Task Scheduler «At logon» под юзером **admin** (НЕ Windows Service — `gis2_collector.collect()` использует `headless=False` Chrome, для которого нужна живая desktop-сессия). Тянет задачи с прода порционно (`/api/admin/collector/internal/next-task`), гоняет `collect()` в одном consumer-треде (второй Chrome не поднимается на этом железе), после каждой пары multipart-заливает .xlsx на прод в `/disk/uploads/collector/`.
+Живёт на резервном ПК (`192.168.1.99`, `R:\integration\worker\`). Windows Service `PosProIntegrationWorker` под LocalSystem через nssm — headless subprocess-запуск скриптов миграции (`bio_api.py`, `migrate_from_products_db.py`, аналогично Equip). APScheduler по расписанию, поллинг команд, локальный HTTP-сервер на 9876 для прогресс-репортов.
 
 ## Файлы
-- `main.py` — воркер BIO/Equip
-- `collector_main.py` — воркер 2GIS-сбора
+- `main.py` — сам воркер
 - `.env.example` — шаблон конфига (реальный `.env` только на локалке, не в git)
 
 ## Как обновить код на локалке
-
-**BIO/Equip воркер:**
 ```
 scp worker/main.py reserve:/R:/integration/worker/main.py
 ssh reserve "nssm restart PosProIntegrationWorker"
 ```
 
-**2GIS collector воркер:**
-```
-scp worker/collector_main.py reserve:/R:/integration/collector/worker/collector_main.py
-# Restart делает Task Scheduler или юзер вручную через админку планировщика
-# (или скрипт stop/start под юзером admin)
-```
+## Скрипты BIO/Equip
+Живут в отдельных git-репо, клонированы на локалку через SSH deploy keys:
+- BIO — https://github.com/BLINK-sys/POSPRO_BIO_WORKER (`R:\integration\BioApiNewShop\`)
+- Equip — https://github.com/BLINK-sys/POSPRO_EQUIP_WORKER (`R:\integration\EquipApiNewShop\`)
 
-## Обновление скриптов BIO/Equip
-Через git на локалке:
+Обновление:
 ```
 ssh reserve "cd /D R:\integration\BioApiNewShop & git pull"
 ssh reserve "cd /D R:\integration\EquipApiNewShop & git pull"
 ```
 
-## Repos
-- BIO — https://github.com/BLINK-sys/POSPRO_BIO_WORKER
-- Equip — https://github.com/BLINK-sys/POSPRO_EQUIP_WORKER
+## Соседний воркер: 2GIS collector
 
-Оба клонированы на локалку через SSH deploy keys (read-only) в `R:\integration\`.
+Отдельный процесс, отдельный git-репо, отдельный Task Scheduler task. Живёт в `R:\integration\collector\worker\collector_main.py`, обновляется через `git pull` в `R:\integration\collector\` (репо POSPRO_2GIS_COLLECTOR). См. соответствующий проект в обсидиан-волте магазина.
+
+Раньше `collector_main.py` жил в этой же папке `pospro_new_server/worker/`, но это триггерило редеплой Render на каждую правку воркера — вынесен в свой репо 2026-08-03.
