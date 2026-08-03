@@ -21,12 +21,14 @@ import queue
 import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import psutil
 import requests
 from dotenv import load_dotenv
 
@@ -178,6 +180,43 @@ class Client:
 client = Client()
 
 
+# ── Chrome cleanup ──────────────────────────────────────────────────
+
+# Наши Chrome-инстансы, которые запускает gis2_collector, стартуют с флагом
+# --user-data-dir=<TEMP path> (tempfile.mkdtemp()). Штатное закрытие в
+# engine дёргает subprocess.terminate() на root chrome.exe, но дочерние
+# renderer/gpu/utility процессы Windows не убивает вместе с ним — они
+# остаются orphaned и висят после каждой пары. К 10 городам скапливается
+# ~30 висящих процессов Chrome, каждый по 100-200 МБ. При 4 ГБ ОЗУ ПК
+# начинает свопить.
+#
+# Отличаем «свои» Chrome от юзерских: только те, где в cmdline есть
+# --user-data-dir=<TEMP>, никогда не трогаем chrome под %USERPROFILE%.
+
+_TEMP_ROOT = tempfile.gettempdir().replace('\\', '\\\\').lower()
+
+def kill_orphan_chrome() -> int:
+    """Убивает Chrome-процессы, запущенные gis2_collector'ом. Возвращает
+    сколько убил. Вызывается между парами и в конце task'а."""
+    killed = 0
+    for p in psutil.process_iter(['name', 'cmdline']):
+        try:
+            name = (p.info.get('name') or '').lower()
+            if 'chrome' not in name:
+                continue
+            cmdline = ' '.join(p.info.get('cmdline') or []).lower()
+            # Наш маркер — --user-data-dir с путём внутри TEMP.
+            if '--user-data-dir=' not in cmdline:
+                continue
+            if _TEMP_ROOT not in cmdline:
+                continue
+            p.kill()
+            killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+    return killed
+
+
 # ── Task Runner ─────────────────────────────────────────────────────
 
 
@@ -268,6 +307,14 @@ class TaskRunner:
         if kind == 'record' and event.records and event.records % 50 == 0:
             client.log_line(self.task_id, f'  собрано {event.records} записей')
 
+        # После каждой пары — прибиваем orphaned Chrome, иначе к концу
+        # 10-городной задачи в системе висит ~30 живых chrome.exe.
+        if kind == 'pair_finished':
+            n = kill_orphan_chrome()
+            if n:
+                log.info('[task %d] pair_finished: убито %d осиротевших Chrome',
+                         self.task_id, n)
+
     def _should_stop(self) -> bool:
         return self.stop_flag.is_set()
 
@@ -332,6 +379,12 @@ class TaskRunner:
             return 'failed'
         finally:
             self.stop_flag.set()  # финиш стоп-поллера
+            # Финальный chrome-cleanup: если crash/cancel произошёл посреди
+            # пары, штатный __exit__ engine мог не сработать → chrome остался.
+            leftovers = kill_orphan_chrome()
+            if leftovers:
+                log.info('[task %d] финиш: убито %d Chrome-остатков',
+                         self.task_id, leftovers)
 
         # Заливаем результаты — по одному файлу на пару.
         for cf in result.files:
