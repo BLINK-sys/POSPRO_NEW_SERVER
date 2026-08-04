@@ -14,6 +14,7 @@ from models.homepage_block_title import HomepageBlockItem
 from models.product import Product  # если есть
 from models.homepage_block import HomepageBlock
 from models.small_banner_card import SmallBanner
+from models.header_settings import HeaderMenuItem, HeaderMenuItemProduct
 
 public_homepage_bp = Blueprint('public_homepage', __name__)
 
@@ -371,10 +372,170 @@ def get_catalog_categories():
     return jsonify(root_categories)
 
 
+def _render_custom_section_response(custom: HeaderMenuItem, show_hidden: bool):
+    """
+    Отдаёт кастомный раздел шапки в формате обычной категории. Товары —
+    только те, что курировал админ (через HeaderMenuItemProduct), с
+    учётом их order и is_visible.
+    """
+    page = request.args.get('page', default=1, type=int) or 1
+    per_page = request.args.get('per_page', default=20, type=int) or 20
+    per_page = max(1, min(per_page, 100))
+    search_query = request.args.get('search', default='', type=str).strip()
+    brand_filter = request.args.get('brand', default=None, type=str)
+    sort_by = request.args.get('sort', default='name', type=str)
+
+    query = (
+        db.session.query(Product, HeaderMenuItemProduct.order)
+        .options(
+            joinedload(Product.brand_info),
+            joinedload(Product.status_info),
+            joinedload(Product.category),
+        )
+        .join(HeaderMenuItemProduct, HeaderMenuItemProduct.product_id == Product.id)
+        .filter(HeaderMenuItemProduct.menu_item_id == custom.id)
+    )
+    if not show_hidden:
+        query = query.filter(Product.is_visible == True)
+
+    if search_query:
+        query = query.filter(Product.name.ilike(f'%{search_query}%'))
+    if brand_filter and brand_filter != 'all':
+        brand_obj = Brand.query.filter_by(name=brand_filter).first()
+        if brand_obj:
+            query = query.filter(Product.brand_id == brand_obj.id)
+
+    if sort_by == 'price_asc':
+        query = query.order_by(Product.price.asc())
+    elif sort_by == 'price_desc':
+        query = query.order_by(Product.price.desc())
+    elif sort_by == 'name':
+        query = query.order_by(Product.name.asc())
+    else:
+        # По умолчанию — тот порядок, что задал админ в разделе
+        query = query.order_by(HeaderMenuItemProduct.order, HeaderMenuItemProduct.id)
+
+    total_count = query.count()
+    total_pages = math.ceil(total_count / per_page) if total_count else 0
+    if total_pages and page > total_pages:
+        page = total_pages
+    if page < 1:
+        page = 1
+
+    rows = query.offset((page - 1) * per_page).limit(per_page).all()
+    products = [r[0] for r in rows]
+
+    product_ids = [p.id for p in products]
+    media_items = []
+    if product_ids:
+        media_items = (
+            ProductMedia.query
+            .filter(
+                ProductMedia.product_id.in_(product_ids),
+                ProductMedia.media_type == 'image',
+            )
+            .order_by(ProductMedia.product_id, ProductMedia.order)
+            .all()
+        )
+    product_images: dict = {}
+    for media in media_items:
+        if media.product_id not in product_images:
+            product_images[media.product_id] = media
+
+    # Все бренды раздела (не только со страницы) — для фильтра слева
+    all_brands_query = (
+        db.session.query(Product.brand_id)
+        .join(HeaderMenuItemProduct, HeaderMenuItemProduct.product_id == Product.id)
+        .filter(HeaderMenuItemProduct.menu_item_id == custom.id)
+    )
+    if not show_hidden:
+        all_brands_query = all_brands_query.filter(Product.is_visible == True)
+    brand_ids = [row[0] for row in all_brands_query.distinct().all() if row[0]]
+    all_brands: dict = {}
+    if brand_ids:
+        for b in Brand.query.filter(Brand.id.in_(brand_ids)).all():
+            all_brands[b.id] = {
+                'id': b.id,
+                'name': b.name,
+                'country': b.country,
+                'description': b.description,
+                'image_url': b.image_url,
+            }
+
+    products_data = []
+    for p in products:
+        first_image = product_images.get(p.id)
+        status_data = None
+        if p.status_info:
+            status_data = {
+                'id': p.status_info.id,
+                'name': p.status_info.name,
+                'background_color': p.status_info.background_color,
+                'text_color': p.status_info.text_color,
+            }
+        brand_data = None
+        if p.brand_id and p.brand_info:
+            brand_data = {
+                'id': p.brand_info.id,
+                'name': p.brand_info.name,
+                'country': p.brand_info.country,
+                'description': p.brand_info.description,
+                'image_url': p.brand_info.image_url,
+            }
+        products_data.append({
+            'id': p.id,
+            'name': p.name,
+            'slug': p.slug,
+            'price': p.price,
+            'wholesale_price': p.wholesale_price,
+            'status': status_data,
+            'brand_id': p.brand_id,
+            'brand_info': brand_data,
+            'brand': brand_data,
+            'quantity': p.quantity,
+            'supplier_id': p.supplier_id,
+            'supplier_name': p.supplier.name if p.supplier else None,
+            'image_url': first_image.url if first_image else None,
+        })
+
+    return jsonify({
+        # Отдаём в поле 'category' — фронт этот роут читает как категорию
+        'category': {
+            'id': None,
+            'name': custom.custom_name or '',
+            'slug': custom.custom_slug,
+            'image_url': None,
+            'description': None,
+            'parent_id': None,
+            'is_custom_section': True,  # маркер для фронта — при желании показать чип «раздел»
+        },
+        'children': [],
+        'products': products_data,
+        'brands': list(all_brands.values()),
+        'pagination': {
+            'page': page,
+            'per_page': per_page,
+            'total_count': total_count,
+            'total_pages': total_pages,
+        },
+    })
+
+
 @public_homepage_bp.route('/public/category/<string:slug>', methods=['GET'])
 def get_category_with_children_and_products(slug):
     show_hidden = _is_system_user()
-    category = Category.query.filter_by(slug=slug).first_or_404()
+    category = Category.query.filter_by(slug=slug).first()
+    # Fallback: если категории с таким slug нет — ищем custom-раздел
+    # шапки (admin → Шапка → Разделы категорий → «Свой раздел»). Для
+    # фронта возвращаем ту же структуру, что и для обычной категории.
+    if category is None:
+        custom = HeaderMenuItem.query.filter_by(
+            kind='custom', custom_slug=slug, is_active=True
+        ).first()
+        if custom is None:
+            from flask import abort
+            abort(404)
+        return _render_custom_section_response(custom, show_hidden)
 
     # 🔹 Вложенные подкатегории
     child_categories = Category.query.filter_by(parent_id=category.id).all()

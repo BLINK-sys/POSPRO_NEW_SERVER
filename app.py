@@ -52,6 +52,7 @@ from routes.ai_logs import ai_logs_bp
 from routes.product_auto_fill import product_auto_fill_bp
 from routes.integrations import integrations_bp
 from routes.collector import collector_bp
+from routes.header_settings import header_settings_bp
 from models.systemuser import SystemUser
 # Импорт нужен чтобы db.create_all() увидел модель шаблонов на свежей БД.
 from models.kp_template import KpTemplate  # noqa: F401
@@ -109,6 +110,7 @@ def create_app():
     app.register_blueprint(kp_clients_bp, url_prefix='/api')   # /api/kp-clients
     app.register_blueprint(kp_templates_bp, url_prefix='/api') # /api/kp-templates
     app.register_blueprint(search_page_bp, url_prefix='/api')  # /api/public/search-page, /api/admin/search-page/*
+    app.register_blueprint(header_settings_bp, url_prefix='/api')  # /api/public/header, /api/admin/header/*
     app.register_blueprint(kp_logos_bp, url_prefix='/api')     # /api/kp-logos
 
     # 🔹 Доступ к AI Консультанту (страница /ai)
