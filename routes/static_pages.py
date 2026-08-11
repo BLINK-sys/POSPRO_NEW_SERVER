@@ -16,13 +16,25 @@
 мало. Если наберётся 5+ — добавим GET /api/admin/static-pages без slug.
 """
 
-from flask import Blueprint, request, jsonify
+import os
+import re
+import unicodedata
+from datetime import datetime
+
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt
+from werkzeug.utils import secure_filename
 
 from extensions import db
 from models.static_page import StaticPage
 
 static_pages_bp = Blueprint('static_pages', __name__)
+
+
+def _safe_name(fn: str) -> str:
+    fn = unicodedata.normalize('NFKD', fn)
+    fn = fn.replace(' ', '_')
+    return re.sub(r'[^\wа-яА-ЯёЁ\.\-]', '', fn) or 'image'
 
 
 def _check_admin_role():
@@ -79,3 +91,41 @@ def admin_update_static_page(slug):
         page.is_active = bool(data['is_active'])
     db.session.commit()
     return jsonify(page.to_dict())
+
+
+# ─── Загрузка картинок для контента страниц ─────────────────────────────
+# Generic endpoint (не привязан к конкретной сущности как /upload/… для
+# banner/category/product). TipTap-редактор в админке шлёт файл сюда,
+# получает публичный URL и вставляет <img src="…"/> в HTML контента.
+
+_ALLOWED_IMG_EXT = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'}
+
+
+@static_pages_bp.route('/admin/static-page/upload-image', methods=['POST'])
+@jwt_required()
+def admin_upload_image():
+    err = _check_admin_role()
+    if err:
+        return err
+    if 'file' not in request.files:
+        return jsonify({'error': 'Файл не передан'}), 400
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'error': 'Пустое имя файла'}), 400
+
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in _ALLOWED_IMG_EXT:
+        return jsonify({'error': f'Расширение .{ext} не разрешено'}), 400
+
+    slug = (request.form.get('slug') or 'misc').strip()[:64] or 'misc'
+    slug = re.sub(r'[^a-z0-9\-]', '', slug.lower()) or 'misc'
+
+    ts = datetime.now().strftime('%Y%m%d-%H%M%S')
+    base = os.path.splitext(_safe_name(file.filename))[0][:60]
+    final = f"{ts}_{base}.{ext}"
+
+    folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'pages', slug)
+    os.makedirs(folder, exist_ok=True)
+    file.save(os.path.join(folder, final))
+
+    return jsonify({'url': f'/uploads/pages/{slug}/{final}'})
