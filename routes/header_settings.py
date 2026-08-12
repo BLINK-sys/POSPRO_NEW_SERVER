@@ -25,6 +25,8 @@
 `public_homepage.get_category_with_children_and_products`.
 """
 
+import re
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt
 from sqlalchemy import or_
@@ -56,6 +58,31 @@ def _get_or_create_settings() -> HeaderSettings:
         db.session.add(s)
         db.session.commit()
     return s
+
+
+_HEX_RE = re.compile(r'^#?[0-9A-Fa-f]{3,8}$')
+
+
+def _normalize_color(v):
+    """Валидация hex-цвета. Пусто/невалид → None; иначе строка `#RRGGBB`
+    (без изменения формата, только с ведущим `#`)."""
+    if not v: return None
+    s = str(v).strip()
+    if not s: return None
+    if not _HEX_RE.match(s): return None
+    return s if s.startswith('#') else f'#{s}'
+
+
+def _apply_style_fields(item: HeaderMenuItem, data: dict) -> None:
+    """Обновляет стилевые поля кнопки из payload, если они есть."""
+    if 'border_enabled' in data:
+        item.border_enabled = bool(data['border_enabled'])
+    if 'border_color' in data:
+        item.border_color = _normalize_color(data['border_color'])
+    if 'bg_color' in data:
+        item.bg_color = _normalize_color(data['bg_color'])
+    if 'text_color' in data:
+        item.text_color = _normalize_color(data['text_color'])
 
 
 def _ensure_unique_custom_slug(base_name: str, item_id: int | None = None) -> str:
@@ -90,6 +117,11 @@ def _serialize_menu_item(item: HeaderMenuItem, include_products: bool = False) -
         'kind': item.kind,
         'is_active': bool(item.is_active),
         'order': item.order,
+        # Стилизация кнопки в шапке
+        'border_enabled': bool(item.border_enabled),
+        'border_color': item.border_color,
+        'bg_color': item.bg_color,
+        'text_color': item.text_color,
     }
     if item.kind == 'category':
         cat = Category.query.get(item.category_id) if item.category_id else None
@@ -212,6 +244,8 @@ def admin_create_menu_item():
         item.custom_name = name[:200]
         item.custom_slug = _ensure_unique_custom_slug(name)
 
+    _apply_style_fields(item, data)
+
     db.session.add(item)
     db.session.flush()  # получаем item.id
 
@@ -253,6 +287,8 @@ def admin_update_menu_item(item_id):
             if not cat_id or not Category.query.get(cat_id):
                 return jsonify({'error': 'category_id не найден'}), 400
             item.category_id = int(cat_id)
+
+    _apply_style_fields(item, data)
 
     db.session.commit()
     return jsonify(_serialize_menu_item(item, include_products=True))

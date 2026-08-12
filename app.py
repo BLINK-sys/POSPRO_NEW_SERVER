@@ -257,6 +257,25 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция kp_history calculator_data: {e}")
 
+        # Стилизация пунктов шапки — 4 опциональных поля
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE header_menu_items ADD COLUMN IF NOT EXISTS border_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE header_menu_items ADD COLUMN IF NOT EXISTS border_color VARCHAR(20)"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE header_menu_items ADD COLUMN IF NOT EXISTS bg_color VARCHAR(20)"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE header_menu_items ADD COLUMN IF NOT EXISTS text_color VARCHAR(20)"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция header_menu_items styling: {e}")
+
         try:
             db.session.execute(db.text(
                 "ALTER TABLE warehouse ADD COLUMN IF NOT EXISTS last_recalc JSON"

@@ -66,6 +66,14 @@ class HeaderMenuItem(db.Model):
     # это разные таблицы).
     custom_slug = db.Column(db.String(200), nullable=True, unique=True)
 
+    # ── Индивидуальный стиль кнопки в шапке ─────────────────────────
+    # Все поля опциональны. Если ни одно не задано — кнопка рендерится
+    # дефолтным стилем ссылки (см. header.tsx нижняя полоса категорий).
+    border_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    border_color = db.Column(db.String(20), nullable=True)   # #RRGGBB
+    bg_color = db.Column(db.String(20), nullable=True)
+    text_color = db.Column(db.String(20), nullable=True)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
