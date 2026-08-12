@@ -276,6 +276,19 @@ def create_app():
             db.session.rollback()
             print(f"⚠️ Миграция header_menu_items styling: {e}")
 
+        # Вложенные пункты шапки (self-referential tree)
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE header_menu_items ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES header_menu_items(id) ON DELETE CASCADE"
+            ))
+            db.session.execute(db.text(
+                "ALTER TABLE header_menu_items ADD COLUMN IF NOT EXISTS has_children_mode BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"⚠️ Миграция header_menu_items parent_id: {e}")
+
         try:
             db.session.execute(db.text(
                 "ALTER TABLE warehouse ADD COLUMN IF NOT EXISTS last_recalc JSON"

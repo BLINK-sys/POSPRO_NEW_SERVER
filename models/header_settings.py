@@ -52,6 +52,20 @@ class HeaderMenuItem(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     order = db.Column(db.Integer, nullable=False, default=0)
 
+    # Self-referential parent для вложенных пунктов. Только для kind='custom'
+    # (у category-ref нет своих children — они бы дублировали подкатегории
+    # реальной Category). null = пункт верхнего уровня (нижняя полоса шапки).
+    # ON DELETE CASCADE — при удалении родителя удаляются все потомки.
+    parent_id = db.Column(
+        db.Integer,
+        db.ForeignKey('header_menu_items.id', ondelete='CASCADE'),
+        nullable=True,
+    )
+    # Флаг: у этого custom-пункта режим «вложенные категории» вместо
+    # «своих товаров». Если True — в шапке кнопка открывает dropdown с
+    # children; если False — переход на /category/<slug> с товарами.
+    has_children_mode = db.Column(db.Boolean, nullable=False, default=False)
+
     # Для kind='category'
     category_id = db.Column(
         db.Integer,
