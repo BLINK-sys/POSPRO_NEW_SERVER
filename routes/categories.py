@@ -38,7 +38,17 @@ def ensure_unique_category_slug(desired, exclude_id=None):
 
 @categories_bp.route('/', methods=['GET'])
 def get_categories():
+    from sqlalchemy import func as _f
+    from models.product import Product
+
     categories = Category.query.order_by(Category.parent_id, Category.order).all()
+
+    # Батчево — сколько товаров в каждой категории (для админ-UI сортировки).
+    counts = dict(
+        db.session.query(Product.category_id, _f.count(Product.id))
+        .group_by(Product.category_id).all()
+    )
+
     return jsonify([{
         'id': c.id,
         'name': c.name,
@@ -47,7 +57,8 @@ def get_categories():
         'image_url': c.image_url,
         'parent_id': c.parent_id,
         'order': c.order,
-        'show_in_menu': c.show_in_menu
+        'show_in_menu': c.show_in_menu,
+        'products_count': counts.get(c.id, 0),
     } for c in categories])
 
 
@@ -249,6 +260,107 @@ def delete_category(category_id):
         error_details = traceback.format_exc()
         current_app.logger.error(f"Error deleting category {category_id}: {error_details}")
         return jsonify({'error': f'Ошибка при удалении категории: {str(e)}', 'details': error_details}), 500
+
+
+@categories_bp.route('/apply-sort', methods=['POST'])
+def apply_sort():
+    """
+    Пересчитывает поле `order` у категорий согласно выбранному режиму
+    сортировки. Body:
+      { "mode": "alpha_asc" | "alpha_desc"
+              | "products_desc" | "products_asc"
+              | "children_desc",
+        "include_children": bool }
+
+    include_children=false: сортируем только top-level (parent_id IS NULL).
+    include_children=true:  сортируем детей КАЖДОГО родителя тем же
+                            критерием, рекурсивно.
+
+    После пересчёта — единая транзакция; возвращает {updated: N}.
+    """
+    from sqlalchemy import func as _f
+    from models.product import Product
+
+    data = request.get_json() or {}
+    mode = data.get('mode')
+    include_children = bool(data.get('include_children'))
+
+    valid_modes = {'alpha_asc', 'alpha_desc', 'products_desc', 'products_asc', 'children_desc'}
+    if mode not in valid_modes:
+        return jsonify({'error': f'Unknown mode: {mode}'}), 400
+
+    all_cats = Category.query.all()
+
+    # Батчево: сколько товаров на каждую категорию (важно для products-*)
+    if mode in ('products_desc', 'products_asc'):
+        counts = dict(
+            db.session.query(Product.category_id, _f.count(Product.id))
+            .group_by(Product.category_id).all()
+        )
+    else:
+        counts = {}
+
+    # Батчево: сколько детей у каждой (важно для children_desc)
+    if mode == 'children_desc':
+        child_counts = {}
+        for c in all_cats:
+            if c.parent_id is not None:
+                child_counts[c.parent_id] = child_counts.get(c.parent_id, 0) + 1
+    else:
+        child_counts = {}
+
+    def sort_key(c):
+        if mode == 'alpha_asc':
+            return (c.name or '').lower()
+        if mode == 'alpha_desc':
+            # SQLAlchemy отдаёт сортировку по возрастанию — для убывания
+            # переворачиваем через negate wrapper. Строки → инверт через
+            # префикс, но проще держать флаг и сортировать вручную:
+            return (c.name or '').lower()
+        if mode == 'products_desc':
+            return -(counts.get(c.id, 0))
+        if mode == 'products_asc':
+            return counts.get(c.id, 0)
+        if mode == 'children_desc':
+            return -(child_counts.get(c.id, 0))
+        return 0
+
+    # Группируем по parent_id (None = top-level)
+    by_parent = {}
+    for c in all_cats:
+        by_parent.setdefault(c.parent_id, []).append(c)
+
+    updated = 0
+
+    def sort_group(parent_id):
+        nonlocal updated
+        group = by_parent.get(parent_id, [])
+        group.sort(key=sort_key)
+        if mode == 'alpha_desc':
+            group.reverse()
+        for idx, c in enumerate(group):
+            if c.order != idx:
+                c.order = idx
+                updated += 1
+
+    # Всегда сортируем top-level
+    sort_group(None)
+
+    if include_children:
+        # Обходим всё дерево — сортируем каждую группу детей
+        seen_parents = {None}
+        stack = [c.id for c in by_parent.get(None, [])]
+        while stack:
+            pid = stack.pop()
+            if pid in seen_parents:
+                continue
+            seen_parents.add(pid)
+            sort_group(pid)
+            for c in by_parent.get(pid, []):
+                stack.append(c.id)
+
+    db.session.commit()
+    return jsonify({'success': True, 'updated': updated, 'mode': mode, 'include_children': include_children})
 
 
 @categories_bp.route('/reorder', methods=['POST'])
