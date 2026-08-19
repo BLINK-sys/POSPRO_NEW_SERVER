@@ -263,24 +263,24 @@ def _merge_pair(source_id, target_id):
 
     # homepage_categories.category_id (без FK-constraint)
     db.session.execute(
-        text('UPDATE homepage_category SET category_id = :t WHERE category_id = :s'),
+        text('UPDATE homepage_categories SET category_id = :t WHERE category_id = :s'),
         {'t': target_id, 's': source_id},
     )
 
     # search_page_categories: UNIQUE constraint на category_id — если
     # target уже там, source-запись удаляем (иначе перепривязываем).
     tgt_has_sp = db.session.execute(
-        text('SELECT 1 FROM search_page_category WHERE category_id = :t LIMIT 1'),
+        text('SELECT 1 FROM search_page_categories WHERE category_id = :t LIMIT 1'),
         {'t': target_id},
     ).first()
     if tgt_has_sp:
         db.session.execute(
-            text('DELETE FROM search_page_category WHERE category_id = :s'),
+            text('DELETE FROM search_page_categories WHERE category_id = :s'),
             {'s': source_id},
         )
     else:
         db.session.execute(
-            text('UPDATE search_page_category SET category_id = :t WHERE category_id = :s'),
+            text('UPDATE search_page_categories SET category_id = :t WHERE category_id = :s'),
             {'t': target_id, 's': source_id},
         )
 
