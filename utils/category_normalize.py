@@ -59,14 +59,26 @@ ABBR_MAP = {
     'ux':   'UX',
 }
 
-# Токенизатор: сохраняет разделители (пробел / дефис / слэш) — чтобы
-# «POS-моноблоки» остались «POS-моноблоки», а не превратились в
+# Токенизатор: сохраняет разделители (пробел / дефис / слэш / точка) —
+# чтобы «POS-моноблоки» остались «POS-моноблоки», а не превратились в
 # «Pos моноблоки». Слова и разделители чередуются в результате split.
-_TOKEN_RE = re.compile(r'([^\s\-/]+|[\s\-/]+)')
+# Точка тоже в разделителях: «Электрика.Нагревательные» — сегментное имя,
+# каждый сегмент разбирается отдельно; после точки первое слово трактуется
+# как «первое» и получает заглавную.
+_TOKEN_RE = re.compile(r'([^\s\-/.]+|[\s\-/.]+)')
 
 
 def _is_separator(w: str) -> bool:
-    return bool(w) and all(c in ' -/' for c in w)
+    return bool(w) and all(c in ' -/.' for c in w)
+
+
+def _resets_capitalization(sep: str) -> bool:
+    """
+    True если разделитель начинает новый «сегмент» — после точки
+    следующее слово капитализируется как первое. Пробелы и дефисы
+    оставляют регистр как обычно (не первое слово → строчными).
+    """
+    return '.' in sep
 
 
 def _norm_word(w: str, capitalize: bool) -> str:
@@ -109,11 +121,13 @@ def normalize_name(raw: str) -> str:
         return ''
     parts = _TOKEN_RE.findall(stripped)
     out = []
-    first_word_seen = False
+    need_capitalize = True  # первое слово капитализируется всегда
     for p in parts:
         if _is_separator(p):
             out.append(p)
+            if _resets_capitalization(p):
+                need_capitalize = True
             continue
-        out.append(_norm_word(p, capitalize=not first_word_seen))
-        first_word_seen = True
+        out.append(_norm_word(p, capitalize=need_capitalize))
+        need_capitalize = False
     return ''.join(out)
