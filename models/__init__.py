@@ -28,3 +28,4 @@ from .kp_client import KpClient
 from .search_page import SearchPageSettings, SearchPageCategory, SearchPageBrand
 from .integration import IntegrationSettings, IntegrationRun, IntegrationCommand
 from .collector import CollectorTask, CollectorFile, CollectorCommand, CollectorWorker
+from .category_alias import CategoryAlias

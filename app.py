@@ -6,6 +6,7 @@ from routes.auth import auth_bp
 from routes.banners import banners_bp
 from routes.benefits import benefits_bp
 from routes.categories import categories_bp
+from routes.category_aliases import category_aliases_bp
 from routes.clients_routes import clients_bp
 from routes.footer_settings import footer_settings_bp
 from routes.homepage_block_titles import homepage_block_titles_bp
@@ -130,6 +131,8 @@ def create_app():
     # Публичные ручки: /api/admin/integrations/*  (JWT admin/system)
     # Internal ручки:  /api/admin/integrations/internal/*  (X-Integration-Key)
     app.register_blueprint(integrations_bp, url_prefix='/api/admin/integrations')
+    # Blueprint содержит роуты и /category-aliases/* и /categories/merge, find-similar
+    app.register_blueprint(category_aliases_bp, url_prefix='/api/admin')
     app.register_blueprint(collector_bp, url_prefix='/api/admin/collector')
 
     # 🔹 Видимость каталогов (публичный + админский под /api)

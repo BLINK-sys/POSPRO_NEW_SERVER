@@ -1003,6 +1003,24 @@ def create_product():
             logger.error(f"Ошибка при генерации slug: {str(e)}")
             return jsonify({'error': 'Ошибка при генерации URL товара'}), 500
 
+        # Резолвинг категории: либо готовый category_id (админский путь),
+        # либо category_path=["Родитель","Дочка","Внучка"] + category_source
+        # ('bio'/'equip'/None). Второй путь предпочтителен для воркеров —
+        # избавляет их от танца с get/create категории (см. плановую
+        # доку сравнительно в services/category_resolver.py).
+        category_id = data.get('category_id')
+        if not category_id:
+            category_path = data.get('category_path')
+            if isinstance(category_path, list) and category_path:
+                try:
+                    from services.category_resolver import resolve_category_path
+                    category_source = data.get('category_source')
+                    category_id = resolve_category_path(category_source, category_path)
+                except Exception as e:
+                    logger.error(f"Ошибка резолва category_path: {e}")
+                    db.session.rollback()
+                    return jsonify({'error': f'Ошибка резолва категории: {e}'}), 400
+
         product = Product(
             name=name,
             article=data.get('article', ''),
@@ -1016,7 +1034,7 @@ def create_product():
             brand_id=brand_id,
             supplier_id=supplier_id,
             description=data.get('description', ''),
-            category_id=data.get('category_id'),
+            category_id=category_id,
             is_draft=False
         )
         
