@@ -270,35 +270,62 @@ def merge_exact_duplicates():
     from collections import defaultdict
     from sqlalchemy import func as _f
 
-    cats = Category.query.all()
-    groups = defaultdict(list)
-    for c in cats:
-        key = (c.parent_id, (c.name or '').strip().lower())
-        groups[key].append(c)
-
-    duplicate_groups = [(k, ids) for k, ids in groups.items() if len(ids) >= 2]
-    if not duplicate_groups:
-        return jsonify({'success': True, 'groups_merged': 0, 'categories_removed': 0, 'products_moved': 0, 'aliases_relinked': 0})
-
-    # Считаем количество товаров пачкой — чтобы не дёргать в цикле.
-    counts_rows = db.session.query(Product.category_id, _f.count(Product.id)).group_by(Product.category_id).all()
-    counts = {cid: cnt for cid, cnt in counts_rows}
+    def find_groups():
+        cats = Category.query.all()
+        groups = defaultdict(list)
+        for c in cats:
+            key = (c.parent_id, (c.name or '').strip().lower())
+            groups[key].append(c)
+        return [(k, g) for k, g in groups.items() if len(g) >= 2]
 
     total_removed = 0
     total_products = 0
     total_aliases = 0
+    total_groups = 0
+    passes = 0
+    MAX_PASSES = 20  # защита от бесконечного цикла (в реальности хватит 2–3)
 
     try:
-        for _key, group in duplicate_groups:
-            # target: max products, tiebreaker min(id)
-            group_sorted = sorted(group, key=lambda c: (-counts.get(c.id, 0), c.id))
-            target = group_sorted[0]
-            sources = group_sorted[1:]
-            for src in sources:
-                result = _merge_categories_impl(src.id, target.id)
-                total_products += result['products_moved']
-                total_aliases += result['aliases_relinked']
-                total_removed += 1
+        while True:
+            duplicate_groups = find_groups()
+            if not duplicate_groups:
+                break
+            passes += 1
+            if passes > MAX_PASSES:
+                # На всякий случай — не должно случиться, но лучше вернуть частичный
+                # результат чем бесконечно крутиться.
+                db.session.commit()
+                return jsonify({
+                    'success': False,
+                    'error': f'Merge не сошёлся за {MAX_PASSES} проходов — возможно цикл в parent_id',
+                    'groups_merged': total_groups,
+                    'categories_removed': total_removed,
+                    'products_moved': total_products,
+                    'aliases_relinked': total_aliases,
+                }), 500
+
+            # Пересчитываем количество товаров на КАЖДОМ проходе — после
+            # merge target вбирает товары source, при следующей итерации
+            # это важно для выбора target'а.
+            counts_rows = db.session.query(Product.category_id, _f.count(Product.id)).group_by(Product.category_id).all()
+            counts = {cid: cnt for cid, cnt in counts_rows}
+
+            for _key, group in duplicate_groups:
+                group_sorted = sorted(group, key=lambda c: (-counts.get(c.id, 0), c.id))
+                target = group_sorted[0]
+                sources = group_sorted[1:]
+                for src in sources:
+                    result = _merge_categories_impl(src.id, target.id)
+                    total_products += result['products_moved']
+                    total_aliases += result['aliases_relinked']
+                    total_removed += 1
+                total_groups += 1
+
+            # Flush между проходами, чтобы следующая итерация видела актуальную
+            # иерархию (дети смердженных родителей теперь могут стать новыми
+            # дубликатами под общим parent'ом).
+            db.session.flush()
+
         db.session.commit()
     except Exception as e:  # noqa: BLE001
         db.session.rollback()
@@ -306,10 +333,11 @@ def merge_exact_duplicates():
 
     return jsonify({
         'success': True,
-        'groups_merged': len(duplicate_groups),
+        'groups_merged': total_groups,
         'categories_removed': total_removed,
         'products_moved': total_products,
         'aliases_relinked': total_aliases,
+        'passes': passes,
     })
 
 
