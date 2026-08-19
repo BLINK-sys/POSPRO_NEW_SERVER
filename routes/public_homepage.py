@@ -496,6 +496,11 @@ def _render_custom_section_response(custom: HeaderMenuItem, show_hidden: bool):
             'supplier_id': p.supplier_id,
             'supplier_name': p.supplier.name if p.supplier else None,
             'image_url': first_image.url if first_image else None,
+            # Категория товара — для compare-context (сравнение только
+            # внутри одной категории). В кастомном разделе товары могут
+            # быть из разных категорий — отдаём оригинальный category_id
+            # каждого товара, чтобы cross-category защита работала.
+            'category_id': p.category_id,
         })
 
     return jsonify({
@@ -682,7 +687,16 @@ def get_category_with_children_and_products(slug):
             'quantity': p.quantity,
             'supplier_id': p.supplier_id,
             'supplier_name': p.supplier.name if p.supplier else None,
-            'image_url': first_image.url if first_image else None
+            'image_url': first_image.url if first_image else None,
+            # Категория товара — для сравнения (compare-context на фронте
+            # проверяет одну ли категорию у выбранных). Без этих полей
+            # cross-category защита давала false-positive.
+            'category_id': category.id,
+            'category': {
+                'id': category.id,
+                'name': category.name,
+                'slug': category.slug,
+            },
         })
 
     # ✅ ОПТИМИЗАЦИЯ: Возвращаем все уникальные бренды категории (не только со страницы)
