@@ -28,7 +28,7 @@ class CustomerActivity(db.Model):
     # Общие поля
     user_id = db.Column(
         db.Integer,
-        db.ForeignKey('user.id', ondelete='SET NULL'),
+        db.ForeignKey('users.id', ondelete='SET NULL'),
         nullable=True,
     )
     ip_address = db.Column(db.String(45))

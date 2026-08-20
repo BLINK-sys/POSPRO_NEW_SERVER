@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS customer_activity_events (
     id             SERIAL PRIMARY KEY,
     event_type     VARCHAR(32) NOT NULL,
-    user_id        INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+    user_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
     ip_address     VARCHAR(45),
     user_agent     TEXT,
     created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
