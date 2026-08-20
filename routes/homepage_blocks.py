@@ -22,6 +22,8 @@ def get_all_blocks():
             'carusel': block.carusel,
             'show_title': block.show_title,
             'title_align': block.title_align,
+            'background_color': block.background_color,
+            'show_products_categories_filter': block.show_products_categories_filter,
             'items': [item.item_id for item in items]
         })
     return jsonify(result)
@@ -38,6 +40,8 @@ def create_block():
     carusel = data.get('carusel', False)
     show_title = data.get('show_title', True)
     title_align = data.get('title_align', 'left')
+    background_color = data.get('background_color') or None  # '' → NULL
+    show_products_categories_filter = data.get('show_products_categories_filter', True)
     item_ids = data.get('items', [])
 
     block = HomepageBlock(
@@ -48,7 +52,9 @@ def create_block():
         order=order,
         carusel=carusel,
         show_title=show_title,
-        title_align=title_align
+        title_align=title_align,
+        background_color=background_color,
+        show_products_categories_filter=show_products_categories_filter,
     )
     db.session.add(block)
     db.session.flush()
@@ -73,6 +79,12 @@ def update_block(block_id):
     block.carusel = data.get('carusel', block.carusel)
     block.show_title = data.get('show_title', block.show_title)
     block.title_align = data.get('title_align', block.title_align)
+    if 'background_color' in data:
+        # Явно позволяем передать '' / None для сброса на дефолт.
+        val = data.get('background_color')
+        block.background_color = val if val else None
+    if 'show_products_categories_filter' in data:
+        block.show_products_categories_filter = bool(data.get('show_products_categories_filter'))
 
     HomepageBlockItem.query.filter_by(block_id=block.id).delete()
     item_ids = data.get('items', [])

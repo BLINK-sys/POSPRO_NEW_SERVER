@@ -283,6 +283,8 @@ def get_homepage_data():
                                                        'small_banner', 'small_banners', 'info_cards'] else False,
             'show_title': block.show_title,
             'title_align': block.title_align,
+            'background_color': block.background_color,
+            'show_products_categories_filter': block.show_products_categories_filter,
             'items': items_data
         })
 

@@ -18,4 +18,11 @@ class HomepageBlock(db.Model):
     show_title = db.Column(db.Boolean, default=True)
     title_align = db.Column(db.String(20), default='left')  # left, right, center
 
+    # Кастомизация внешнего вида блока товаров (тип 'products'):
+    # background_color — hex-цвет фона карточки-обёртки блока; NULL =
+    # дефолт (сейчас bg-gray-100). show_products_categories_filter — тогл
+    # для полосы «Все категории / Денежные ящики / …» над списком товаров.
+    background_color = db.Column(db.String(9), nullable=True)  # #RRGGBB(AA)
+    show_products_categories_filter = db.Column(db.Boolean, default=True, nullable=False)
+
     items = db.relationship('HomepageBlockItem', back_populates='block', cascade="all, delete-orphan")
