@@ -6,17 +6,26 @@ Admin CRUD для «Карточек разделов» (SectionCard).
 чтобы не пересекаться с админскими.
 """
 
+import mimetypes
 import os
 import re
 import unicodedata
 from datetime import datetime
+from urllib.parse import unquote, urlparse
 
+import requests
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
 from models.section_card import SectionCard, SectionCardCategory
 from routes.products import safe_slugify
+
+
+# Разрешённые расширения изображений (используются при загрузке по URL,
+# когда Content-Type может быть неточным — fallback на расширение из URL).
+_IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'}
+_MAX_URL_IMAGE_BYTES = 10 * 1024 * 1024  # 10 МБ
 
 
 section_cards_bp = Blueprint('section_cards', __name__)
@@ -254,6 +263,102 @@ def reorder_section_cards():
 
 
 # ── Upload изображений (карточка / баннер) ──────────────────────────
+
+
+def _ext_from_url_or_ctype(url: str, content_type: str | None) -> str:
+    """Определить расширение файла: сначала по URL, потом по content-type."""
+    parsed = urlparse(url)
+    path = unquote(parsed.path or '')
+    _, ext = os.path.splitext(path)
+    ext = (ext or '').lower()
+    if ext in _IMAGE_EXTS:
+        return ext
+    if content_type:
+        guessed = mimetypes.guess_extension(content_type.split(';')[0].strip())
+        if guessed:
+            g = guessed.lower()
+            # mimetypes даёт '.jpe' для jpeg — нормализуем
+            if g == '.jpe':
+                g = '.jpg'
+            if g in _IMAGE_EXTS:
+                return g
+    return '.jpg'  # безопасный fallback
+
+
+@section_cards_bp.route('/section-cards/<int:card_id>/upload-url', methods=['POST'])
+def upload_section_card_image_from_url(card_id: int):
+    """
+    Загрузить изображение по внешнему URL — скачиваем на наш сервер, чтобы
+    не зависеть от чужого хостинга (иначе картинка исчезнет, если её
+    удалят/переименуют).
+
+    POST JSON:
+      url:  внешний URL картинки (http/https)
+      kind: 'image' | 'banner'  (по умолчанию 'image')
+    Возвращает { url, kind } — локальный /uploads/... URL.
+    """
+    card = SectionCard.query.get_or_404(card_id)
+
+    data = request.get_json(silent=True) or {}
+    src_url = (data.get('url') or '').strip()
+    kind = (data.get('kind') or 'image').strip()
+
+    if not src_url:
+        return jsonify({'error': 'url обязателен'}), 400
+    if kind not in ('image', 'banner'):
+        return jsonify({'error': 'kind должен быть image или banner'}), 400
+    if not (src_url.startswith('http://') or src_url.startswith('https://')):
+        return jsonify({'error': 'URL должен начинаться с http:// или https://'}), 400
+
+    try:
+        resp = requests.get(src_url, stream=True, timeout=30, allow_redirects=True)
+        resp.raise_for_status()
+
+        # Ограничение размера, если сервер прислал Content-Length
+        try:
+            declared = int(resp.headers.get('Content-Length') or 0)
+        except ValueError:
+            declared = 0
+        if declared and declared > _MAX_URL_IMAGE_BYTES:
+            return jsonify({'error': 'Файл слишком большой (>10 МБ)'}), 400
+
+        ext = _ext_from_url_or_ctype(src_url, resp.headers.get('Content-Type'))
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        final_filename = f'{kind}_{timestamp}{ext}'
+        folder = os.path.join(
+            current_app.config['UPLOAD_FOLDER'], 'section-cards', str(card_id),
+        )
+        os.makedirs(folder, exist_ok=True)
+        full_path = os.path.join(folder, final_filename)
+
+        received = 0
+        with open(full_path, 'wb') as f:
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if received > _MAX_URL_IMAGE_BYTES:
+                    f.close()
+                    try:
+                        os.remove(full_path)
+                    except OSError:
+                        pass
+                    return jsonify({'error': 'Файл слишком большой (>10 МБ)'}), 400
+                f.write(chunk)
+    except requests.RequestException as e:
+        return jsonify({'error': f'Не удалось скачать: {e}'}), 400
+
+    new_url = f'/uploads/section-cards/{card_id}/{final_filename}'
+
+    if kind == 'image':
+        _delete_uploaded_file(card.image_url)
+        card.image_url = new_url
+    else:
+        _delete_uploaded_file(card.banner_image_url)
+        card.banner_image_url = new_url
+
+    db.session.commit()
+    return jsonify({'url': new_url, 'kind': kind})
 
 
 @section_cards_bp.route('/section-cards/<int:card_id>/upload', methods=['POST'])
