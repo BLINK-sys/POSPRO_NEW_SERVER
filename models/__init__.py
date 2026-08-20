@@ -30,3 +30,4 @@ from .integration import IntegrationSettings, IntegrationRun, IntegrationCommand
 from .collector import CollectorTask, CollectorFile, CollectorCommand, CollectorWorker
 from .category_alias import CategoryAlias
 from .section_card import SectionCard, SectionCardCategory
+from .customer_activity import CustomerActivity

@@ -37,6 +37,7 @@ from routes.kp_clients import kp_clients_bp
 from routes.kp_templates import kp_templates_bp
 from routes.search_page import search_page_bp
 from routes.kp_logos import kp_logos_bp
+from routes.customer_activity import customer_activity_bp
 from routes.dashboard import dashboard_bp
 from routes.catalog_visibility import catalog_visibility_bp
 from routes.system_users_presence import presence_bp
@@ -171,6 +172,7 @@ def create_app():
 
     # 🔹 Дашборд (трекинг + статистика)
     app.register_blueprint(dashboard_bp, url_prefix='/api')  # /api/track-visit, /api/track-request, /api/dashboard-stats
+    app.register_blueprint(customer_activity_bp, url_prefix='/api')  # /api/track-customer-activity, /api/admin/customer-activity/*
 
     # 🔹 Склады, валюты, себестоимость
     app.register_blueprint(currencies_bp, url_prefix='/meta/currencies')  # /meta/currencies/*
