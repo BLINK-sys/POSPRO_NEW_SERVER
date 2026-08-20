@@ -449,14 +449,24 @@ def get_section_card_page(slug: str):
     search_query = request.args.get('search', default='', type=str).strip()
     brand_filter = request.args.get('brand', default=None, type=str)
     sort_by = request.args.get('sort', default='name', type=str)
+    # Опциональный фильтр «показать только эту привязанную категорию
+    # (и её подкатегории)» — из клика по чипу-категории на странице.
+    # Валидируем: id должен быть среди корневых привязок раздела,
+    # иначе игнорируем (никакого произвольного сужения снаружи).
+    filter_cat_id = request.args.get('category_id', default=None, type=int)
+    if filter_cat_id is not None and filter_cat_id in set(root_category_ids):
+        active_category_ids = _collect_descendant_category_ids([filter_cat_id])
+    else:
+        filter_cat_id = None
+        active_category_ids = all_category_ids
 
     query = Product.query.options(
         joinedload(Product.brand_info),
         joinedload(Product.status_info),
         joinedload(Product.category),
     )
-    if all_category_ids:
-        query = query.filter(Product.category_id.in_(all_category_ids))
+    if active_category_ids:
+        query = query.filter(Product.category_id.in_(active_category_ids))
     else:
         # У карточки нет привязок → пустая страница (не 404, чтобы hero
         # с баннером и описанием всё равно показался).
