@@ -15,6 +15,7 @@ from models.product import Product  # если есть
 from models.homepage_block import HomepageBlock
 from models.small_banner_card import SmallBanner
 from models.header_settings import HeaderMenuItem, HeaderMenuItemProduct
+from models.section_card import SectionCard
 
 public_homepage_bp = Blueprint('public_homepage', __name__)
 
@@ -95,6 +96,7 @@ def get_homepage_data():
     benefit_ids = set()
     product_ids = set()
     small_banner_ids = set()
+    section_card_ids = set()
 
     for block in blocks:
         block_items = block_items_map.get(block.id, [])
@@ -113,6 +115,8 @@ def get_homepage_data():
                 product_ids.add(item.item_id)
             elif block.type in ['small_banner', 'small_banners', 'info_cards']:
                 small_banner_ids.add(item.item_id)
+            elif block.type in ['section_card', 'section_cards']:
+                section_card_ids.add(item.item_id)
 
     # Загружаем необходимые сущности одним запросом на каждый тип
     categories = {}
@@ -162,6 +166,15 @@ def get_homepage_data():
     if small_banner_ids:
         small_banners_all = {
             b.id: b for b in SmallBanner.query.filter(SmallBanner.id.in_(small_banner_ids)).all()
+        }
+
+    section_cards_all = {}
+    if section_card_ids:
+        section_cards_all = {
+            c.id: c for c in SectionCard.query.filter(
+                SectionCard.id.in_(section_card_ids),
+                SectionCard.active == True,
+            ).all()
         }
 
     blocks_data = []
@@ -253,6 +266,20 @@ def get_homepage_data():
                         'supplier_name': pr.supplier.name if pr.supplier else None,
                         'image_url': first_image.url if first_image else None
                     })
+            elif block.type in ['section_card', 'section_cards']:
+                sc = section_cards_all.get(item.item_id)
+                if sc:
+                    items_data.append({
+                        'id': sc.id,
+                        'name': sc.name,
+                        'slug': sc.slug,
+                        'description': sc.description or '',
+                        'image_url': sc.image_url or '',
+                        'banner_image_url': sc.banner_image_url or '',
+                        'target': sc.target,
+                        'link_url': sc.link_url or '',
+                        'link_new_tab': bool(sc.link_new_tab),
+                    })
             elif block.type in ['small_banner', 'small_banners', 'info_cards']:
                 sb = small_banners_all.get(item.item_id)
                 if sb:
@@ -280,7 +307,8 @@ def get_homepage_data():
             'description': block.description,  # ✅ Добавлено поле описания
             'order': block.order,
             'carusel': block.carusel if block.type in ['category', 'categories', 'brand', 'brands', 'benefit', 'benefits', 'product', 'products',
-                                                       'small_banner', 'small_banners', 'info_cards'] else False,
+                                                       'small_banner', 'small_banners', 'info_cards',
+                                                       'section_card', 'section_cards'] else False,
             'show_title': block.show_title,
             'title_align': block.title_align,
             'background_color': block.background_color,
@@ -372,6 +400,209 @@ def get_catalog_categories():
         apply_product_counts(root)
     
     return jsonify(root_categories)
+
+
+def _collect_descendant_category_ids(root_ids: list[int]) -> list[int]:
+    """
+    Собрать все id категорий-потомков (включая сами root_ids) BFS.
+    Без рекурсивных SQL — простой обход по parent_id за N пачек.
+    """
+    if not root_ids:
+        return []
+    seen: set[int] = set(root_ids)
+    frontier: list[int] = list(root_ids)
+    while frontier:
+        rows = (
+            db.session.query(Category.id)
+            .filter(Category.parent_id.in_(frontier))
+            .all()
+        )
+        next_frontier = []
+        for (cid,) in rows:
+            if cid not in seen:
+                seen.add(cid)
+                next_frontier.append(cid)
+        frontier = next_frontier
+    return list(seen)
+
+
+@public_homepage_bp.route('/public/section/<string:slug>', methods=['GET'])
+def get_section_card_page(slug: str):
+    """
+    Страница-агрегатор для SectionCard с target='categories'. Отдаёт саму
+    карточку + список товаров из привязанных категорий (и всех их
+    подкатегорий) с пагинацией/фильтром брендов/сортировкой — как обычная
+    страница категории.
+    """
+    show_hidden = _is_system_user()
+    card = SectionCard.query.filter_by(slug=slug, active=True).first()
+    if card is None:
+        from flask import abort
+        abort(404)
+
+    root_category_ids = [c.category_id for c in card.categories]
+    all_category_ids = _collect_descendant_category_ids(root_category_ids)
+
+    page = request.args.get('page', default=1, type=int) or 1
+    per_page = request.args.get('per_page', default=20, type=int) or 20
+    per_page = max(1, min(per_page, 100))
+    search_query = request.args.get('search', default='', type=str).strip()
+    brand_filter = request.args.get('brand', default=None, type=str)
+    sort_by = request.args.get('sort', default='name', type=str)
+
+    query = Product.query.options(
+        joinedload(Product.brand_info),
+        joinedload(Product.status_info),
+        joinedload(Product.category),
+    )
+    if all_category_ids:
+        query = query.filter(Product.category_id.in_(all_category_ids))
+    else:
+        # У карточки нет привязок → пустая страница (не 404, чтобы hero
+        # с баннером и описанием всё равно показался).
+        query = query.filter(Product.id.is_(None))
+    if not show_hidden:
+        query = query.filter(Product.is_visible == True)
+
+    if search_query:
+        query = query.filter(Product.name.ilike(f'%{search_query}%'))
+    if brand_filter and brand_filter != 'all':
+        brand_obj = Brand.query.filter_by(name=brand_filter).first()
+        if brand_obj:
+            query = query.filter(Product.brand_id == brand_obj.id)
+
+    if sort_by == 'price_asc':
+        query = query.order_by(Product.price.asc())
+    elif sort_by == 'price_desc':
+        query = query.order_by(Product.price.desc())
+    else:
+        query = query.order_by(Product.name.asc())
+
+    total_count = query.count()
+    total_pages = math.ceil(total_count / per_page) if total_count else 0
+    if total_pages and page > total_pages:
+        page = total_pages
+    if page < 1:
+        page = 1
+
+    products = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    product_ids = [p.id for p in products]
+    media_items = []
+    if product_ids:
+        media_items = (
+            ProductMedia.query
+            .filter(
+                ProductMedia.product_id.in_(product_ids),
+                ProductMedia.media_type == 'image',
+            )
+            .order_by(ProductMedia.product_id, ProductMedia.order)
+            .all()
+        )
+    product_images = {}
+    for media in media_items:
+        if media.product_id not in product_images:
+            product_images[media.product_id] = media
+
+    # Все бренды раздела (для фильтра) — со всех категорий/подкатегорий
+    all_brands = {}
+    if all_category_ids:
+        brands_query = Product.query.filter(Product.category_id.in_(all_category_ids))
+        if not show_hidden:
+            brands_query = brands_query.filter(Product.is_visible == True)
+        brand_ids = [
+            row[0] for row in
+            brands_query.with_entities(Product.brand_id).distinct().all()
+            if row[0]
+        ]
+        if brand_ids:
+            for b in Brand.query.filter(Brand.id.in_(brand_ids)).all():
+                all_brands[b.id] = {
+                    'id': b.id,
+                    'name': b.name,
+                    'country': b.country,
+                    'description': b.description,
+                    'image_url': b.image_url,
+                }
+
+    products_data = []
+    for p in products:
+        first_image = product_images.get(p.id)
+        status_data = None
+        if p.status_info:
+            status_data = {
+                'id': p.status_info.id,
+                'name': p.status_info.name,
+                'background_color': p.status_info.background_color,
+                'text_color': p.status_info.text_color,
+            }
+        brand_data = None
+        if p.brand_id and p.brand_info:
+            brand_data = {
+                'id': p.brand_info.id,
+                'name': p.brand_info.name,
+                'country': p.brand_info.country,
+                'description': p.brand_info.description,
+                'image_url': p.brand_info.image_url,
+            }
+        products_data.append({
+            'id': p.id,
+            'name': p.name,
+            'slug': p.slug,
+            'price': p.price,
+            'wholesale_price': p.wholesale_price,
+            'status': status_data,
+            'brand_id': p.brand_id,
+            'brand_info': brand_data,
+            'brand': brand_data,
+            'quantity': p.quantity,
+            'supplier_id': p.supplier_id,
+            'supplier_name': p.supplier.name if p.supplier else None,
+            'image_url': first_image.url if first_image else None,
+            'category_id': p.category_id,
+            'category': {
+                'id': p.category.id,
+                'name': p.category.name,
+                'slug': p.category.slug,
+            } if p.category else None,
+        })
+
+    # Корневые (напрямую привязанные) категории — вернём как дети раздела,
+    # чтобы фронт мог показать «Смотрите также» внутри /section/<slug>.
+    children_data = []
+    if root_category_ids:
+        root_cats = Category.query.filter(Category.id.in_(root_category_ids)).all()
+        # Сохраним порядок из привязок карточки
+        order_map = {cid: i for i, cid in enumerate(root_category_ids)}
+        root_cats.sort(key=lambda c: order_map.get(c.id, 0))
+        children_data = [{
+            'id': c.id,
+            'name': c.name,
+            'slug': c.slug,
+            'image_url': c.image_url,
+            'description': c.description,
+            'parent_id': c.parent_id,
+        } for c in root_cats]
+
+    return jsonify({
+        'section_card': {
+            'id': card.id,
+            'name': card.name,
+            'slug': card.slug,
+            'description': card.description or '',
+            'image_url': card.image_url or '',
+            'banner_image_url': card.banner_image_url or '',
+        },
+        'children': children_data,
+        'products': products_data,
+        'brands': list(all_brands.values()),
+        'pagination': {
+            'page': page,
+            'per_page': per_page,
+            'total_count': total_count,
+            'total_pages': total_pages,
+        },
+    })
 
 
 def _render_custom_section_response(custom: HeaderMenuItem, show_hidden: bool):

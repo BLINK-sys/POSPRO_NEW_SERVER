@@ -54,6 +54,7 @@ from routes.product_auto_fill import product_auto_fill_bp
 from routes.integrations import integrations_bp
 from routes.collector import collector_bp
 from routes.header_settings import header_settings_bp
+from routes.section_cards import section_cards_bp
 from routes.static_pages import static_pages_bp
 from models.systemuser import SystemUser
 # Импорт нужен чтобы db.create_all() увидел модель шаблонов на свежей БД.
@@ -164,6 +165,7 @@ def create_app():
     app.register_blueprint(homepage_block_titles_bp, url_prefix='/api/admin')
     app.register_blueprint(homepage_blocks_bp, url_prefix='/api/admin')
     app.register_blueprint(small_banner_bp, url_prefix='/api/admin')
+    app.register_blueprint(section_cards_bp, url_prefix='/api/admin')  # /api/admin/section-cards/*
 
     app.register_blueprint(public_homepage_bp, url_prefix='/api')
 
