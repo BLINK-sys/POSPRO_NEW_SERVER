@@ -86,10 +86,13 @@ def update_block(block_id):
     if 'show_products_categories_filter' in data:
         block.show_products_categories_filter = bool(data.get('show_products_categories_filter'))
 
-    HomepageBlockItem.query.filter_by(block_id=block.id).delete()
-    item_ids = data.get('items', [])
-    for idx, item_id in enumerate(item_ids):
-        db.session.add(HomepageBlockItem(block_id=block.id, item_id=item_id, order=idx))
+    # Items трогаем ТОЛЬКО если ключ явно передан. Раньше делали
+    # безусловно — частичный PATCH (например, тумблер фильтра категорий
+    # на витрине) обнулял привязки товаров.
+    if 'items' in data:
+        HomepageBlockItem.query.filter_by(block_id=block.id).delete()
+        for idx, item_id in enumerate(data.get('items') or []):
+            db.session.add(HomepageBlockItem(block_id=block.id, item_id=item_id, order=idx))
 
     db.session.commit()
     return jsonify({'message': 'Блок обновлён'})
