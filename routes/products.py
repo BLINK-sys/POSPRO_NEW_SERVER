@@ -631,7 +631,23 @@ def get_products():
             else:
                 try:
                     category_id_int = int(category_param)
-                    query = query.filter(Product.category_id == category_id_int)
+                    # Recursive CTE: включаем товары самой категории и
+                    # всех её потомков — иначе выбор родительской без
+                    # подкатегорий фильтрует почти пусто.
+                    from sqlalchemy import text
+                    rows = db.session.execute(text("""
+                        WITH RECURSIVE cat_tree AS (
+                            SELECT id FROM category WHERE id = :root
+                            UNION
+                            SELECT c.id FROM category c JOIN cat_tree t ON c.parent_id = t.id
+                        )
+                        SELECT id FROM cat_tree
+                    """), {"root": category_id_int}).all()
+                    descendant_ids = [r[0] for r in rows]
+                    if descendant_ids:
+                        query = query.filter(Product.category_id.in_(descendant_ids))
+                    else:
+                        query = query.filter(Product.category_id == category_id_int)
                 except (TypeError, ValueError):
                     pass
 
