@@ -48,6 +48,11 @@ class SectionCard(db.Model):
     link_url = db.Column(db.String(512), nullable=True)
     link_new_tab = db.Column(db.Boolean, nullable=False, default=False)
 
+    # PDF-презентация карточки — единый файл, рендерится на витрине
+    # через pdf.js (react-pdf) как вертикальный поток страниц.
+    # NULL/пусто — презентации нет, тумблер «Презентация/Товары» не показываем.
+    presentation_pdf_url = db.Column(db.String(512), nullable=True)
+
     order = db.Column(db.Integer, nullable=False, default=0)
     active = db.Column(db.Boolean, nullable=False, default=True)
 
@@ -69,6 +74,7 @@ class SectionCard(db.Model):
             'description': self.description or '',
             'image_url': self.image_url or '',
             'banner_image_url': self.banner_image_url or '',
+            'presentation_pdf_url': self.presentation_pdf_url or '',
             'target': self.target,
             'link_url': self.link_url or '',
             'link_new_tab': bool(self.link_new_tab),

@@ -207,6 +207,14 @@ def update_section_card(card_id: int):
             _delete_uploaded_file(card.banner_image_url)
         card.banner_image_url = new_url
 
+    if 'presentation_pdf_url' in data:
+        # Позволяет админу удалить презентацию через PUT с '' (или null).
+        # Загрузка нового PDF — через отдельный /presentation/upload.
+        new_url = (data.get('presentation_pdf_url') or '').strip() or None
+        if new_url != card.presentation_pdf_url and card.presentation_pdf_url:
+            _delete_uploaded_file(card.presentation_pdf_url)
+        card.presentation_pdf_url = new_url
+
     if 'target' in data:
         target = (data.get('target') or 'link').strip()
         if target not in ('link', 'categories'):
@@ -404,3 +412,63 @@ def upload_section_card_image(card_id: int):
 
     db.session.commit()
     return jsonify({'url': new_url, 'kind': kind})
+
+
+# ── Презентация (PDF) ──────────────────────────────────────────────────
+
+_MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 МБ
+
+
+@section_cards_bp.route('/section-cards/<int:card_id>/presentation', methods=['POST'])
+def upload_section_card_presentation(card_id: int):
+    """
+    Загрузить PDF-презентацию к карточке (заменит существующую).
+    POST multipart:
+      file: PDF-файл (максимум 50 МБ)
+    Возвращает { url }.
+    """
+    card = SectionCard.query.get_or_404(card_id)
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'Файл не передан'}), 400
+    file = request.files['file']
+    if not file or file.filename == '':
+        return jsonify({'error': 'Пустое имя файла'}), 400
+
+    ext = os.path.splitext(_sanitize_filename(file.filename))[1].lower()
+    if ext != '.pdf':
+        return jsonify({'error': 'Разрешён только PDF-файл'}), 400
+
+    file.stream.seek(0, os.SEEK_END)
+    size = file.stream.tell()
+    file.stream.seek(0)
+    if size > _MAX_PDF_BYTES:
+        return jsonify({'error': 'Файл слишком большой (>50 МБ)'}), 400
+
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    final_filename = f'presentation_{timestamp}.pdf'
+    folder = os.path.join(
+        current_app.config['UPLOAD_FOLDER'], 'section-cards', str(card_id),
+    )
+    os.makedirs(folder, exist_ok=True)
+    file.save(os.path.join(folder, final_filename))
+
+    new_url = f'/uploads/section-cards/{card_id}/{final_filename}'
+
+    if card.presentation_pdf_url:
+        _delete_uploaded_file(card.presentation_pdf_url)
+    card.presentation_pdf_url = new_url
+
+    db.session.commit()
+    return jsonify({'url': new_url})
+
+
+@section_cards_bp.route('/section-cards/<int:card_id>/presentation', methods=['DELETE'])
+def delete_section_card_presentation(card_id: int):
+    """Удалить PDF-презентацию карточки."""
+    card = SectionCard.query.get_or_404(card_id)
+    if card.presentation_pdf_url:
+        _delete_uploaded_file(card.presentation_pdf_url)
+        card.presentation_pdf_url = None
+        db.session.commit()
+    return jsonify({'message': 'Презентация удалена'})

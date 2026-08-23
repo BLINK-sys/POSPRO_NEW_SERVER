@@ -620,6 +620,7 @@ def get_section_card_page(slug: str):
             'description': card.description or '',
             'image_url': card.image_url or '',
             'banner_image_url': card.banner_image_url or '',
+            'presentation_pdf_url': card.presentation_pdf_url or '',
         },
         'children': children_data,
         'products': products_data,
