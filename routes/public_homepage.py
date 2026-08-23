@@ -465,12 +465,14 @@ def get_section_card_page(slug: str):
     search_query = request.args.get('search', default='', type=str).strip()
     brand_filter = request.args.get('brand', default=None, type=str)
     sort_by = request.args.get('sort', default='name', type=str)
-    # Опциональный фильтр «показать только эту привязанную категорию
-    # (и её подкатегории)» — из клика по чипу-категории на странице.
-    # Валидируем: id должен быть среди корневых привязок раздела,
-    # иначе игнорируем (никакого произвольного сужения снаружи).
+    # Опциональный фильтр «показать только эту категорию (и её подкатегории)»
+    # — из клика по чипу-категории на странице. Валидируем: id должен быть
+    # среди ЛЮБЫХ потомков корневых привязок раздела (включая сами корни),
+    # чтобы позволить сужение до подкатегории. Всё что вне scope раздела —
+    # игнорируем, никакого произвольного просмотра снаружи.
+    all_ids_set = set(all_category_ids)
     filter_cat_id = request.args.get('category_id', default=None, type=int)
-    if filter_cat_id is not None and filter_cat_id in set(root_category_ids):
+    if filter_cat_id is not None and filter_cat_id in all_ids_set:
         active_category_ids = _collect_descendant_category_ids([filter_cat_id])
     else:
         filter_cat_id = None
