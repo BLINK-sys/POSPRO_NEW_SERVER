@@ -426,6 +426,22 @@ def _collect_descendant_category_ids(root_ids: list[int]) -> list[int]:
     return list(seen)
 
 
+@public_homepage_bp.route('/public/section-cards', methods=['GET'])
+def get_public_section_cards():
+    """
+    Публичный список всех активных карточек разделов («сфер применения»),
+    отсортированных по order. Используется страницей /sections на витрине —
+    аналог /brands для брендов.
+    """
+    cards = (
+        SectionCard.query
+        .filter_by(active=True)
+        .order_by(SectionCard.order, SectionCard.id)
+        .all()
+    )
+    return jsonify([c.to_dict(include_categories=False) for c in cards])
+
+
 @public_homepage_bp.route('/public/section/<string:slug>', methods=['GET'])
 def get_section_card_page(slug: str):
     """
