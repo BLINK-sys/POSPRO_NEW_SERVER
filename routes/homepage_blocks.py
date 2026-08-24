@@ -24,6 +24,7 @@ def get_all_blocks():
             'title_align': block.title_align,
             'background_color': block.background_color,
             'show_products_categories_filter': block.show_products_categories_filter,
+            'brands_cards_per_row': block.brands_cards_per_row,
             'items': [item.item_id for item in items]
         })
     return jsonify(result)
@@ -85,6 +86,16 @@ def update_block(block_id):
         block.background_color = val if val else None
     if 'show_products_categories_filter' in data:
         block.show_products_categories_filter = bool(data.get('show_products_categories_filter'))
+    if 'brands_cards_per_row' in data:
+        raw = data.get('brands_cards_per_row')
+        if raw in (None, '', 0):
+            block.brands_cards_per_row = None
+        else:
+            try:
+                v = int(raw)
+                block.brands_cards_per_row = max(2, min(12, v))
+            except (TypeError, ValueError):
+                block.brands_cards_per_row = None
 
     # Items трогаем ТОЛЬКО если ключ явно передан. Раньше делали
     # безусловно — частичный PATCH (например, тумблер фильтра категорий

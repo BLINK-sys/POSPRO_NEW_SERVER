@@ -313,6 +313,7 @@ def get_homepage_data():
             'title_align': block.title_align,
             'background_color': block.background_color,
             'show_products_categories_filter': block.show_products_categories_filter,
+            'brands_cards_per_row': block.brands_cards_per_row,
             'items': items_data
         })
 
