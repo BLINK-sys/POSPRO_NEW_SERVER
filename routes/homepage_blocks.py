@@ -93,7 +93,10 @@ def update_block(block_id):
         else:
             try:
                 v = int(raw)
-                block.brands_cards_per_row = max(2, min(12, v))
+                # 1..20 — фронт кладёт значение уже clamped к реально
+                # возможному в текущей ширине экрана; здесь просто широкий
+                # предохранитель от мусора.
+                block.brands_cards_per_row = max(1, min(20, v))
             except (TypeError, ValueError):
                 block.brands_cards_per_row = None
 
