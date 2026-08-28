@@ -4,8 +4,11 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 
+from sqlalchemy import func
+
 from extensions import db
 from models.category import Category
+from utils.category_normalize import normalize_name
 
 categories_bp = Blueprint('categories', __name__)
 
@@ -80,6 +83,36 @@ def create_category_with_image():
     if not name or not slug:
         return jsonify({'error': 'name and slug are required'}), 400
 
+    # Нормализуем имя ДО поиска дубликата: «ВЕСЫ БЫТОВЫЕ» и «Весы бытовые»
+    # должны считаться одной и той же категорией. Иначе внешние импорты
+    # (Equip шлёт КАПСОМ) плодят дубликаты рядом с уже существующими.
+    name = normalize_name(name) or name
+    parent_id_norm = int(parent_id) if parent_id else None
+
+    # Если категория (name, parent_id) уже существует — возвращаем её,
+    # не создаём копию. Сравнение case-insensitively по name.
+    existing = (
+        Category.query
+        .filter(func.lower(Category.name) == name.lower())
+        .filter(
+            Category.parent_id.is_(None) if parent_id_norm is None
+            else Category.parent_id == parent_id_norm
+        )
+        .first()
+    )
+    if existing is not None:
+        return jsonify({
+            'id': existing.id,
+            'name': existing.name,
+            'slug': existing.slug,
+            'description': existing.description,
+            'image_url': existing.image_url,
+            'parent_id': existing.parent_id,
+            'order': existing.order,
+            'show_in_menu': existing.show_in_menu,
+            'deduplicated': True,
+        }), 200
+
     # slug должен быть уникальным (роутинг /category/{slug} однозначен только
     # при уникальности). Если приходит занятый — тихо добавляем суффикс
     # `-2`, `-3` и т.д., чтобы юзер не получал ошибку. Финальный slug
@@ -91,7 +124,7 @@ def create_category_with_image():
         name=name,
         slug=slug,
         description=description,
-        parent_id=parent_id if parent_id else None,
+        parent_id=parent_id_norm,
         show_in_menu=show_in_menu
     )
     db.session.add(category)
