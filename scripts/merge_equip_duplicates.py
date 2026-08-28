@@ -27,6 +27,7 @@ Dry-run по умолчанию (rollback в конце); реально при�
 
 import argparse
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -89,8 +90,23 @@ def merge_pass():
         counts_rows = db.session.query(Product.category_id, _f.count(Product.id)).group_by(Product.category_id).all()
         counts = {cid: cnt for cid, cnt in counts_rows}
 
+        eq_re = re.compile(r'-eq\d+$')
         for _key, group in duplicate_groups:
-            group_sorted = sorted(group, key=lambda c: (-counts.get(c.id, 0), c.id))
+            # Приоритет target'а:
+            #   1) категория БЕЗ суффикса -eq<N> в slug (наша «нормальная»,
+            #      с чистым URL и обычно созданная нашими руками);
+            #   2) при равенстве по этому признаку — max(products_count);
+            #   3) при равенстве по числу товаров — min(id) для стабильности.
+            # Так товары equip-дубликата перельются в нашу нормальную,
+            # а не наоборот.
+            def sort_key(c: Category):
+                is_eq = bool(eq_re.search(c.slug or ''))
+                return (
+                    is_eq,                       # False (0) идёт раньше True (1)
+                    -counts.get(c.id, 0),
+                    c.id,
+                )
+            group_sorted = sorted(group, key=sort_key)
             target = group_sorted[0]
             sources = group_sorted[1:]
             for src in sources:
