@@ -54,6 +54,15 @@ from models.kp_client import KpClient
 tasks_bp = Blueprint('tasks', __name__)
 
 
+def _safe_notify(**kwargs):
+    """Best-effort — сбой не валит основной путь. Ленивая загрузка сервиса."""
+    try:
+        from services.notifications import notify
+        notify(**kwargs)
+    except Exception as e:
+        print(f'⚠️ notify failed: {e}', flush=True)
+
+
 # ============================================================================
 # Auth helpers
 # ============================================================================
@@ -346,6 +355,17 @@ def create_task():
         },
     ))
     db.session.commit()
+
+    if responsible and responsible != user_id:
+        _safe_notify(
+            user_id=responsible, kind='task_assigned', section='tasks',
+            entity_type='task', entity_id=t.id,
+            payload={'task_title': t.title, 'assigned_by': user_id},
+            push_title='Новая задача',
+            push_body=t.title,
+            push_url=f'/admin/tasks/{t.id}',
+        )
+
     return jsonify({'success': True, 'task': _task_full_dict(t)}), 201
 
 
@@ -484,6 +504,19 @@ def change_task_status(tid):
         payload={'from': from_status, 'to': new_status},
     ))
     db.session.commit()
+
+    # Уведомляем постановщика (если это не он менял) — статус его задачи
+    # изменился. Ответственного не уведомляем, он сам менял (обычно).
+    if t.creator_id and t.creator_id != user_id:
+        _safe_notify(
+            user_id=t.creator_id, kind='task_status_changed', section='tasks',
+            entity_type='task', entity_id=t.id,
+            payload={'task_title': t.title, 'from': from_status, 'to': new_status},
+            push_title='Статус задачи изменён',
+            push_body=f'{t.title}: {new_status}',
+            push_url=f'/admin/tasks/{t.id}',
+        )
+
     return jsonify({'success': True, 'task': _task_full_dict(t)}), 200
 
 
@@ -536,6 +569,16 @@ def add_task_member(tid):
         payload={'user_id': target_uid, 'role': member_role},
     ))
     db.session.commit()
+
+    _safe_notify(
+        user_id=target_uid, kind='task_member_added', section='tasks',
+        entity_type='task', entity_id=tid,
+        payload={'task_title': t.title, 'role': member_role, 'added_by': user_id},
+        push_title='Вас добавили в задачу',
+        push_body=f'{t.title} ({"наблюдатель" if member_role == "observer" else "соисполнитель"})',
+        push_url=f'/admin/tasks/{tid}',
+    )
+
     return jsonify({'success': True, 'member': {
         'id': m.id, 'user_id': m.user_id, 'role': m.role,
     }}), 201

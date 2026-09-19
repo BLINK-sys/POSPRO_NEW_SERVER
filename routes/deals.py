@@ -59,6 +59,19 @@ from models.order import Order
 deals_bp = Blueprint('deals', __name__)
 
 
+def _safe_notify(**kwargs):
+    """
+    Best-effort вызов notify() — сбой не валит основной путь. Импорт
+    отложенный (в момент вызова), чтобы избежать циркулярной зависимости
+    services→models при загрузке приложения.
+    """
+    try:
+        from services.notifications import notify
+        notify(**kwargs)
+    except Exception as e:
+        print(f'⚠️ notify failed: {e}', flush=True)
+
+
 # ============================================================================
 # Auth helpers
 # ============================================================================
@@ -382,6 +395,18 @@ def create_deal():
         },
     ))
     db.session.commit()
+
+    # Уведомление ответственному если это не сам создатель.
+    if responsible and responsible != user_id:
+        _safe_notify(
+            user_id=responsible, kind='deal_assigned', section='deals',
+            entity_type='deal', entity_id=d.id,
+            payload={'deal_name': d.name, 'assigned_by': user_id},
+            push_title='Новая сделка',
+            push_body=f'Вам назначили: {d.name}',
+            push_url=f'/admin/deals/{d.id}',
+        )
+
     return jsonify({'success': True, 'deal': _deal_full_dict(d)}), 201
 
 
@@ -544,6 +569,26 @@ def move_deal(did):
         },
     ))
     db.session.commit()
+
+    # Уведомляем ответственного (если это не он сам двигал), выбираем kind
+    # по итоговому статусу — won/lost — иначе просто stage_changed.
+    if d.responsible_user_id and d.responsible_user_id != user_id:
+        if d.status == 'won':
+            kind_n, title = 'deal_won', 'Сделка выиграна'
+        elif d.status == 'lost':
+            kind_n, title = 'deal_lost', 'Сделка проиграна'
+        else:
+            kind_n, title = 'deal_stage_changed', 'Стадия сделки изменена'
+        _safe_notify(
+            user_id=d.responsible_user_id, kind=kind_n, section='deals',
+            entity_type='deal', entity_id=d.id,
+            payload={'deal_name': d.name,
+                     'from_stage_id': from_stage_id, 'to_stage_id': new_stage_id},
+            push_title=title,
+            push_body=d.name,
+            push_url=f'/admin/deals/{d.id}',
+        )
+
     return jsonify({'success': True, 'deal': _deal_full_dict(d)}), 200
 
 
@@ -596,6 +641,16 @@ def add_member(did):
         payload={'user_id': target_uid, 'role': member_role},
     ))
     db.session.commit()
+
+    _safe_notify(
+        user_id=target_uid, kind='deal_member_added', section='deals',
+        entity_type='deal', entity_id=did,
+        payload={'deal_name': d.name, 'role': member_role, 'added_by': user_id},
+        push_title='Вас добавили в сделку',
+        push_body=f'{d.name} ({"наблюдатель" if member_role == "observer" else "участник"})',
+        push_url=f'/admin/deals/{did}',
+    )
+
     return jsonify({'success': True, 'member': {
         'id': m.id, 'user_id': m.user_id, 'role': m.role,
     }}), 201

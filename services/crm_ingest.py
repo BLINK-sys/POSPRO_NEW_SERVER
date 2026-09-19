@@ -159,6 +159,28 @@ def _apply(rule: CrmIngestSource, payload: dict) -> IngestResult:
     _touch_stats(rule)
 
     db.session.commit()
+
+    # 8) Уведомление ответственному если назначен. best-effort — при
+    # сбое ingest в целом всё равно успешен.
+    if responsible_id:
+        try:
+            from services.notifications import notify
+            notify(
+                user_id=responsible_id, kind='deal_ingest_arrived',
+                section='deals', entity_type='deal', entity_id=deal.id,
+                payload={
+                    'deal_name': deal.name,
+                    'source_kind': rule.kind,
+                    'source_name': rule.name,
+                },
+                push_title='Новая сделка из источника',
+                push_body=f'{rule.name}: {deal.name}',
+                push_url=f'/admin/deals/{deal.id}',
+            )
+            db.session.commit()
+        except Exception as e:
+            print(f'⚠️ notify (ingest) failed: {e}', flush=True)
+
     return IngestResult(
         ok=True, deal_id=deal.id,
         responsible_id=responsible_id, dedupe=False,

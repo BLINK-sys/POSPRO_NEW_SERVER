@@ -443,6 +443,29 @@ def send_message(rid):
     # работала стабильно даже когда SSE не подхватил.
     room.updated_at = datetime.utcnow()
     db.session.commit()
+
+    # Уведомления всем участникам кроме автора. best-effort. @упоминания —
+    # v2 (пока просто chat_new_message для всех). Push НЕ шлём — иначе
+    # каждое сообщение спамит. Только запись Notification (для красных
+    # точек и bell). Push пойдёт из фронта через Service Worker когда
+    # он получит SSE-event и сам решит нужно ли пинговать.
+    try:
+        from services.notifications import notify
+        preview = (text[:80] + '…') if len(text) > 80 else text
+        other_members = ChatMember.query.filter(
+            ChatMember.room_id == rid,
+            ChatMember.user_id != uid,
+        ).all()
+        for m in other_members:
+            notify(
+                user_id=m.user_id, kind='chat_new_message',
+                section='chat', entity_type='chat_room', entity_id=rid,
+                payload={'author_id': uid, 'preview': preview},
+            )
+        db.session.commit()
+    except Exception as e:
+        print(f'⚠️ notify (chat) failed: {e}', flush=True)
+
     return jsonify({'success': True, 'message': _message_dict(msg)}), 201
 
 
