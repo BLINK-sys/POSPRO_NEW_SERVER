@@ -93,6 +93,20 @@ def create_system_user():
         db.session.add(user)
         db.session.commit()
         print(f"System user created successfully with ID: {user.id}")
+
+        # CRM: автодобавление нового system_user в общий чат.
+        # Best-effort — если что-то сломалось, user всё равно создан.
+        try:
+            from models.chat import ChatRoom, ChatMember
+            general = ChatRoom.query.filter_by(kind='general').first()
+            if general and not ChatMember.query.filter_by(
+                room_id=general.id, user_id=user.id
+            ).first():
+                db.session.add(ChatMember(room_id=general.id, user_id=user.id))
+                db.session.commit()
+        except Exception as e:
+            print(f'⚠️ general chat auto-add failed for user {user.id}: {e}', flush=True)
+
         return jsonify({'message': 'User created', 'id': user.id}), 201
     except Exception as e:
         db.session.rollback()

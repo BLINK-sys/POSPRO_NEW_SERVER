@@ -396,6 +396,22 @@ def create_deal():
     ))
     db.session.commit()
 
+    # Автосоздание чата сделки + membership для creator и responsible.
+    # Best-effort — сбой не валит основной путь.
+    try:
+        from models.chat import ChatRoom, ChatMember
+        chat_room = ChatRoom(kind='deal', related_deal_id=d.id)
+        db.session.add(chat_room)
+        db.session.flush()
+        seen: set[int] = set()
+        for uid_ in (user_id, responsible):
+            if uid_ and uid_ not in seen:
+                db.session.add(ChatMember(room_id=chat_room.id, user_id=uid_))
+                seen.add(uid_)
+        db.session.commit()
+    except Exception as e:
+        print(f'⚠️ deal chat auto-create failed for deal {d.id}: {e}', flush=True)
+
     # Уведомление ответственному если это не сам создатель.
     if responsible and responsible != user_id:
         _safe_notify(
@@ -641,6 +657,18 @@ def add_member(did):
         payload={'user_id': target_uid, 'role': member_role},
     ))
     db.session.commit()
+
+    # Синк chat-membership для чата сделки.
+    try:
+        from models.chat import ChatRoom, ChatMember
+        chat_room = ChatRoom.query.filter_by(kind='deal', related_deal_id=did).first()
+        if chat_room and not ChatMember.query.filter_by(
+            room_id=chat_room.id, user_id=target_uid
+        ).first():
+            db.session.add(ChatMember(room_id=chat_room.id, user_id=target_uid))
+            db.session.commit()
+    except Exception as e:
+        print(f'⚠️ deal chat member sync failed: {e}', flush=True)
 
     _safe_notify(
         user_id=target_uid, kind='deal_member_added', section='deals',

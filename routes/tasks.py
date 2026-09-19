@@ -356,6 +356,21 @@ def create_task():
     ))
     db.session.commit()
 
+    # Автосоздание чата задачи + membership для creator и responsible.
+    try:
+        from models.chat import ChatRoom, ChatMember
+        chat_room = ChatRoom(kind='task', related_task_id=t.id)
+        db.session.add(chat_room)
+        db.session.flush()
+        seen: set[int] = set()
+        for uid_ in (user_id, responsible):
+            if uid_ and uid_ not in seen:
+                db.session.add(ChatMember(room_id=chat_room.id, user_id=uid_))
+                seen.add(uid_)
+        db.session.commit()
+    except Exception as e:
+        print(f'⚠️ task chat auto-create failed for task {t.id}: {e}', flush=True)
+
     if responsible and responsible != user_id:
         _safe_notify(
             user_id=responsible, kind='task_assigned', section='tasks',
@@ -569,6 +584,18 @@ def add_task_member(tid):
         payload={'user_id': target_uid, 'role': member_role},
     ))
     db.session.commit()
+
+    # Синк chat-membership для чата задачи.
+    try:
+        from models.chat import ChatRoom, ChatMember
+        chat_room = ChatRoom.query.filter_by(kind='task', related_task_id=tid).first()
+        if chat_room and not ChatMember.query.filter_by(
+            room_id=chat_room.id, user_id=target_uid
+        ).first():
+            db.session.add(ChatMember(room_id=chat_room.id, user_id=target_uid))
+            db.session.commit()
+    except Exception as e:
+        print(f'⚠️ task chat member sync failed: {e}', flush=True)
 
     _safe_notify(
         user_id=target_uid, kind='task_member_added', section='tasks',
