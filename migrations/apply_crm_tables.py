@@ -95,10 +95,62 @@ def _apply_sql():
     db.session.commit()
 
 
+# Список таблиц, где есть колонки created_at / updated_at — используется
+# для post-DDL ALTER'а. Проблема, которую он решает: `app.py:216`
+# `db.create_all()` при рестарте после раскатки коммита создаёт таблицы
+# без DB-level DEFAULT'ов (модели используют Python-side `default=`,
+# без `server_default=`). После этого `CREATE TABLE IF NOT EXISTS` в моей
+# миграции пропускается, и raw-SQL INSERT'ы падают с NOT NULL violation
+# на created_at. ALTER доставляет дефолты post-fact — идемпотентно, PG
+# просто перезапишет existing DEFAULT если он и так есть.
+_TABLES_WITH_TIMESTAMPS = [
+    ('deal_pipeline',      ('created_at', 'updated_at')),
+    ('deal_stage',         ('created_at', 'updated_at')),
+    ('deal',               ('created_at', 'updated_at')),
+    ('deal_member',        ('added_at',)),
+    ('deal_kp',            ('attached_at',)),
+    ('deal_order',         ('attached_at',)),
+    ('deal_activity',      ('created_at',)),
+    ('task',               ('created_at', 'updated_at')),
+    ('task_member',        ('added_at',)),
+    ('task_checklist',     ('created_at',)),
+    ('task_activity',      ('created_at',)),
+    ('chat_room',          ('created_at', 'updated_at')),
+    ('chat_member',        ('joined_at',)),
+    ('chat_message',       ('created_at',)),
+    ('chat_reaction',      ('created_at',)),
+    ('chat_attachment',    ('created_at',)),
+    ('entity_attachment',  ('uploaded_at',)),
+    ('crm_ingest_source',  ('created_at', 'updated_at')),
+]
+
+
+def _ensure_timestamp_defaults():
+    """
+    Добавляет `DEFAULT CURRENT_TIMESTAMP` на все timestamp-колонки CRM-
+    таблиц. Нужно потому что `db.create_all()` в app.py создал таблицы
+    без DEFAULT'ов, а моя SQL-миграция с ними была пропущена через
+    IF NOT EXISTS.
+    """
+    print('', flush=True)
+    print('=== Ensure timestamp DEFAULTs ===', flush=True)
+    for tbl, cols in _TABLES_WITH_TIMESTAMPS:
+        for col in cols:
+            db.session.execute(text(
+                f'ALTER TABLE {tbl} ALTER COLUMN {col} SET DEFAULT CURRENT_TIMESTAMP'
+            ))
+        print(f'  {tbl}: {", ".join(cols)} → DEFAULT CURRENT_TIMESTAMP', flush=True)
+    db.session.commit()
+
+
 def _seed_default_pipeline():
     """
     Создаёт «Основную» воронку и 5 стадий, если ещё нет.
     Возвращает `(pipeline_id, stages_by_name)`.
+
+    Все timestamp'ы передаются явно через NOW() — на случай если
+    таблицы были созданы `db.create_all()`'ом без DB-level DEFAULT'ов
+    (см. `_ensure_timestamp_defaults`).
     """
     pipeline_id = db.session.execute(
         text('SELECT id FROM deal_pipeline WHERE name = :n LIMIT 1'),
@@ -108,8 +160,8 @@ def _seed_default_pipeline():
     if pipeline_id is None:
         pipeline_id = db.session.execute(
             text(
-                'INSERT INTO deal_pipeline (name, "order", active) '
-                "VALUES (:n, 0, true) RETURNING id"
+                'INSERT INTO deal_pipeline (name, "order", active, created_at, updated_at) '
+                "VALUES (:n, 0, true, NOW(), NOW()) RETURNING id"
             ),
             {'n': DEFAULT_PIPELINE_NAME},
         ).scalar()
@@ -129,8 +181,9 @@ def _seed_default_pipeline():
         if stage_id is None:
             stage_id = db.session.execute(
                 text(
-                    'INSERT INTO deal_stage (pipeline_id, name, color, "order", type) '
-                    'VALUES (:p, :n, :c, :o, :t) RETURNING id'
+                    'INSERT INTO deal_stage '
+                    '(pipeline_id, name, color, "order", type, created_at, updated_at) '
+                    'VALUES (:p, :n, :c, :o, :t, NOW(), NOW()) RETURNING id'
                 ),
                 {'p': pipeline_id, 'n': name, 'c': color, 'o': order, 't': stype},
             ).scalar()
@@ -150,7 +203,8 @@ def _seed_general_chat():
     if room_id is None:
         room_id = db.session.execute(
             text(
-                "INSERT INTO chat_room (kind, name) VALUES ('general', :n) RETURNING id"
+                "INSERT INTO chat_room (kind, name, created_at, updated_at) "
+                "VALUES ('general', :n, NOW(), NOW()) RETURNING id"
             ),
             {'n': GENERAL_CHAT_NAME},
         ).scalar()
@@ -161,8 +215,8 @@ def _seed_general_chat():
     # Добавляем всех system_user'ов которые ещё не в комнате.
     added = db.session.execute(
         text(
-            'INSERT INTO chat_member (room_id, user_id) '
-            'SELECT :r, su.id FROM system_users su '
+            'INSERT INTO chat_member (room_id, user_id, joined_at) '
+            'SELECT :r, su.id, NOW() FROM system_users su '
             'WHERE NOT EXISTS ('
             '  SELECT 1 FROM chat_member cm '
             '  WHERE cm.room_id = :r AND cm.user_id = su.id'
@@ -195,9 +249,11 @@ def _seed_internal_ingest_sources(pipeline_id, stages_by_name):
                     'INSERT INTO crm_ingest_source '
                     '(kind, source_key, name, pipeline_id, stage_id, '
                     ' title_template, notes_template, priority, '
-                    ' assignment_strategy, client_resolution, dedupe_by_ref, active) '
+                    ' assignment_strategy, client_resolution, dedupe_by_ref, active, '
+                    ' created_at, updated_at) '
                     "VALUES ('internal', :sk, :n, :p, :st, :tt, :nt, 'normal', "
-                    "        'unassigned', 'find_by_email', true, true) "
+                    "        'unassigned', 'find_by_email', true, true, "
+                    '        NOW(), NOW()) '
                     'RETURNING id'
                 ),
                 {
@@ -227,6 +283,7 @@ def _verify():
 
 def apply():
     _apply_sql()
+    _ensure_timestamp_defaults()
     print('', flush=True)
     print('=== Seed ===', flush=True)
     pipeline_id, stages_by_name = _seed_default_pipeline()
