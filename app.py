@@ -36,6 +36,7 @@ from routes.kp_share import kp_share_bp
 from routes.kp_clients import kp_clients_bp
 from routes.kp_templates import kp_templates_bp
 from routes.deal_pipelines import deal_pipelines_bp
+from routes.deals import deals_bp
 from routes.search_page import search_page_bp
 from routes.kp_logos import kp_logos_bp
 from routes.customer_activity import customer_activity_bp
@@ -115,8 +116,9 @@ def create_app():
     app.register_blueprint(kp_clients_bp, url_prefix='/api')   # /api/kp-clients
     app.register_blueprint(kp_templates_bp, url_prefix='/api') # /api/kp-templates
 
-    # 🔹 CRM: Сделки (Этап 3.1 — воронки и стадии; далее сделки, ingest)
+    # 🔹 CRM: Сделки (Этап 3.1 — воронки/стадии, 3.2 — CRUD сделок + Kanban move)
     app.register_blueprint(deal_pipelines_bp, url_prefix='/api')  # /api/admin/deal-pipelines, /api/admin/deal-stages
+    app.register_blueprint(deals_bp, url_prefix='/api')           # /api/admin/deals
     app.register_blueprint(search_page_bp, url_prefix='/api')  # /api/public/search-page, /api/admin/search-page/*
     app.register_blueprint(header_settings_bp, url_prefix='/api')  # /api/public/header, /api/admin/header/*
     app.register_blueprint(static_pages_bp, url_prefix='/api')     # /api/public/static-page/<slug>, /api/admin/static-page/<slug>
