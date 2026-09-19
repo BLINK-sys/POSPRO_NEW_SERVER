@@ -139,6 +139,31 @@ def track_request():
     db.session.add(site_request)
     db.session.commit()
 
+    # 🔹 CRM ingest: заявка с сайта → сделка в CRM (если админ включил
+    # соответствующее правило в /admin/deals/sources). Ошибка ingest'а
+    # не должна валить основной ответ клиенту — заявка уже записана.
+    try:
+        from services.crm_ingest import ingest
+        source_key = 'order' if request_type == 'order' else 'price_request'
+        ingest(source_key, {
+            'source_ref_id': str(site_request.id),
+            'client': {
+                'name': site_request.customer_name,
+                'email': site_request.customer_email,
+                'phone': site_request.customer_phone,
+            },
+            'product_name': site_request.product_name,
+            'amount': site_request.total_amount,
+            'external_url': f'/admin/customer-activity?request_id={site_request.id}',
+            'request_type': request_type,
+        })
+    except Exception as e:
+        # Тихо игнорируем — заявка в CRM это опциональный «second-write».
+        # Если сломалось — логируем в stderr, но клиенту 500 не отдаём.
+        import traceback
+        print(f'⚠️ CRM ingest failed for site_request={site_request.id}: {e}', flush=True)
+        traceback.print_exc()
+
     return jsonify({'success': True}), 200
 
 
