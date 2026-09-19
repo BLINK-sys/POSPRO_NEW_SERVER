@@ -39,6 +39,7 @@ from routes.deal_pipelines import deal_pipelines_bp
 from routes.deals import deals_bp
 from routes.crm_sources import crm_sources_bp
 from routes.crm_webhooks import crm_webhooks_bp
+from routes.tasks import tasks_bp
 from routes.search_page import search_page_bp
 from routes.kp_logos import kp_logos_bp
 from routes.customer_activity import customer_activity_bp
@@ -124,6 +125,9 @@ def create_app():
     app.register_blueprint(deals_bp, url_prefix='/api')           # /api/admin/deals
     app.register_blueprint(crm_sources_bp, url_prefix='/api')     # /api/admin/crm-sources
     app.register_blueprint(crm_webhooks_bp, url_prefix='/api')    # /api/webhooks/crm/ingest/<token>
+
+    # 🔹 CRM: Задачи (Этап 4)
+    app.register_blueprint(tasks_bp, url_prefix='/api')           # /api/admin/tasks
     app.register_blueprint(search_page_bp, url_prefix='/api')  # /api/public/search-page, /api/admin/search-page/*
     app.register_blueprint(header_settings_bp, url_prefix='/api')  # /api/public/header, /api/admin/header/*
     app.register_blueprint(static_pages_bp, url_prefix='/api')     # /api/public/static-page/<slug>, /api/admin/static-page/<slug>
