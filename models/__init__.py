@@ -31,3 +31,12 @@ from .collector import CollectorTask, CollectorFile, CollectorCommand, Collector
 from .category_alias import CategoryAlias
 from .section_card import SectionCard, SectionCardCategory
 from .customer_activity import CustomerActivity
+
+# CRM (Сделки/Задачи/Чат) — этап 1 (2026-09-19). Модели описаны в
+# `PosPro/Магазин PosPro/Доменные области/31 CRM и двумодовая навигация (планирование).md`.
+from .deal_pipeline import DealPipeline, DealStage
+from .deal import Deal, DealMember, DealKp, DealOrder, DealActivity
+from .task import Task, TaskMember, TaskChecklist, TaskActivity
+from .chat import ChatRoom, ChatMember, ChatMessage, ChatReaction, ChatAttachment
+from .entity_attachment import EntityAttachment
+from .crm_ingest_source import CrmIngestSource
