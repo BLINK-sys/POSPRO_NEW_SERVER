@@ -40,3 +40,4 @@ from .task import Task, TaskMember, TaskChecklist, TaskActivity
 from .chat import ChatRoom, ChatMember, ChatMessage, ChatReaction, ChatAttachment
 from .entity_attachment import EntityAttachment
 from .crm_ingest_source import CrmIngestSource
+from .notification import Notification, WebPushSubscription, UserPresence

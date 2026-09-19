@@ -41,6 +41,7 @@ from routes.crm_sources import crm_sources_bp
 from routes.crm_webhooks import crm_webhooks_bp
 from routes.tasks import tasks_bp
 from routes.chat import chat_bp
+from routes.notifications import notifications_bp
 from routes.search_page import search_page_bp
 from routes.kp_logos import kp_logos_bp
 from routes.customer_activity import customer_activity_bp
@@ -132,6 +133,9 @@ def create_app():
 
     # 🔹 CRM: Чат (Этап 5) — комнаты, сообщения, реакции, SSE-стрим
     app.register_blueprint(chat_bp, url_prefix='/api')            # /api/admin/chat/*
+
+    # 🔹 CRM: Уведомления (Этап 6) — bell, красные точки, Web Push, presence
+    app.register_blueprint(notifications_bp, url_prefix='/api')   # /api/admin/notifications/*
     app.register_blueprint(search_page_bp, url_prefix='/api')  # /api/public/search-page, /api/admin/search-page/*
     app.register_blueprint(header_settings_bp, url_prefix='/api')  # /api/public/header, /api/admin/header/*
     app.register_blueprint(static_pages_bp, url_prefix='/api')     # /api/public/static-page/<slug>, /api/admin/static-page/<slug>
