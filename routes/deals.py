@@ -194,6 +194,30 @@ def _deal_full_dict(deal: Deal) -> dict:
         }
         for o, order in orders
     ]
+
+    # Название источника ingest'а (для метки на карточке). Одиночный
+    # deal — точечно ищем правило, не тянем всю таблицу.
+    d['source_name'] = None
+    if deal.source_ref_type:
+        try:
+            from models.crm_ingest_source import CrmIngestSource
+            if deal.source_ref_type.startswith('webhook:'):
+                prefix = deal.source_ref_type.split(':', 1)[1]
+                for s in CrmIngestSource.query.filter(
+                    CrmIngestSource.token.isnot(None),
+                ).all():
+                    if s.token and s.token.startswith(prefix):
+                        d['source_name'] = s.name
+                        break
+            else:
+                s = CrmIngestSource.query.filter_by(
+                    source_key=deal.source_ref_type,
+                ).first()
+                if s:
+                    d['source_name'] = s.name
+        except Exception:
+            pass
+
     return d
 
 
@@ -343,9 +367,43 @@ def list_deals():
     offset = max(request.args.get('offset', 0, type=int), 0)
 
     deals = q.order_by(Deal.updated_at.desc()).limit(limit).offset(offset).all()
+
+    # Денормализуем source_name из CrmIngestSource. Собираем всех
+    # источников в один запрос: internal — по `source_key`, webhook —
+    # по префиксу токена (source_ref_type имеет форму `webhook:<8char>`).
+    # Небольшая таблица (десятки записей), берём целиком в память.
+    source_by_key: dict[str, str] = {}
+    token_pairs: list[tuple[str, str]] = []  # (token_prefix, name)
+    try:
+        from models.crm_ingest_source import CrmIngestSource
+        for s in CrmIngestSource.query.all():
+            if s.source_key:
+                source_by_key[s.source_key] = s.name
+            if s.token:
+                token_pairs.append((s.token[:8], s.name))
+    except Exception:
+        pass
+
+    def _resolve_source_name(ref_type: str | None) -> str | None:
+        if not ref_type:
+            return None
+        if ref_type.startswith('webhook:'):
+            prefix = ref_type.split(':', 1)[1]
+            for tprefix, name in token_pairs:
+                if tprefix == prefix:
+                    return name
+            return None
+        return source_by_key.get(ref_type)
+
+    out = []
+    for d in deals:
+        row = d.to_dict()
+        row['source_name'] = _resolve_source_name(d.source_ref_type)
+        out.append(row)
+
     return jsonify({
         'success': True,
-        'deals': [d.to_dict() for d in deals],
+        'deals': out,
         'total': total,
         'limit': limit,
         'offset': offset,
