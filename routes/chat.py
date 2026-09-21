@@ -385,13 +385,24 @@ def list_messages(rid):
 
     limit = min(request.args.get('limit', 50, type=int), 200)
     before = request.args.get('before', type=int)
+    # `after=<message_id>` — для мягкого polling'а из карточки сделки.
+    # Возвращаем только сообщения с id > after, в chronological order.
+    after = request.args.get('after', type=int)
 
     q = ChatMessage.query.filter(ChatMessage.room_id == rid)
     if before:
         q = q.filter(ChatMessage.id < before)
-    messages = q.order_by(ChatMessage.created_at.desc()).limit(limit).all()
-    # Возвращаем в chronological order (старые первыми) — так фронту удобнее.
-    messages.reverse()
+    if after:
+        q = q.filter(ChatMessage.id > after)
+
+    if after:
+        # asc сразу — polling ожидает старые → новые.
+        messages = q.order_by(ChatMessage.id.asc()).limit(limit).all()
+    else:
+        messages = q.order_by(ChatMessage.created_at.desc()).limit(limit).all()
+        # Возвращаем в chronological order (старые первыми) — так фронту удобнее.
+        messages.reverse()
+
     return jsonify({
         'success': True,
         'messages': [_message_dict(m) for m in messages],
