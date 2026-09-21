@@ -851,3 +851,31 @@ def task_activity(tid):
         'limit': limit,
         'offset': offset,
     }), 200
+
+
+# ============================================================================
+# Chat room helper
+# ============================================================================
+
+@tasks_bp.route('/admin/tasks/<int:tid>/chat-room', methods=['GET'])
+@jwt_required()
+def get_task_chat_room(tid):
+    """
+    Возвращает id `chat_room` типа 'task', привязанной к задаче.
+    Авто-создаётся в `create_task` крючком. Если задача старше крючка —
+    room нет, возвращаем 404, фронт покажет плейсхолдер.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+
+    role, user_id = _current_role_and_id()
+    t = _visible_tasks_query(role, user_id).filter(Task.id == tid).first()
+    if not t:
+        return jsonify({'error': 'Задача не найдена'}), 404
+
+    from models.chat import ChatRoom
+    room = ChatRoom.query.filter_by(kind='task', related_task_id=tid).first()
+    if not room:
+        return jsonify({'error': 'Чат задачи не создан'}), 404
+    return jsonify({'success': True, 'room_id': room.id}), 200

@@ -134,7 +134,11 @@ def _can_edit_deal(deal: Deal, role: str, user_id: int | None) -> bool:
 # ============================================================================
 
 def _deal_full_dict(deal: Deal) -> dict:
-    """Развёрнутое представление сделки: сама сделка + связи + relations."""
+    """
+    Развёрнутое представление сделки: сама сделка + связи + денормализованные
+    данные КП и заказов (name/amount/created_at) — чтобы фронт не делал
+    N+1 запросов при рендере вкладок.
+    """
     d = deal.to_dict()
 
     # Members с ролями.
@@ -145,21 +149,50 @@ def _deal_full_dict(deal: Deal) -> dict:
         for m in members
     ]
 
-    # Прикреплённые КП.
-    kps = DealKp.query.filter_by(deal_id=deal.id).all()
+    # Прикреплённые КП — с денормализованным именем и суммой из kp_history.
+    kps = (
+        db.session.query(DealKp, KPHistory)
+        .join(KPHistory, KPHistory.id == DealKp.kp_history_id)
+        .filter(DealKp.deal_id == deal.id)
+        .all()
+    )
     d['kps'] = [
-        {'id': k.id, 'kp_history_id': k.kp_history_id,
-         'attached_at': k.attached_at.isoformat() if k.attached_at else None,
-         'attached_by': k.attached_by}
-        for k in kps
+        {
+            'id': k.id, 'kp_history_id': k.kp_history_id,
+            'attached_at': k.attached_at.isoformat() if k.attached_at else None,
+            'attached_by': k.attached_by,
+            'kp': {
+                'id': kp.id,
+                'name': kp.name,
+                'total_amount': float(kp.total_amount or 0),
+                'signed_at': kp.signed_at.isoformat() if kp.signed_at else None,
+                'created_at': kp.created_at.isoformat() if kp.created_at else None,
+            },
+        }
+        for k, kp in kps
     ]
 
-    # Привязанные заказы.
-    orders = DealOrder.query.filter_by(deal_id=deal.id).all()
+    # Привязанные заказы — с денормализованным номером/суммой/клиентом.
+    orders = (
+        db.session.query(DealOrder, Order)
+        .join(Order, Order.id == DealOrder.order_id)
+        .filter(DealOrder.deal_id == deal.id)
+        .all()
+    )
     d['orders'] = [
-        {'id': o.id, 'order_id': o.order_id,
-         'attached_at': o.attached_at.isoformat() if o.attached_at else None}
-        for o in orders
+        {
+            'id': o.id, 'order_id': o.order_id,
+            'attached_at': o.attached_at.isoformat() if o.attached_at else None,
+            'order': {
+                'id': order.id,
+                'order_number': order.order_number,
+                'total_amount': float(order.total_amount or 0),
+                'customer_name': order.customer_name,
+                'payment_status': order.payment_status,
+                'created_at': order.created_at.isoformat() if order.created_at else None,
+            },
+        }
+        for o, order in orders
     ]
     return d
 
@@ -885,3 +918,35 @@ def deal_activity(did):
         'limit': limit,
         'offset': offset,
     }), 200
+
+
+# ============================================================================
+# Chat room helper
+# ============================================================================
+
+@deals_bp.route('/admin/deals/<int:did>/chat-room', methods=['GET'])
+@jwt_required()
+def get_deal_chat_room(did):
+    """
+    Возвращает id `chat_room` типа 'deal', привязанной к этой сделке
+    (авто-создаётся в `create_deal` крючком). Фронт-карточка сделки
+    вкладку «Чат» открывает по этому id — иначе пришлось бы искать
+    комнату в списке всех.
+
+    Не создаём room если её нет (сделка старше крючка) — просто 404,
+    фронт покажет плейсхолдер.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+
+    role, user_id = _current_role_and_id()
+    d = _visible_deals_query(role, user_id).filter(Deal.id == did).first()
+    if not d:
+        return jsonify({'error': 'Сделка не найдена'}), 404
+
+    from models.chat import ChatRoom
+    room = ChatRoom.query.filter_by(kind='deal', related_deal_id=did).first()
+    if not room:
+        return jsonify({'error': 'Чат сделки не создан'}), 404
+    return jsonify({'success': True, 'room_id': room.id}), 200
