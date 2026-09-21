@@ -54,6 +54,9 @@ class Deal(db.Model):
     name = db.Column(db.String(255), nullable=False)
     client_id = db.Column(db.Integer, db.ForeignKey('kp_client.id', ondelete='SET NULL'), nullable=True)
     responsible_user_id = db.Column(db.Integer, db.ForeignKey('system_users.id', ondelete='SET NULL'), nullable=True)
+    # Постановщик — автор сделки. Проставляется один раз при create и
+    # больше не редактируется (в UI показан readonly, как «автор» в Git).
+    creator_id = db.Column(db.Integer, db.ForeignKey('system_users.id', ondelete='SET NULL'), nullable=True)
     pipeline_id = db.Column(db.Integer, db.ForeignKey('deal_pipeline.id', ondelete='RESTRICT'), nullable=False)
     stage_id = db.Column(db.Integer, db.ForeignKey('deal_stage.id', ondelete='RESTRICT'), nullable=False)
 
@@ -89,6 +92,7 @@ class Deal(db.Model):
             'name': self.name,
             'client_id': self.client_id,
             'responsible_user_id': self.responsible_user_id,
+            'creator_id': self.creator_id,
             'pipeline_id': self.pipeline_id,
             'stage_id': self.stage_id,
             'amount': float(self.amount) if self.amount is not None else None,

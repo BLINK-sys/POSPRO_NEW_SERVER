@@ -30,6 +30,11 @@ class EntityAttachment(db.Model):
     file_size = db.Column(db.BigInteger, nullable=True)
     mime_type = db.Column(db.String(100), nullable=True)
 
+    # Пользовательский заголовок документа. Отображается в UI над файлом
+    # (например «Договор № 42» / «Скан паспорта»). Пусто → UI показывает
+    # оригинальное `file_name`.
+    title = db.Column(db.String(255), nullable=True)
+
     uploaded_by = db.Column(db.Integer, db.ForeignKey('system_users.id', ondelete='SET NULL'), nullable=True)
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -42,6 +47,7 @@ class EntityAttachment(db.Model):
             'file_name': self.file_name,
             'file_size': self.file_size,
             'mime_type': self.mime_type,
+            'title': self.title,
             'uploaded_by': self.uploaded_by,
             'uploaded_at': self.uploaded_at.isoformat() if self.uploaded_at else None,
         }

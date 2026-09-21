@@ -407,6 +407,7 @@ def create_deal():
         name=fields['name'],
         client_id=fields.get('client_id'),
         responsible_user_id=responsible,
+        creator_id=user_id,
         pipeline_id=pipeline_id,
         stage_id=stage_id,
         amount=fields.get('amount'),

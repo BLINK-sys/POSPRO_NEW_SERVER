@@ -165,6 +165,10 @@ def _upload_attachment(entity_type: str, entity_id: int):
     f.save(disk_path)
     size = os.path.getsize(disk_path)
 
+    # Заголовок (form-field) — опциональный; пусто → в UI покажется file_name.
+    raw_title = (request.form.get('title') or '').strip()
+    title = raw_title[:255] if raw_title else None
+
     att = EntityAttachment(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -172,6 +176,7 @@ def _upload_attachment(entity_type: str, entity_id: int):
         file_name=original_name,
         file_size=size,
         mime_type=(f.mimetype or None),
+        title=title,
         uploaded_by=_current_user_id(),
     )
     db.session.add(att)
@@ -230,6 +235,36 @@ def upload_task_attachment(tid):
 # ============================================================================
 # Delete / Download
 # ============================================================================
+
+@entity_attachments_bp.route('/admin/attachments/<int:aid>', methods=['PUT'])
+@jwt_required()
+def update_attachment(aid):
+    """
+    Редактирование метаданных документа. Пока — только `title`. Файл на
+    диске не трогается; чтобы «заменить файл» надо удалить и загрузить
+    новый (сохраняет историю в timestamps).
+
+    Body: {"title": "Договор № 42" | ""} — пустая строка сбрасывает
+    заголовок (UI снова покажет file_name).
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    a = EntityAttachment.query.get(aid)
+    if not a:
+        return jsonify({'error': 'Файл не найден'}), 404
+
+    data = request.get_json() or {}
+    if 'title' in data:
+        raw = data.get('title')
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            a.title = None
+        else:
+            a.title = str(raw).strip()[:255]
+
+    db.session.commit()
+    return jsonify({'success': True, 'attachment': a.to_dict()}), 200
+
 
 @entity_attachments_bp.route('/admin/attachments/<int:aid>', methods=['DELETE'])
 @jwt_required()
