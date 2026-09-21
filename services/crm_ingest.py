@@ -160,6 +160,21 @@ def _apply(rule: CrmIngestSource, payload: dict) -> IngestResult:
 
     db.session.commit()
 
+    # 7.5) Автосоздание чата для ingested-сделки. Ответственный (если
+    # есть) сразу становится участником — creator тут system, не
+    # добавляем. best-effort: сбой не валит основной путь, чат позже
+    # создастся ленивой инициализацией в GET /deals/<id>/chat-room.
+    try:
+        from models.chat import ChatRoom, ChatMember
+        chat_room = ChatRoom(kind='deal', related_deal_id=deal.id)
+        db.session.add(chat_room)
+        db.session.flush()
+        if responsible_id:
+            db.session.add(ChatMember(room_id=chat_room.id, user_id=responsible_id))
+        db.session.commit()
+    except Exception as e:
+        print(f'⚠️ ingest chat auto-create failed for deal {deal.id}: {e}', flush=True)
+
     # 8) Уведомление ответственному если назначен. best-effort — при
     # сбое ingest в целом всё равно успешен.
     if responsible_id:

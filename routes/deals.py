@@ -946,8 +946,42 @@ def get_deal_chat_room(did):
     if not d:
         return jsonify({'error': 'Сделка не найдена'}), 404
 
-    from models.chat import ChatRoom
+    from models.chat import ChatRoom, ChatMember
     room = ChatRoom.query.filter_by(kind='deal', related_deal_id=did).first()
+
+    # Ленивая инициализация. Сделки созданные через ingest/webhook (до
+    # того как эта фича появилась) чата не имели — создаём on-demand
+    # при первом входе. Также ловит старые сделки, где auto-create
+    # упал.
+    dirty = False
     if not room:
-        return jsonify({'error': 'Чат сделки не создан'}), 404
+        room = ChatRoom(kind='deal', related_deal_id=did)
+        db.session.add(room)
+        db.session.flush()
+        dirty = True
+
+    # Гарантируем membership для всех кто должен видеть чат: постановщик,
+    # ответственный, участники сделки, наблюдатели и текущий юзер
+    # (admin/system) если он их не в списках. Уникальность (room_id,
+    # user_id) обеспечивается индексом.
+    existing = {
+        cm.user_id for cm in ChatMember.query.filter_by(room_id=room.id).all()
+    }
+    to_add: set[int] = set()
+    if d.creator_id and d.creator_id not in existing:
+        to_add.add(d.creator_id)
+    if d.responsible_user_id and d.responsible_user_id not in existing:
+        to_add.add(d.responsible_user_id)
+    for m in DealMember.query.filter_by(deal_id=did).all():
+        if m.user_id not in existing:
+            to_add.add(m.user_id)
+    if user_id and user_id not in existing:
+        to_add.add(user_id)
+    for uid in to_add:
+        db.session.add(ChatMember(room_id=room.id, user_id=uid))
+        dirty = True
+
+    if dirty:
+        db.session.commit()
+
     return jsonify({'success': True, 'room_id': room.id}), 200
