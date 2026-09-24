@@ -1196,6 +1196,71 @@ def delete_product(product_id):
         db.session.rollback()
         return jsonify({'error': f'Error deleting product: {str(e)}'}), 500
 
+@products_bp.route('/brand-match', methods=['GET'])
+def brand_match():
+    """
+    Определяет, совпадает ли поисковый запрос с названием бренда, и
+    возвращает саму карточку бренда + количество товаров у него.
+
+    Нужен для UX-подсказки: юзер вводит `MHW-3BOMBER`, поиск товаров
+    находит один товар с таким именем и «прячет» 171 остальной товар
+    того же бренда. Фронт этим endpoint'ом рисует блок «Открыть бренд
+    → N товаров» над результатами.
+
+    Query params:
+      q — обязательный, минимум 2 символа
+      limit — максимум карточек (default 3)
+
+    Возвращает `{"brands": [...]}`. Сначала exact-match (case-insensitive),
+    если ничего — prefix-match. count учитывает только видимые не-draft
+    товары (для не-system юзера).
+    """
+    q = (request.args.get('q') or '').strip()
+    if len(q) < 2:
+        return jsonify({'brands': []}), 200
+    limit = min(request.args.get('limit', 3, type=int), 10)
+
+    show_hidden = _is_system_user()
+    q_lower = q.lower()
+
+    # Exact-match первым; если ничего — prefix. Не смешиваем чтобы точное
+    # совпадение всегда шло вперёд.
+    exact = Brand.query.filter(func.lower(Brand.name) == q_lower).all()
+    matches = exact
+    if not matches:
+        matches = (
+            Brand.query
+            .filter(func.lower(Brand.name).like(f'{q_lower}%'))
+            .order_by(func.length(Brand.name).asc(), Brand.name.asc())
+            .limit(limit)
+            .all()
+        )
+
+    if not matches:
+        return jsonify({'brands': []}), 200
+
+    # Считаем товары одним IN-запросом.
+    ids = [b.id for b in matches]
+    count_q = (
+        db.session.query(Product.brand_id, func.count(Product.id))
+        .filter(Product.brand_id.in_(ids), Product.is_draft == False)
+    )
+    if not show_hidden:
+        count_q = count_q.filter(Product.is_visible == True)
+    counts = dict(count_q.group_by(Product.brand_id).all())
+
+    out = []
+    for b in matches[:limit]:
+        out.append({
+            'id': b.id,
+            'name': b.name,
+            'country': b.country,
+            'image_url': b.image_url,
+            'product_count': int(counts.get(b.id, 0)),
+        })
+    return jsonify({'brands': out}), 200
+
+
 @products_bp.route('/search', methods=['GET'])
 def search_products():
     """
