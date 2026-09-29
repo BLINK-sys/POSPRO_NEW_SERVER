@@ -49,6 +49,10 @@ import json
 import time
 from datetime import datetime, timedelta
 
+import os
+import re
+import unicodedata
+
 from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
 from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity, verify_jwt_in_request
 from sqlalchemy import or_, and_, func
@@ -478,6 +482,181 @@ def send_message(rid):
         print(f'⚠️ notify (chat) failed: {e}', flush=True)
 
     return jsonify({'success': True, 'message': _message_dict(msg)}), 201
+
+
+@chat_bp.route('/admin/chat/rooms/<int:rid>/messages/upload', methods=['POST'])
+@jwt_required()
+def upload_message(rid):
+    """
+    Отправка сообщения со вложением. Multipart form-data:
+      file       — файл (можно несколько с одинаковым именем поля)
+      text       — опциональный текст сообщения
+      reply_to_id — опционально
+
+    Файл кладётся на диск под `crm_attachments/<entity_type>/<entity_id>/`
+    если комната привязана к сделке/задаче, иначе `crm_chat/<rid>/`.
+    Для deal/task-комнат параллельно создаётся `EntityAttachment` —
+    чтобы файл, прикреплённый в чате, автоматически появлялся в разделе
+    «Документы» сущности.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    _, uid = _current_role_and_id()
+
+    room = db.session.get(ChatRoom, rid)
+    if not room or not _require_membership(rid, uid):
+        return jsonify({'error': 'Комната не найдена'}), 404
+
+    files = request.files.getlist('file')
+    files = [f for f in files if f and f.filename]
+    text = (request.form.get('text') or '').strip()
+    if not files and not text:
+        return jsonify({'error': 'Нужен файл или текст'}), 400
+    if len(text) > 10_000:
+        return jsonify({'error': 'text слишком длинный (макс 10000)'}), 400
+
+    reply_to_id_raw = request.form.get('reply_to_id')
+    reply_to_id = None
+    if reply_to_id_raw:
+        try:
+            reply_to_id = int(reply_to_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'reply_to_id должен быть числом'}), 400
+        target = db.session.get(ChatMessage, reply_to_id)
+        if not target or target.room_id != rid:
+            return jsonify({'error': 'reply_to_id не из этой комнаты'}), 400
+
+    allowed = current_app.config['ALLOWED_EXTENSIONS']
+
+    def _sanitize(name: str) -> str:
+        name = unicodedata.normalize('NFKD', name)
+        name = re.sub(r'[/\\?%*:|"<>]', '_', name)
+        return name.strip() or 'file'
+
+    def _is_allowed(fn: str) -> bool:
+        return '.' in fn and fn.rsplit('.', 1)[1].lower() in allowed
+
+    # Определяем entity-контекст для параллельной записи в
+    # EntityAttachment (для «Документов» сделки/задачи).
+    entity_type: str | None = None
+    entity_id: int | None = None
+    if room.kind == 'deal' and room.related_deal_id:
+        entity_type, entity_id = 'deal', room.related_deal_id
+    elif room.kind == 'task' and room.related_task_id:
+        entity_type, entity_id = 'task', room.related_task_id
+
+    root = current_app.config['UPLOAD_FOLDER']
+    if entity_type and entity_id:
+        subfolder = os.path.join('crm_attachments', entity_type, str(entity_id))
+        url_prefix = f'/uploads/crm_attachments/{entity_type}/{entity_id}'
+    else:
+        subfolder = os.path.join('crm_chat', str(rid))
+        url_prefix = f'/uploads/crm_chat/{rid}'
+    folder = os.path.join(root, subfolder)
+    os.makedirs(folder, exist_ok=True)
+
+    # Валидация всех файлов до сохранения — так частично не сохранится.
+    for f in files:
+        if not _is_allowed(f.filename):
+            return jsonify({
+                'error': f'Тип файла не разрешён: {f.filename}',
+                'allowed': sorted(allowed),
+            }), 400
+
+    # Создаём сообщение (даже если text пустой — тогда просто вложения).
+    msg = ChatMessage(
+        room_id=rid, author_id=uid,
+        text=text or None, reply_to_id=reply_to_id,
+    )
+    db.session.add(msg)
+    db.session.flush()
+
+    # Импорт локально чтобы не тянуть при обычной отправке текста.
+    from models.entity_attachment import EntityAttachment
+
+    saved_attachments = []
+    for f in files:
+        original = _sanitize(f.filename)
+        ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
+        ext = os.path.splitext(original)[1]
+        disk_name = f'{ts}{ext}'
+        disk_path = os.path.join(folder, disk_name)
+        f.save(disk_path)
+        size = os.path.getsize(disk_path)
+        file_url = f'{url_prefix}/{disk_name}'
+
+        ca = ChatAttachment(
+            message_id=msg.id, file_url=file_url, file_name=original,
+            file_size=size, mime_type=(f.mimetype or None),
+        )
+        db.session.add(ca)
+        saved_attachments.append(ca)
+
+        # Параллельно — EntityAttachment для «Документов» сделки/задачи.
+        if entity_type and entity_id:
+            ea = EntityAttachment(
+                entity_type=entity_type, entity_id=entity_id,
+                file_url=file_url, file_name=original,
+                file_size=size, mime_type=(f.mimetype or None),
+                title=None, uploaded_by=uid,
+            )
+            db.session.add(ea)
+
+    room.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    # Уведомления как в send_message.
+    try:
+        from services.notifications import notify
+        preview = text[:80] if text else f'{len(files)} файл(ов)'
+        for m in ChatMember.query.filter(
+            ChatMember.room_id == rid,
+            ChatMember.user_id != uid,
+        ).all():
+            notify(
+                user_id=m.user_id, kind='chat_new_message',
+                section='chat', entity_type='chat_room', entity_id=rid,
+                payload={'author_id': uid, 'preview': preview,
+                         'has_attachments': True},
+            )
+        db.session.commit()
+    except Exception as e:
+        print(f'⚠️ notify (chat upload) failed: {e}', flush=True)
+
+    return jsonify({'success': True, 'message': _message_dict(msg)}), 201
+
+
+@chat_bp.route('/admin/chat/rooms/<int:rid>/read-status', methods=['GET'])
+@jwt_required()
+def read_status(rid):
+    """
+    Read-receipts для чата: возвращает `last_read_at` каждого участника
+    комнаты. Фронт сам сравнивает с `created_at` сообщения, чтобы
+    вычислить кто из членов уже прочитал именно это сообщение —
+    отдельной таблицы `chat_message_read` не заводим, обходимся
+    `chat_member.last_read_at` (обновляется при open чата / POST /read).
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    _, uid = _current_role_and_id()
+
+    room = db.session.get(ChatRoom, rid)
+    if not room or not _require_membership(rid, uid):
+        return jsonify({'error': 'Комната не найдена'}), 404
+
+    members = ChatMember.query.filter_by(room_id=rid).all()
+    return jsonify({
+        'success': True,
+        'members': [
+            {
+                'user_id': m.user_id,
+                'last_read_at': m.last_read_at.isoformat() if m.last_read_at else None,
+            }
+            for m in members
+        ],
+    }), 200
 
 
 @chat_bp.route('/admin/chat/messages/<int:mid>', methods=['PUT'])
