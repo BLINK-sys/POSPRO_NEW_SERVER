@@ -998,8 +998,38 @@ def get_task_chat_room(tid):
     if not t:
         return jsonify({'error': 'Задача не найдена'}), 404
 
-    from models.chat import ChatRoom
+    from models.chat import ChatRoom, ChatMember
     room = ChatRoom.query.filter_by(kind='task', related_task_id=tid).first()
+
+    # Ленивая инициализация (см. deals — тот же подход): старые задачи
+    # без комнаты получают её при первом входе, участники синхронизируются
+    # (creator/responsible/members/текущий юзер). Уникальность
+    # (room_id, user_id) обеспечена индексом.
+    dirty = False
     if not room:
-        return jsonify({'error': 'Чат задачи не создан'}), 404
+        room = ChatRoom(kind='task', related_task_id=tid)
+        db.session.add(room)
+        db.session.flush()
+        dirty = True
+
+    existing = {
+        cm.user_id for cm in ChatMember.query.filter_by(room_id=room.id).all()
+    }
+    to_add: set[int] = set()
+    if t.creator_id and t.creator_id not in existing:
+        to_add.add(t.creator_id)
+    if t.responsible_id and t.responsible_id not in existing:
+        to_add.add(t.responsible_id)
+    for m in TaskMember.query.filter_by(task_id=tid).all():
+        if m.user_id not in existing:
+            to_add.add(m.user_id)
+    if user_id and user_id not in existing:
+        to_add.add(user_id)
+    for uid in to_add:
+        db.session.add(ChatMember(room_id=room.id, user_id=uid))
+        dirty = True
+
+    if dirty:
+        db.session.commit()
+
     return jsonify({'success': True, 'room_id': room.id}), 200
