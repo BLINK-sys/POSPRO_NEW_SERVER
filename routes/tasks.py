@@ -143,24 +143,21 @@ def _task_full_dict(task: Task) -> dict:
         for c in checklist
     ]
 
-    # Денормализованное имя «проекта» для колонки в таблице задач:
-    # сначала пробуем сделку (deal.name), затем справочник проектов.
-    d['project'] = None
+    # Денормализованные ссылки для колонки «Проект» в таблице задач.
+    # Задача может быть привязана и к сделке, и к проекту одновременно
+    # (независимые FK), поэтому возвращаем оба поля отдельно. Фронт сам
+    # решает как показывать (обычно оба чипа).
+    d['deal_ref'] = None
+    d['project_ref'] = None
     if task.deal_id:
         deal = Deal.query.get(task.deal_id)
         if deal:
-            d['project'] = {
-                'kind': 'deal', 'id': deal.id, 'name': deal.name,
-                'color': None,
-            }
-    if not d['project'] and task.project_id:
+            d['deal_ref'] = {'id': deal.id, 'name': deal.name}
+    if task.project_id:
         from models.project import Project
         pr = Project.query.get(task.project_id)
         if pr:
-            d['project'] = {
-                'kind': 'project', 'id': pr.id, 'name': pr.name,
-                'color': pr.color,
-            }
+            d['project_ref'] = {'id': pr.id, 'name': pr.name, 'color': pr.color}
     return d
 
 
@@ -358,9 +355,10 @@ def list_tasks():
 
     tasks = q.order_by(Task.updated_at.desc()).limit(limit).offset(offset).all()
 
-    # Денормализуем project для колонки: сделка первее, потом project.
+    # Денормализуем сделку и проект отдельно — задача может быть
+    # привязана к обоим сразу. Оба батчим одним запросом на тип.
     deal_ids = {t.deal_id for t in tasks if t.deal_id}
-    proj_ids = {t.project_id for t in tasks if t.project_id and not t.deal_id}
+    proj_ids = {t.project_id for t in tasks if t.project_id}
     deals_map: dict[int, Deal] = {}
     projs_map: dict[int, object] = {}
     if deal_ids:
@@ -376,20 +374,14 @@ def list_tasks():
     out = []
     for t in tasks:
         row = t.to_dict()
-        project_ref = None
+        row['deal_ref'] = None
+        row['project_ref'] = None
         if t.deal_id and t.deal_id in deals_map:
             deal = deals_map[t.deal_id]
-            project_ref = {
-                'kind': 'deal', 'id': deal.id, 'name': deal.name,
-                'color': None,
-            }
-        elif t.project_id and t.project_id in projs_map:
+            row['deal_ref'] = {'id': deal.id, 'name': deal.name}
+        if t.project_id and t.project_id in projs_map:
             pr = projs_map[t.project_id]
-            project_ref = {
-                'kind': 'project', 'id': pr.id, 'name': pr.name,
-                'color': pr.color,
-            }
-        row['project'] = project_ref
+            row['project_ref'] = {'id': pr.id, 'name': pr.name, 'color': pr.color}
         out.append(row)
 
     return jsonify({
