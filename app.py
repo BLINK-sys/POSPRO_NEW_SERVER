@@ -40,6 +40,7 @@ from routes.deals import deals_bp
 from routes.crm_sources import crm_sources_bp
 from routes.crm_webhooks import crm_webhooks_bp
 from routes.tasks import tasks_bp
+from routes.projects import projects_bp
 from routes.chat import chat_bp
 from routes.notifications import notifications_bp
 from routes.entity_attachments import entity_attachments_bp
@@ -131,6 +132,7 @@ def create_app():
 
     # 🔹 CRM: Задачи (Этап 4)
     app.register_blueprint(tasks_bp, url_prefix='/api')           # /api/admin/tasks
+    app.register_blueprint(projects_bp, url_prefix='/api')        # /api/admin/projects
 
     # 🔹 CRM: Чат (Этап 5) — комнаты, сообщения, реакции, SSE-стрим
     app.register_blueprint(chat_bp, url_prefix='/api')            # /api/admin/chat/*

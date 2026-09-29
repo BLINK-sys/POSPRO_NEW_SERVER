@@ -138,9 +138,29 @@ def _task_full_dict(task: Task) -> dict:
         .order_by(TaskChecklist.order, TaskChecklist.id).all()
     )
     d['checklist'] = [
-        {'id': c.id, 'text': c.text, 'done': bool(c.done), 'order': c.order}
+        {'id': c.id, 'text': c.text, 'done': bool(c.done),
+         'order': c.order, 'group_name': c.group_name}
         for c in checklist
     ]
+
+    # Денормализованное имя «проекта» для колонки в таблице задач:
+    # сначала пробуем сделку (deal.name), затем справочник проектов.
+    d['project'] = None
+    if task.deal_id:
+        deal = Deal.query.get(task.deal_id)
+        if deal:
+            d['project'] = {
+                'kind': 'deal', 'id': deal.id, 'name': deal.name,
+                'color': None,
+            }
+    if not d['project'] and task.project_id:
+        from models.project import Project
+        pr = Project.query.get(task.project_id)
+        if pr:
+            d['project'] = {
+                'kind': 'project', 'id': pr.id, 'name': pr.name,
+                'color': pr.color,
+            }
     return d
 
 
@@ -174,7 +194,7 @@ def _parse_task_payload(data: dict, *, partial: bool = False):
         if s:
             fields['status'] = s
 
-    for k in ('responsible_id', 'deal_id', 'client_id'):
+    for k in ('responsible_id', 'deal_id', 'client_id', 'project_id'):
         if k in data:
             v = data[k]
             if v is None or v == '':
@@ -206,7 +226,7 @@ def _parse_task_payload(data: dict, *, partial: bool = False):
 
 
 def _validate_refs(fields: dict):
-    """Проверяет что responsible_id/deal_id/client_id существуют."""
+    """Проверяет что responsible_id/deal_id/client_id/project_id существуют."""
     if fields.get('responsible_id'):
         if not SystemUser.query.get(fields['responsible_id']):
             return False, 'Ответственный не найден'
@@ -216,6 +236,10 @@ def _validate_refs(fields: dict):
     if fields.get('client_id'):
         if not KpClient.query.get(fields['client_id']):
             return False, 'Клиент не найден'
+    if fields.get('project_id'):
+        from models.project import Project
+        if not Project.query.get(fields['project_id']):
+            return False, 'Проект не найден'
     return True, None
 
 
@@ -242,10 +266,20 @@ def list_tasks():
       creator_id      — задачи созданные этим менеджером
       deal_id         — задачи привязанные к сделке
       client_id       — задачи привязанные к клиенту
-      mine=1          — только мои (creator=me OR responsible=me)
+      project_id      — задачи в этом проекте (справочник)
+      mine=1          — только мои (creator=me OR responsible=me OR member=me)
+      role_as         — фильтр по МОЕЙ роли в задаче:
+                          creator      — я поставил (creator=me)
+                          responsible  — я исполнитель (responsible=me)
+                          coworker     — я соисполнитель (member.role='co-worker')
+                          observer     — я наблюдатель (member.role='observer')
+                        Игнорируется если mine не задан.
       overdue=1       — просроченные (due_at < now AND status != done)
       q               — поиск по title
       limit / offset  — пагинация
+
+    Возвращает `tasks` с денормализованным `project` (сделка или проект)
+    для колонки в таблице — фронт не делает N+1 запросов.
     """
     err = _check_admin_or_system()
     if err:
@@ -260,7 +294,9 @@ def list_tasks():
     creator_id = request.args.get('creator_id', type=int)
     deal_id = request.args.get('deal_id', type=int)
     client_id = request.args.get('client_id', type=int)
+    project_id = request.args.get('project_id', type=int)
     mine = request.args.get('mine') == '1'
+    role_as = (request.args.get('role_as') or '').strip().lower()
     overdue = request.args.get('overdue') == '1'
     search = (request.args.get('q') or '').strip()
 
@@ -268,8 +304,37 @@ def list_tasks():
         q = q.filter(Task.status == status)
     if priority in TASK_PRIORITIES:
         q = q.filter(Task.priority == priority)
+
     if mine and user_id:
-        q = q.filter(or_(Task.creator_id == user_id, Task.responsible_id == user_id))
+        if role_as == 'creator':
+            q = q.filter(Task.creator_id == user_id)
+        elif role_as == 'responsible':
+            q = q.filter(Task.responsible_id == user_id)
+        elif role_as in ('coworker', 'co-worker'):
+            q = q.filter(Task.id.in_(
+                db.session.query(TaskMember.task_id).filter(
+                    TaskMember.user_id == user_id,
+                    TaskMember.role == 'co-worker',
+                )
+            ))
+        elif role_as == 'observer':
+            q = q.filter(Task.id.in_(
+                db.session.query(TaskMember.task_id).filter(
+                    TaskMember.user_id == user_id,
+                    TaskMember.role == 'observer',
+                )
+            ))
+        else:
+            # «Все роли»: creator OR responsible OR member.
+            q = q.filter(or_(
+                Task.creator_id == user_id,
+                Task.responsible_id == user_id,
+                Task.id.in_(
+                    db.session.query(TaskMember.task_id).filter(
+                        TaskMember.user_id == user_id,
+                    )
+                ),
+            ))
     else:
         if responsible_id:
             q = q.filter(Task.responsible_id == responsible_id)
@@ -279,6 +344,8 @@ def list_tasks():
         q = q.filter(Task.deal_id == deal_id)
     if client_id:
         q = q.filter(Task.client_id == client_id)
+    if project_id:
+        q = q.filter(Task.project_id == project_id)
     if overdue:
         q = q.filter(Task.due_at.isnot(None), Task.due_at < datetime.utcnow(), Task.status != 'done')
     if search:
@@ -290,9 +357,44 @@ def list_tasks():
     offset = max(request.args.get('offset', 0, type=int), 0)
 
     tasks = q.order_by(Task.updated_at.desc()).limit(limit).offset(offset).all()
+
+    # Денормализуем project для колонки: сделка первее, потом project.
+    deal_ids = {t.deal_id for t in tasks if t.deal_id}
+    proj_ids = {t.project_id for t in tasks if t.project_id and not t.deal_id}
+    deals_map: dict[int, Deal] = {}
+    projs_map: dict[int, object] = {}
+    if deal_ids:
+        deals_map = {
+            d.id: d for d in Deal.query.filter(Deal.id.in_(deal_ids)).all()
+        }
+    if proj_ids:
+        from models.project import Project
+        projs_map = {
+            p.id: p for p in Project.query.filter(Project.id.in_(proj_ids)).all()
+        }
+
+    out = []
+    for t in tasks:
+        row = t.to_dict()
+        project_ref = None
+        if t.deal_id and t.deal_id in deals_map:
+            deal = deals_map[t.deal_id]
+            project_ref = {
+                'kind': 'deal', 'id': deal.id, 'name': deal.name,
+                'color': None,
+            }
+        elif t.project_id and t.project_id in projs_map:
+            pr = projs_map[t.project_id]
+            project_ref = {
+                'kind': 'project', 'id': pr.id, 'name': pr.name,
+                'color': pr.color,
+            }
+        row['project'] = project_ref
+        out.append(row)
+
     return jsonify({
         'success': True,
-        'tasks': [t.to_dict() for t in tasks],
+        'tasks': out,
         'total': total,
         'limit': limit,
         'offset': offset,
@@ -662,7 +764,8 @@ def list_checklist(tid):
     return jsonify({
         'success': True,
         'checklist': [
-            {'id': c.id, 'text': c.text, 'done': bool(c.done), 'order': c.order}
+            {'id': c.id, 'text': c.text, 'done': bool(c.done),
+             'order': c.order, 'group_name': c.group_name}
             for c in items
         ],
     }), 200
@@ -671,7 +774,14 @@ def list_checklist(tid):
 @tasks_bp.route('/admin/tasks/<int:tid>/checklist', methods=['POST'])
 @jwt_required()
 def add_checklist_item(tid):
-    """Body: {"text": "..."}"""
+    """
+    Body: {"text": "...", "group_name": "Астана" | null}
+
+    `group_name` — опциональный заголовок группы. NULL или отсутствует =
+    без группы; UI покажет такие пункты под шапкой «Общее». Пустая строка
+    трактуется как NULL. Группировка вычислимая: одинаковый group_name у
+    двух пунктов означает одну группу.
+    """
     err = _check_admin_or_system()
     if err:
         return err
@@ -690,19 +800,27 @@ def add_checklist_item(tid):
     if len(text) > 500:
         return jsonify({'error': 'text слишком длинный (макс 500)'}), 400
 
+    group_name = (data.get('group_name') or '').strip() or None
+    if group_name and len(group_name) > 120:
+        return jsonify({'error': 'group_name слишком длинный (макс 120)'}), 400
+
     max_order = db.session.query(
         db.func.coalesce(db.func.max(TaskChecklist.order), -1)
     ).filter_by(task_id=tid).scalar()
 
-    item = TaskChecklist(task_id=tid, text=text, done=False, order=int(max_order) + 1)
+    item = TaskChecklist(
+        task_id=tid, text=text, done=False,
+        order=int(max_order) + 1, group_name=group_name,
+    )
     db.session.add(item)
     db.session.add(TaskActivity(
         task_id=tid, user_id=user_id, kind='checklist_added',
-        payload={'text': text},
+        payload={'text': text, 'group_name': group_name},
     ))
     db.session.commit()
     return jsonify({'success': True, 'item': {
-        'id': item.id, 'text': item.text, 'done': bool(item.done), 'order': item.order,
+        'id': item.id, 'text': item.text, 'done': bool(item.done),
+        'order': item.order, 'group_name': item.group_name,
     }}), 201
 
 
@@ -739,6 +857,11 @@ def update_checklist_item(tid, iid):
         if len(new_text) > 500:
             return jsonify({'error': 'text слишком длинный (макс 500)'}), 400
         item.text = new_text
+    if 'group_name' in data:
+        gv = (data.get('group_name') or '').strip() or None
+        if gv and len(gv) > 120:
+            return jsonify({'error': 'group_name слишком длинный (макс 120)'}), 400
+        item.group_name = gv
 
     if activity_kind:
         db.session.add(TaskActivity(
@@ -748,7 +871,8 @@ def update_checklist_item(tid, iid):
 
     db.session.commit()
     return jsonify({'success': True, 'item': {
-        'id': item.id, 'text': item.text, 'done': bool(item.done), 'order': item.order,
+        'id': item.id, 'text': item.text, 'done': bool(item.done),
+        'order': item.order, 'group_name': item.group_name,
     }}), 200
 
 

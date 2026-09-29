@@ -57,6 +57,10 @@ class Task(db.Model):
     # Опциональные привязки — задача может быть свободной.
     deal_id = db.Column(db.Integer, db.ForeignKey('deal.id', ondelete='SET NULL'), nullable=True)
     client_id = db.Column(db.Integer, db.ForeignKey('kp_client.id', ondelete='SET NULL'), nullable=True)
+    # Ссылка на проект (справочник). Альтернатива deal_id для колонки
+    # «Проект» в таблице задач: если задача связана со сделкой — берётся
+    # имя сделки, иначе — имя проекта (см. UI-логику).
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id', ondelete='SET NULL'), nullable=True)
 
     started_at = db.Column(db.DateTime, nullable=True)   # когда перевели в in_progress
     due_at = db.Column(db.DateTime, nullable=True)
@@ -91,6 +95,7 @@ class Task(db.Model):
             'responsible_id': self.responsible_id,
             'deal_id': self.deal_id,
             'client_id': self.client_id,
+            'project_id': self.project_id,
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'due_at': self.due_at.isoformat() if self.due_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
@@ -125,6 +130,11 @@ class TaskChecklist(db.Model):
     text = db.Column(db.String(500), nullable=False)
     done = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
     order = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))
+    # Имя чек-листа (например «Астана», «Алматы»). NULL — пункт без
+    # группы; UI покажет их под заголовком «Общее». Группировка чисто
+    # логическая — считаем по значению этого поля, отдельной таблицы
+    # чек-листов нет.
+    group_name = db.Column(db.String(120), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
 

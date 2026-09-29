@@ -37,6 +37,7 @@ from .customer_activity import CustomerActivity
 from .deal_pipeline import DealPipeline, DealStage
 from .deal import Deal, DealMember, DealKp, DealOrder, DealActivity
 from .task import Task, TaskMember, TaskChecklist, TaskActivity
+from .project import Project
 from .chat import ChatRoom, ChatMember, ChatMessage, ChatReaction, ChatAttachment
 from .entity_attachment import EntityAttachment
 from .crm_ingest_source import CrmIngestSource
