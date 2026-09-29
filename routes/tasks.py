@@ -139,7 +139,8 @@ def _task_full_dict(task: Task) -> dict:
     )
     d['checklist'] = [
         {'id': c.id, 'text': c.text, 'done': bool(c.done),
-         'order': c.order, 'group_name': c.group_name}
+         'order': c.order, 'group_name': c.group_name,
+         'depends_on_group': c.depends_on_group}
         for c in checklist
     ]
 
@@ -757,7 +758,8 @@ def list_checklist(tid):
         'success': True,
         'checklist': [
             {'id': c.id, 'text': c.text, 'done': bool(c.done),
-             'order': c.order, 'group_name': c.group_name}
+             'order': c.order, 'group_name': c.group_name,
+             'depends_on_group': c.depends_on_group}
             for c in items
         ],
     }), 200
@@ -796,6 +798,10 @@ def add_checklist_item(tid):
     if group_name and len(group_name) > 120:
         return jsonify({'error': 'group_name слишком длинный (макс 120)'}), 400
 
+    depends_on = (data.get('depends_on_group') or '').strip() or None
+    if depends_on and len(depends_on) > 120:
+        return jsonify({'error': 'depends_on_group слишком длинный (макс 120)'}), 400
+
     max_order = db.session.query(
         db.func.coalesce(db.func.max(TaskChecklist.order), -1)
     ).filter_by(task_id=tid).scalar()
@@ -803,16 +809,19 @@ def add_checklist_item(tid):
     item = TaskChecklist(
         task_id=tid, text=text, done=False,
         order=int(max_order) + 1, group_name=group_name,
+        depends_on_group=depends_on,
     )
     db.session.add(item)
     db.session.add(TaskActivity(
         task_id=tid, user_id=user_id, kind='checklist_added',
-        payload={'text': text, 'group_name': group_name},
+        payload={'text': text, 'group_name': group_name,
+                 'depends_on_group': depends_on},
     ))
     db.session.commit()
     return jsonify({'success': True, 'item': {
         'id': item.id, 'text': item.text, 'done': bool(item.done),
         'order': item.order, 'group_name': item.group_name,
+        'depends_on_group': item.depends_on_group,
     }}), 201
 
 
@@ -854,6 +863,11 @@ def update_checklist_item(tid, iid):
         if gv and len(gv) > 120:
             return jsonify({'error': 'group_name слишком длинный (макс 120)'}), 400
         item.group_name = gv
+    if 'depends_on_group' in data:
+        dv = (data.get('depends_on_group') or '').strip() or None
+        if dv and len(dv) > 120:
+            return jsonify({'error': 'depends_on_group слишком длинный (макс 120)'}), 400
+        item.depends_on_group = dv
 
     if activity_kind:
         db.session.add(TaskActivity(
@@ -865,6 +879,7 @@ def update_checklist_item(tid, iid):
     return jsonify({'success': True, 'item': {
         'id': item.id, 'text': item.text, 'done': bool(item.done),
         'order': item.order, 'group_name': item.group_name,
+        'depends_on_group': item.depends_on_group,
     }}), 200
 
 

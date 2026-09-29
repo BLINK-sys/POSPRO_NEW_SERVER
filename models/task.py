@@ -135,6 +135,12 @@ class TaskChecklist(db.Model):
     # логическая — считаем по значению этого поля, отдельной таблицы
     # чек-листов нет.
     group_name = db.Column(db.String(120), nullable=True)
+    # Зависимость этой группы от другой: пока `depends_on_group`-группа
+    # не завершена на 100 процентов, эта группа блокируется в UI (пункты
+    # нельзя отмечать). Значение — имя group_name в той же задаче.
+    # NULL = независимо. Хранится в каждом пункте, но по факту у всех
+    # пунктов одной группы одинаковое значение (UI это гарантирует).
+    depends_on_group = db.Column(db.String(120), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
 
