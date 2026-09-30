@@ -821,10 +821,11 @@ def chat_stream():
     секунду. Ping каждые 25 сек чтобы прокси не рвали keep-alive.
 
     Events:
-      event: message   — новое сообщение (или edited/deleted)
-      event: reaction  — изменена реакция
-      event: read      — участник комнаты обновил last_read_at (для «глаза»)
-      : ping <ts>      — heartbeat
+      event: message       — новое сообщение (или edited/deleted)
+      event: reaction      — изменена реакция
+      event: read          — участник комнаты обновил last_read_at (для «глаза»)
+      event: notification  — новая запись в notification (bell + звук)
+      : ping <ts>          — heartbeat
 
     Клиент запоминает `last_message_id` и переподключается — не
     гарантируем at-least-once, но простая переустановка после разрыва
@@ -848,9 +849,20 @@ def chat_stream():
         with app.app_context():
             last_message_id = request.args.get('since', type=int) or 0
             last_reaction_id = request.args.get('since_reaction', type=int) or 0
-            # Ловим только read-события ПОСЛЕ подключения — старые reads
-            # клиент и так забрал первичным snapshot'ом /read-status.
+            # Notification для этого юзера: стартуем с максимального
+            # существующего id — старые не пересылаем (bell-панель их
+            # покажет через /admin/notifications).
+            from models.notification import Notification as _NModel
+            last_notif_row = (
+                _NModel.query.filter_by(user_id=uid)
+                .order_by(_NModel.id.desc()).first()
+            )
+            last_notification_id = last_notif_row.id if last_notif_row else 0
+            # Ловим только read/edit/delete события ПОСЛЕ подключения —
+            # старые клиент забрал первичным snapshot'ом.
             last_read_check = datetime.utcnow()
+            last_edit_check = datetime.utcnow()
+            last_delete_check = datetime.utcnow()
             last_ping = time.time()
 
             while True:
@@ -905,6 +917,39 @@ def chat_stream():
                     last_reaction_id = r.id
                     last_ping = time.time()
 
+                # Отредактированные и удалённые сообщения. Тем же event: message
+                # шлём обновлённый _message_dict — фронт-mergeMessages
+                # заменит по id. Клиент видит правку/удаление без F5.
+                now_edit = datetime.utcnow()
+                edited_msgs = (
+                    ChatMessage.query.filter(
+                        ChatMessage.room_id.in_(my_rooms),
+                        ChatMessage.edited_at.isnot(None),
+                        ChatMessage.edited_at > last_edit_check,
+                    )
+                    .limit(50)
+                    .all()
+                )
+                deleted_msgs = (
+                    ChatMessage.query.filter(
+                        ChatMessage.room_id.in_(my_rooms),
+                        ChatMessage.deleted_at.isnot(None),
+                        ChatMessage.deleted_at > last_delete_check,
+                    )
+                    .limit(50)
+                    .all()
+                )
+                seen_ids = set()
+                for m in (list(edited_msgs) + list(deleted_msgs)):
+                    if m.id in seen_ids:
+                        continue
+                    seen_ids.add(m.id)
+                    payload = json.dumps(_message_dict(m), ensure_ascii=False, default=str)
+                    yield f'event: message\ndata: {payload}\n\n'
+                    last_ping = time.time()
+                last_edit_check = now_edit
+                last_delete_check = now_edit
+
                 # Свежие read-receipts от других участников.
                 # Фильтр: чужие read-marks (свои клиент и так знает), в
                 # моих комнатах, обновлённые с прошлой итерации. Клиент
@@ -930,6 +975,25 @@ def chat_stream():
                     yield f'event: read\ndata: {payload}\n\n'
                     last_ping = time.time()
                 last_read_check = now_check
+
+                # Свежие Notification для этого юзера — bell-панель и
+                # звук на разные типы (deal_assigned / task_assigned /
+                # chat_new_message / …).
+                from models.notification import Notification as _N
+                new_notifs = (
+                    _N.query.filter(
+                        _N.user_id == uid,
+                        _N.id > last_notification_id,
+                    )
+                    .order_by(_N.id.asc())
+                    .limit(50)
+                    .all()
+                )
+                for n in new_notifs:
+                    payload = json.dumps(n.to_dict(), ensure_ascii=False, default=str)
+                    yield f'event: notification\ndata: {payload}\n\n'
+                    last_notification_id = n.id
+                    last_ping = time.time()
 
                 if time.time() - last_ping > 25:
                     yield f': ping {int(time.time())}\n\n'
