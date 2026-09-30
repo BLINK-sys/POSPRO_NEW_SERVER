@@ -1057,6 +1057,10 @@ def get_deal_chat_room(did):
         allowed_ids.add(d.responsible_user_id)
     for m in DealMember.query.filter_by(deal_id=did).all():
         allowed_ids.add(m.user_id)
+    # Admin получает membership автоматически — это владелец компании,
+    # он имеет право заглянуть в любой чат сделки.
+    if role == 'admin' and user_id:
+        allowed_ids.add(user_id)
     for uid in allowed_ids - existing:
         db.session.add(ChatMember(room_id=room.id, user_id=uid))
         dirty = True
@@ -1064,7 +1068,7 @@ def get_deal_chat_room(did):
     if dirty:
         db.session.commit()
 
-    # Права: чат видит только тот, кто в списке участников или admin.
+    # system-юзер, не связанный со сделкой, — не пускаем.
     if role != 'admin' and user_id not in allowed_ids:
         return jsonify({'error': 'Нет доступа к чату сделки'}), 403
 

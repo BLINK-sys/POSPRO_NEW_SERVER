@@ -1051,6 +1051,9 @@ def get_task_chat_room(tid):
         allowed_ids.add(t.responsible_id)
     for m in TaskMember.query.filter_by(task_id=tid).all():
         allowed_ids.add(m.user_id)
+    # Admin получает membership автоматически — владелец компании.
+    if role == 'admin' and user_id:
+        allowed_ids.add(user_id)
     for uid in allowed_ids - existing:
         db.session.add(ChatMember(room_id=room.id, user_id=uid))
         dirty = True
@@ -1058,7 +1061,7 @@ def get_task_chat_room(tid):
     if dirty:
         db.session.commit()
 
-    # Права: чат видит только явный участник или admin.
+    # system-юзер, не связанный с задачей, — не пускаем.
     if role != 'admin' and user_id not in allowed_ids:
         return jsonify({'error': 'Нет доступа к чату задачи'}), 403
 
