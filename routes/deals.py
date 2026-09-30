@@ -100,19 +100,25 @@ def _check_admin_or_system():
 
 def _visible_deals_query(role: str, user_id: int | None):
     """
-    Возвращает базовый query, отфильтрованный по правилам видимости.
-    admin — все сделки. system — свои (responsible=me) + где я участник.
+    Правила видимости:
+      - owner (is_owner=True) → все сделки.
+      - обычный SystemUser с can_see_all_deals=True → все сделки.
+      - остальные SystemUser → creator=me OR responsible=me OR я в DealMember.
+
+    Роль в JWT (role='admin' у всех SystemUser) больше не даёт полный
+    список — специальные права живут в БД в system_users. См. services/perms.
     """
+    from services.perms import can_see_all_deals as _cs
     q = Deal.query
-    if role == 'admin':
-        return q
     if not user_id:
-        return q.filter(db.text('1=0'))  # никаких сделок
-    # LEFT JOIN на deal_member по (deal_id=deal.id, user_id=me), потом OR.
+        return q.filter(db.text('1=0'))
+    if _cs(user_id):
+        return q
     q = q.outerjoin(
         DealMember,
         and_(DealMember.deal_id == Deal.id, DealMember.user_id == user_id),
     ).filter(or_(
+        Deal.creator_id == user_id,
         Deal.responsible_user_id == user_id,
         DealMember.id.isnot(None),
     )).distinct()
@@ -121,13 +127,17 @@ def _visible_deals_query(role: str, user_id: int | None):
 
 def _can_edit_deal(deal: Deal, role: str, user_id: int | None) -> bool:
     """
-    admin — правит любую сделку.
-    system — правит если я responsible ИЛИ участник (participant, не observer).
+    owner — правит любую сделку.
+    остальные — правят если я creator, responsible, или участник
+    (participant, не observer).
     """
-    if role == 'admin':
-        return True
+    from services.perms import is_owner as _is_owner
     if not user_id:
         return False
+    if _is_owner(user_id):
+        return True
+    if deal.creator_id == user_id:
+        return True
     if deal.responsible_user_id == user_id:
         return True
     member = DealMember.query.filter_by(deal_id=deal.id, user_id=user_id).first()
@@ -605,7 +615,10 @@ def delete_deal(did):
     d = Deal.query.get(did)
     if not d:
         return jsonify({'error': 'Сделка не найдена'}), 404
-    if role != 'admin' and d.responsible_user_id != user_id:
+    # Удалять могут только owner и постановщик (creator). Ответственный
+    # без прав creator/owner удалить не может — только править.
+    from services.perms import is_owner as _is_owner
+    if not (_is_owner(user_id) or d.creator_id == user_id):
         return jsonify({'error': 'Нет прав удалить'}), 403
 
     # Чат сделки: если пусто — уходит CASCADE вместе со сделкой. Если
@@ -1077,9 +1090,9 @@ def get_deal_chat_room(did):
         allowed_ids.add(d.responsible_user_id)
     for m in DealMember.query.filter_by(deal_id=did).all():
         allowed_ids.add(m.user_id)
-    # Admin получает membership автоматически — это владелец компании,
-    # он имеет право заглянуть в любой чат сделки.
-    if role == 'admin' and user_id:
+    # Owner получает membership автоматически — заглядывает в любой чат.
+    from services.perms import is_owner as _is_owner
+    if _is_owner(user_id):
         allowed_ids.add(user_id)
     for uid in allowed_ids - existing:
         db.session.add(ChatMember(room_id=room.id, user_id=uid))
@@ -1088,8 +1101,8 @@ def get_deal_chat_room(did):
     if dirty:
         db.session.commit()
 
-    # system-юзер, не связанный со сделкой, — не пускаем.
-    if role != 'admin' and user_id not in allowed_ids:
+    # Все остальные — только если явный участник сделки.
+    if user_id not in allowed_ids:
         return jsonify({'error': 'Нет доступа к чату сделки'}), 403
 
     return jsonify({'success': True, 'room_id': room.id}), 200

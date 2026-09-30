@@ -27,6 +27,10 @@ def get_profile():
             'fullName': user.full_name,
             'email': user.email,
             'phone': user.phone,
+            'is_owner': bool(user.is_owner),
+            'can_see_all_deals': bool(user.can_see_all_deals),
+            'can_see_all_tasks': bool(user.can_see_all_tasks),
+            'can_manage_pipelines': bool(user.can_manage_pipelines),
             'access': {
                 'orders': user.access_orders,
                 'catalog': user.access_catalog,

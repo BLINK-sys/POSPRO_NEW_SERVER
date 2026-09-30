@@ -33,6 +33,12 @@ class SystemUser(db.Model):
     access_statuses = db.Column(db.Boolean, default=False)
     access_pages = db.Column(db.Boolean, default=False)
 
+    # Специальные CRM-права. Владельцу (is_owner=True) не нужны — он и так
+    # видит и может всё. Управляются со страницы «Права доступа» owner'ом.
+    can_see_all_deals = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
+    can_see_all_tasks = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
+    can_manage_pipelines = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 

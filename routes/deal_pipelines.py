@@ -44,12 +44,18 @@ deal_pipelines_bp = Blueprint('deal_pipelines', __name__)
 
 def _check_admin_only():
     """
-    Воронки/стадии настраивает только `role='admin'`. Менеджеры (system)
-    редактируют СДЕЛКИ но не структуру воронки.
+    Воронки/стадии настраивает только владелец (is_owner) или юзер с
+    флагом can_manage_pipelines. Все остальные (даже role='admin' в JWT
+    для обычных менеджеров) — только чтение.
     """
-    role = (get_jwt() or {}).get('role')
-    if role != 'admin':
-        return jsonify({'error': 'Настройка воронок доступна только администратору'}), 403
+    from flask_jwt_extended import get_jwt_identity
+    from services.perms import can_manage_pipelines as _cmp
+    try:
+        uid = int(get_jwt_identity()) if get_jwt_identity() else None
+    except (TypeError, ValueError):
+        uid = None
+    if not _cmp(uid):
+        return jsonify({'error': 'Настройка воронок доступна только владельцу и уполномоченным'}), 403
     return None
 
 

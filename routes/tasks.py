@@ -91,14 +91,17 @@ def _check_admin_or_system():
 
 def _visible_tasks_query(role: str, user_id: int | None):
     """
-    admin — все задачи. system — свои: creator=me ИЛИ responsible=me ИЛИ
-    я в task_member.
+    Правила видимости:
+      - owner (is_owner=True) → все задачи.
+      - can_see_all_tasks=True → все задачи.
+      - остальные → creator=me OR responsible=me OR я в TaskMember.
     """
+    from services.perms import can_see_all_tasks as _cs
     q = Task.query
-    if role == 'admin':
-        return q
     if not user_id:
         return q.filter(db.text('1=0'))
+    if _cs(user_id):
+        return q
     q = q.outerjoin(
         TaskMember,
         and_(TaskMember.task_id == Task.id, TaskMember.user_id == user_id),
@@ -112,14 +115,15 @@ def _visible_tasks_query(role: str, user_id: int | None):
 
 def _can_edit_task(task: Task, role: str, user_id: int | None) -> bool:
     """
-    admin — правит любую.
-    system — правит если responsible=me ИЛИ creator=me ИЛИ member.role='co-worker'.
-    observer в task_member — read-only.
+    owner — правит любую.
+    остальные — правят если responsible=me ИЛИ creator=me ИЛИ
+    member.role='co-worker'. observer в task_member — read-only.
     """
-    if role == 'admin':
-        return True
+    from services.perms import is_owner as _is_owner
     if not user_id:
         return False
+    if _is_owner(user_id):
+        return True
     if task.responsible_id == user_id or task.creator_id == user_id:
         return True
     member = TaskMember.query.filter_by(task_id=task.id, user_id=user_id).first()
@@ -556,7 +560,9 @@ def delete_task(tid):
     t = Task.query.get(tid)
     if not t:
         return jsonify({'error': 'Задача не найдена'}), 404
-    if role != 'admin' and t.creator_id != user_id and t.responsible_id != user_id:
+    # Удалять могут только owner и постановщик (creator).
+    from services.perms import is_owner as _is_owner
+    if not (_is_owner(user_id) or t.creator_id == user_id):
         return jsonify({'error': 'Нет прав удалить'}), 403
 
     # Чат задачи: пустой уходит CASCADE, с историей — архивируем.
@@ -1070,8 +1076,9 @@ def get_task_chat_room(tid):
         allowed_ids.add(t.responsible_id)
     for m in TaskMember.query.filter_by(task_id=tid).all():
         allowed_ids.add(m.user_id)
-    # Admin получает membership автоматически — владелец компании.
-    if role == 'admin' and user_id:
+    # Owner автоматически становится участником.
+    from services.perms import is_owner as _is_owner
+    if _is_owner(user_id):
         allowed_ids.add(user_id)
     for uid in allowed_ids - existing:
         db.session.add(ChatMember(room_id=room.id, user_id=uid))
@@ -1080,8 +1087,7 @@ def get_task_chat_room(tid):
     if dirty:
         db.session.commit()
 
-    # system-юзер, не связанный с задачей, — не пускаем.
-    if role != 'admin' and user_id not in allowed_ids:
+    if user_id not in allowed_ids:
         return jsonify({'error': 'Нет доступа к чату задачи'}), 403
 
     return jsonify({'success': True, 'room_id': room.id}), 200

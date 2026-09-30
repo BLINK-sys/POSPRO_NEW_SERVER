@@ -223,7 +223,11 @@ def get_current_user():
             'email': user.email,
             'name': user.full_name,
             'phone': user.phone,
-            'role': 'admin'
+            'role': 'admin',
+            'is_owner': bool(user.is_owner),
+            'can_see_all_deals': bool(user.can_see_all_deals),
+            'can_see_all_tasks': bool(user.can_see_all_tasks),
+            'can_manage_pipelines': bool(user.can_manage_pipelines),
         })
 
     elif role == 'client':

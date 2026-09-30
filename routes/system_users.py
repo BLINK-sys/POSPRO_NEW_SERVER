@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.systemuser import SystemUser
 from models.user import User
@@ -15,6 +16,9 @@ def get_system_users():
         'email': u.email,
         'phone': u.phone,
         'is_owner': bool(u.is_owner),
+        'can_see_all_deals': bool(u.can_see_all_deals),
+        'can_see_all_tasks': bool(u.can_see_all_tasks),
+        'can_manage_pipelines': bool(u.can_manage_pipelines),
         'access': {
             'orders': u.access_orders,
             'catalog': u.access_catalog,
@@ -28,6 +32,53 @@ def get_system_users():
         }
 
     } for u in users])
+
+
+@system_users_bp.route('/system-users/<int:user_id>/permissions', methods=['PATCH'])
+@jwt_required()
+def update_system_user_permissions(user_id):
+    """
+    Изменение спец-прав пользователя. Доступно только владельцу
+    (is_owner=True). Разрешены поля: is_owner, can_see_all_deals,
+    can_see_all_tasks, can_manage_pipelines.
+
+    Себе владелец не может снять флаг is_owner (защита от блокировки).
+    """
+    from services.perms import is_owner as _is_owner
+    try:
+        caller_uid = int(get_jwt_identity()) if get_jwt_identity() else None
+    except (TypeError, ValueError):
+        caller_uid = None
+    if not _is_owner(caller_uid):
+        return jsonify({'error': 'Только владелец может менять права'}), 403
+
+    u = SystemUser.query.get(user_id)
+    if not u:
+        return jsonify({'error': 'Пользователь не найден'}), 404
+
+    data = request.get_json() or {}
+    if 'is_owner' in data:
+        if user_id == caller_uid and not data['is_owner']:
+            return jsonify({'error': 'Нельзя снять с себя роль владельца'}), 400
+        u.is_owner = bool(data['is_owner'])
+    if 'can_see_all_deals' in data:
+        u.can_see_all_deals = bool(data['can_see_all_deals'])
+    if 'can_see_all_tasks' in data:
+        u.can_see_all_tasks = bool(data['can_see_all_tasks'])
+    if 'can_manage_pipelines' in data:
+        u.can_manage_pipelines = bool(data['can_manage_pipelines'])
+
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'user': {
+            'id': u.id,
+            'is_owner': bool(u.is_owner),
+            'can_see_all_deals': bool(u.can_see_all_deals),
+            'can_see_all_tasks': bool(u.can_see_all_tasks),
+            'can_manage_pipelines': bool(u.can_manage_pipelines),
+        }
+    }), 200
 
 
 @system_users_bp.route('/system-users', methods=['POST'])
