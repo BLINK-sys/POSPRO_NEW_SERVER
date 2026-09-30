@@ -92,6 +92,15 @@ def _check_admin_or_system():
     return None
 
 
+def _room_push_url(room: ChatRoom) -> str:
+    """URL для клика по push-уведомлению → SW откроет эту вкладку."""
+    if room.kind == 'deal' and room.related_deal_id:
+        return f'/admin/deals/{room.related_deal_id}'
+    if room.kind == 'task' and room.related_task_id:
+        return f'/admin/tasks/{room.related_task_id}'
+    return '/admin/chat'
+
+
 def _require_membership(room_id: int, user_id: int) -> ChatMember | None:
     return ChatMember.query.filter_by(room_id=room_id, user_id=user_id).first()
 
@@ -460,13 +469,16 @@ def send_message(rid):
     db.session.commit()
 
     # Уведомления всем участникам кроме автора. best-effort. @упоминания —
-    # v2 (пока просто chat_new_message для всех). Push НЕ шлём — иначе
-    # каждое сообщение спамит. Только запись Notification (для красных
-    # точек и bell). Push пойдёт из фронта через Service Worker когда
-    # он получит SSE-event и сам решит нужно ли пинговать.
+    # v2 (пока просто chat_new_message для всех). Web Push шлём всегда —
+    # Service Worker сам решает показывать или нет: если открытая вкладка
+    # /admin/chat уже есть, SW тихо гасит уведомление.
     try:
         from services.notifications import notify
+        from models.systemuser import SystemUser
         preview = (text[:80] + '…') if len(text) > 80 else text
+        author = db.session.get(SystemUser, uid)
+        author_name = (author.full_name if author else None) or 'Кто-то'
+        push_url = _room_push_url(room)
         other_members = ChatMember.query.filter(
             ChatMember.room_id == rid,
             ChatMember.user_id != uid,
@@ -475,7 +487,11 @@ def send_message(rid):
             notify(
                 user_id=m.user_id, kind='chat_new_message',
                 section='chat', entity_type='chat_room', entity_id=rid,
-                payload={'author_id': uid, 'preview': preview},
+                payload={'author_id': uid, 'preview': preview,
+                         'room_id': rid, 'room_kind': room.kind},
+                push_title=author_name,
+                push_body=preview,
+                push_url=push_url,
             )
         db.session.commit()
     except Exception as e:
@@ -609,7 +625,11 @@ def upload_message(rid):
     # Уведомления как в send_message.
     try:
         from services.notifications import notify
-        preview = text[:80] if text else f'{len(files)} файл(ов)'
+        from models.systemuser import SystemUser
+        preview = text[:80] if text else f'📎 {len(files)} файл(ов)'
+        author = db.session.get(SystemUser, uid)
+        author_name = (author.full_name if author else None) or 'Кто-то'
+        push_url = _room_push_url(room)
         for m in ChatMember.query.filter(
             ChatMember.room_id == rid,
             ChatMember.user_id != uid,
@@ -618,7 +638,11 @@ def upload_message(rid):
                 user_id=m.user_id, kind='chat_new_message',
                 section='chat', entity_type='chat_room', entity_id=rid,
                 payload={'author_id': uid, 'preview': preview,
-                         'has_attachments': True},
+                         'has_attachments': True,
+                         'room_id': rid, 'room_kind': room.kind},
+                push_title=author_name,
+                push_body=preview,
+                push_url=push_url,
             )
         db.session.commit()
     except Exception as e:
