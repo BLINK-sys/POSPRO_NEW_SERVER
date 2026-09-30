@@ -141,10 +141,14 @@ def login():
     # не сможет войти, даже если такой email есть в БД.
     email_lower = email.lower()
 
-    # Попробовать найти среди админов
+    # SystemUser: role='admin' только для владельца (is_owner=True),
+    # остальные — 'system'. Раньше все получали 'admin' — из-за этого
+    # обычные менеджеры проходили admin-проверки (видели все сделки,
+    # авто-добавлялись в чужие чаты и т.п.).
     admin = SystemUser.query.filter(db.func.lower(SystemUser.email) == email_lower).first()
     if admin and check_password_hash(admin.password_hash, password):
-        tokens = _issue_token_pair(str(admin.id), "admin")
+        role = 'admin' if admin.is_owner else 'system'
+        tokens = _issue_token_pair(str(admin.id), role)
         return jsonify({
             **tokens,
             'user': {
@@ -152,7 +156,7 @@ def login():
                 'email': admin.email,
                 'name': admin.full_name,
                 'phone': admin.phone,
-                'role': 'admin'
+                'role': role,
             }
         })
 
@@ -195,9 +199,13 @@ def refresh():
 
     # Проверка что юзер всё ещё существует — иначе старый токен мог бы
     # давать доступ удалённому пользователю до истечения refresh.
-    if role == 'admin':
-        if not SystemUser.query.get(int(identity)):
+    # Плюс пересчитываем актуальную роль по is_owner (владелец компании
+    # мог быть снят или наоборот назначен между двумя логинами).
+    if role in ('admin', 'system'):
+        u = SystemUser.query.get(int(identity))
+        if not u:
             return jsonify({'error': 'Пользователь не найден'}), 401
+        role = 'admin' if u.is_owner else 'system'
     else:
         if not User.query.get(int(identity)):
             return jsonify({'error': 'Пользователь не найден'}), 401
@@ -213,17 +221,21 @@ def get_current_user():
     user_id = get_jwt_identity()
     role = jwt_data.get('role')
 
-    if role == 'admin':
+    if role in ('admin', 'system'):
         user = SystemUser.query.get(user_id)
         if not user:
             return jsonify({'error': 'Пользователь не найден'}), 404
 
+        # Возвращаем актуальную роль — is_owner мог поменяться в БД
+        # с момента выпуска JWT; access-токен свежий (30 мин), но profile
+        # должен показывать текущее состояние.
+        actual_role = 'admin' if user.is_owner else 'system'
         return jsonify({
             'id': user.id,
             'email': user.email,
             'name': user.full_name,
             'phone': user.phone,
-            'role': 'admin'
+            'role': actual_role,
         })
 
     elif role == 'client':
