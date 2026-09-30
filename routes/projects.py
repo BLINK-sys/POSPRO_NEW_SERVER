@@ -45,6 +45,18 @@ def _current_user_id() -> int | None:
         return None
 
 
+def _check_can_manage_projects():
+    """
+    Управлять справочником проектов может только владелец (is_owner) или
+    юзер с can_manage_projects. Read (GET /projects) — доступен любому
+    admin/system, чтобы он мог выбрать проект в задаче.
+    """
+    from services.perms import can_manage_projects as _cmp
+    if not _cmp(_current_user_id()):
+        return jsonify({'error': 'Настройка проектов доступна только владельцу и уполномоченным'}), 403
+    return None
+
+
 def _parse_payload(data: dict, *, partial: bool = False):
     """Валидация тела POST/PUT /projects."""
     fields: dict = {}
@@ -106,6 +118,9 @@ def create_project():
     err = _check_admin_or_system()
     if err:
         return err
+    err = _check_can_manage_projects()
+    if err:
+        return err
 
     data = request.get_json() or {}
     ok, msg, fields = _parse_payload(data)
@@ -136,6 +151,9 @@ def update_project(pid):
     err = _check_admin_or_system()
     if err:
         return err
+    err = _check_can_manage_projects()
+    if err:
+        return err
     p = Project.query.get(pid)
     if not p:
         return jsonify({'error': 'Проект не найден'}), 404
@@ -163,6 +181,9 @@ def update_project(pid):
 @jwt_required()
 def delete_project(pid):
     err = _check_admin_or_system()
+    if err:
+        return err
+    err = _check_can_manage_projects()
     if err:
         return err
     p = Project.query.get(pid)

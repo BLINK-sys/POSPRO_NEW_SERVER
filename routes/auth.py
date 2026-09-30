@@ -228,6 +228,7 @@ def get_current_user():
             'can_see_all_deals': bool(user.can_see_all_deals),
             'can_see_all_tasks': bool(user.can_see_all_tasks),
             'can_manage_pipelines': bool(user.can_manage_pipelines),
+            'can_manage_projects': bool(user.can_manage_projects),
         })
 
     elif role == 'client':

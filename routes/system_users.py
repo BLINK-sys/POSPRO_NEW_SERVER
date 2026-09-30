@@ -19,6 +19,7 @@ def get_system_users():
         'can_see_all_deals': bool(u.can_see_all_deals),
         'can_see_all_tasks': bool(u.can_see_all_tasks),
         'can_manage_pipelines': bool(u.can_manage_pipelines),
+        'can_manage_projects': bool(u.can_manage_projects),
         'access': {
             'orders': u.access_orders,
             'catalog': u.access_catalog,
@@ -67,6 +68,8 @@ def update_system_user_permissions(user_id):
         u.can_see_all_tasks = bool(data['can_see_all_tasks'])
     if 'can_manage_pipelines' in data:
         u.can_manage_pipelines = bool(data['can_manage_pipelines'])
+    if 'can_manage_projects' in data:
+        u.can_manage_projects = bool(data['can_manage_projects'])
 
     db.session.commit()
     return jsonify({
@@ -77,6 +80,7 @@ def update_system_user_permissions(user_id):
             'can_see_all_deals': bool(u.can_see_all_deals),
             'can_see_all_tasks': bool(u.can_see_all_tasks),
             'can_manage_pipelines': bool(u.can_manage_pipelines),
+            'can_manage_projects': bool(u.can_manage_projects),
         }
     }), 200
 

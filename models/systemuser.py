@@ -38,6 +38,7 @@ class SystemUser(db.Model):
     can_see_all_deals = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
     can_see_all_tasks = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
     can_manage_pipelines = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
+    can_manage_projects = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('false'))
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)

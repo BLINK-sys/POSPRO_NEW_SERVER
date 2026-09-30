@@ -128,13 +128,14 @@ def _visible_deals_query(role: str, user_id: int | None):
 def _can_edit_deal(deal: Deal, role: str, user_id: int | None) -> bool:
     """
     owner — правит любую сделку.
+    can_see_all_deals — тоже правит любую (флаг «полный доступ ко всем сделкам»).
     остальные — правят если я creator, responsible, или участник
     (participant, не observer).
     """
-    from services.perms import is_owner as _is_owner
+    from services.perms import is_owner as _is_owner, can_see_all_deals as _cs
     if not user_id:
         return False
-    if _is_owner(user_id):
+    if _cs(user_id):  # включает is_owner
         return True
     if deal.creator_id == user_id:
         return True

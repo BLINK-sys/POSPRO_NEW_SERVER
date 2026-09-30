@@ -116,13 +116,14 @@ def _visible_tasks_query(role: str, user_id: int | None):
 def _can_edit_task(task: Task, role: str, user_id: int | None) -> bool:
     """
     owner — правит любую.
+    can_see_all_tasks — тоже правит любую (флаг «полный доступ ко всем задачам»).
     остальные — правят если responsible=me ИЛИ creator=me ИЛИ
     member.role='co-worker'. observer в task_member — read-only.
     """
-    from services.perms import is_owner as _is_owner
+    from services.perms import is_owner as _is_owner, can_see_all_tasks as _cs
     if not user_id:
         return False
-    if _is_owner(user_id):
+    if _cs(user_id):  # включает is_owner
         return True
     if task.responsible_id == user_id or task.creator_id == user_id:
         return True

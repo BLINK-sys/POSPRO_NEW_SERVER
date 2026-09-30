@@ -35,6 +35,7 @@ def get_perm(user_id) -> dict:
         'can_see_all_deals': False,
         'can_see_all_tasks': False,
         'can_manage_pipelines': False,
+        'can_manage_projects': False,
     }
     if not user_id:
         return default
@@ -53,6 +54,7 @@ def get_perm(user_id) -> dict:
         'can_see_all_deals': bool(u.can_see_all_deals),
         'can_see_all_tasks': bool(u.can_see_all_tasks),
         'can_manage_pipelines': bool(u.can_manage_pipelines),
+        'can_manage_projects': bool(u.can_manage_projects),
     }
     setattr(g, key, perm)
     return perm
@@ -75,3 +77,8 @@ def can_see_all_tasks(user_id) -> bool:
 def can_manage_pipelines(user_id) -> bool:
     p = get_perm(user_id)
     return p['is_owner'] or p['can_manage_pipelines']
+
+
+def can_manage_projects(user_id) -> bool:
+    p = get_perm(user_id)
+    return p['is_owner'] or p['can_manage_projects']

@@ -106,6 +106,32 @@ def _entity_exists(entity_type: str, entity_id: int) -> bool:
     return False
 
 
+def _check_deal_visible(did: int):
+    """
+    Возвращает (deal, error_response). Если сделка не существует или
+    невидима юзеру — error_response 404. Owner/can_see_all_deals видят всё,
+    остальные — только creator/responsible/member.
+
+    Юзерам без доступа отдаём 404 (а не 403) чтобы не подтверждать существование.
+    """
+    from routes.deals import _visible_deals_query, _current_role_and_id
+    role, user_id = _current_role_and_id()
+    d = _visible_deals_query(role, user_id).filter(Deal.id == did).first()
+    if not d:
+        return None, (jsonify({'error': 'Сделка не найдена'}), 404)
+    return d, None
+
+
+def _check_task_visible(tid: int):
+    """Аналог _check_deal_visible для задач."""
+    from routes.tasks import _visible_tasks_query, _current_role_and_id
+    role, user_id = _current_role_and_id()
+    t = _visible_tasks_query(role, user_id).filter(Task.id == tid).first()
+    if not t:
+        return None, (jsonify({'error': 'Задача не найдена'}), 404)
+    return t, None
+
+
 def _url_for_attachment(entity_type: str, entity_id: int, disk_name: str) -> str:
     """Публичный URL под которым файл доступен через /uploads/..."""
     return f'/uploads/{ATTACHMENTS_SUBFOLDER}/{entity_type}/{entity_id}/{disk_name}'
@@ -192,8 +218,9 @@ def list_deal_attachments(did):
     err = _check_admin_or_system()
     if err:
         return err
-    if not Deal.query.get(did):
-        return jsonify({'error': 'Сделка не найдена'}), 404
+    _d, err = _check_deal_visible(did)
+    if err:
+        return err
     return _list_attachments('deal', did)
 
 
@@ -203,8 +230,9 @@ def upload_deal_attachment(did):
     err = _check_admin_or_system()
     if err:
         return err
-    if not Deal.query.get(did):
-        return jsonify({'error': 'Сделка не найдена'}), 404
+    _d, err = _check_deal_visible(did)
+    if err:
+        return err
     return _upload_attachment('deal', did)
 
 
@@ -216,8 +244,9 @@ def list_task_attachments(tid):
     err = _check_admin_or_system()
     if err:
         return err
-    if not Task.query.get(tid):
-        return jsonify({'error': 'Задача не найдена'}), 404
+    _t, err = _check_task_visible(tid)
+    if err:
+        return err
     return _list_attachments('task', tid)
 
 
@@ -227,14 +256,26 @@ def upload_task_attachment(tid):
     err = _check_admin_or_system()
     if err:
         return err
-    if not Task.query.get(tid):
-        return jsonify({'error': 'Задача не найдена'}), 404
+    _t, err = _check_task_visible(tid)
+    if err:
+        return err
     return _upload_attachment('task', tid)
 
 
 # ============================================================================
 # Delete / Download
 # ============================================================================
+
+def _check_attachment_visible(a: EntityAttachment):
+    """Атачмент доступен если родительская сделка/задача видима юзеру."""
+    if a.entity_type == 'deal':
+        _d, err = _check_deal_visible(a.entity_id)
+        return err
+    if a.entity_type == 'task':
+        _t, err = _check_task_visible(a.entity_id)
+        return err
+    return None
+
 
 @entity_attachments_bp.route('/admin/attachments/<int:aid>', methods=['PUT'])
 @jwt_required()
@@ -253,6 +294,9 @@ def update_attachment(aid):
     a = EntityAttachment.query.get(aid)
     if not a:
         return jsonify({'error': 'Файл не найден'}), 404
+    err = _check_attachment_visible(a)
+    if err:
+        return err
 
     data = request.get_json() or {}
     if 'title' in data:
@@ -279,6 +323,9 @@ def delete_attachment(aid):
     a = EntityAttachment.query.get(aid)
     if not a:
         return jsonify({'error': 'Файл не найден'}), 404
+    err = _check_attachment_visible(a)
+    if err:
+        return err
 
     # Пробуем удалить файл с диска.
     disk_path = _disk_path(a)
@@ -306,6 +353,9 @@ def download_attachment(aid):
     a = EntityAttachment.query.get(aid)
     if not a:
         return jsonify({'error': 'Файл не найден'}), 404
+    err = _check_attachment_visible(a)
+    if err:
+        return err
     disk_path = _disk_path(a)
     if not disk_path or not os.path.exists(disk_path):
         return jsonify({'error': 'Файл отсутствует на диске'}), 410
