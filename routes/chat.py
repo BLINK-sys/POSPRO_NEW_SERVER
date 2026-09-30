@@ -92,6 +92,35 @@ def _check_admin_or_system():
     return None
 
 
+def _parse_mentions(text: str, members) -> set:
+    """
+    Извлечь user_id участников, упомянутых через `@Имя` в тексте.
+    Сопоставляем по первому слову (обычно фамилия) full_name юзера,
+    без учёта регистра. `members` — итерируемое ChatMember для комнаты.
+    """
+    if not text or '@' not in text:
+        return set()
+    import re
+    tokens = set(re.findall(r'(?:^|[\s])@([\wА-Яа-яЁё\-]+)', text))
+    if not tokens:
+        return set()
+    tokens_lower = {t.lower() for t in tokens}
+    from models.systemuser import SystemUser
+    ids = set()
+    member_ids = [m.user_id for m in members]
+    if not member_ids:
+        return set()
+    users = SystemUser.query.filter(SystemUser.id.in_(member_ids)).all()
+    for u in users:
+        name = (u.full_name or '').strip()
+        if not name:
+            continue
+        first_word = name.split()[0].lower() if name else ''
+        if first_word and first_word in tokens_lower:
+            ids.add(u.id)
+    return ids
+
+
 def _room_push_url(room: ChatRoom) -> str:
     """URL для клика по push-уведомлению → SW откроет эту вкладку."""
     if room.kind == 'deal' and room.related_deal_id:
@@ -472,10 +501,13 @@ def send_message(rid):
     room.updated_at = datetime.utcnow()
     db.session.commit()
 
-    # Уведомления всем участникам кроме автора. best-effort. @упоминания —
-    # v2 (пока просто chat_new_message для всех). Web Push шлём всегда —
-    # Service Worker сам решает показывать или нет: если открытая вкладка
-    # /admin/chat уже есть, SW тихо гасит уведомление.
+    # Уведомления всем участникам кроме автора. best-effort. Web Push шлём
+    # всегда — Service Worker сам решает показывать или нет: если открытая
+    # вкладка /admin/chat уже есть, SW тихо гасит уведомление.
+    #
+    # @упоминания: парсим текст, ищем @Имя, сопоставляем с участниками
+    # комнаты. Упомянутым шлём отдельный kind='chat_mention' — фронт
+    # играет отдельный звук и показывает высокоприоритетную запись.
     try:
         from services.notifications import notify
         from models.systemuser import SystemUser
@@ -487,7 +519,20 @@ def send_message(rid):
             ChatMember.room_id == rid,
             ChatMember.user_id != uid,
         ).all()
+        # user_id участников которых @упомянули (для skip в общем цикле).
+        mentioned_ids = _parse_mentions(text, other_members)
         for m in other_members:
+            if m.user_id in mentioned_ids:
+                notify(
+                    user_id=m.user_id, kind='chat_mention',
+                    section='chat', entity_type='chat_room', entity_id=rid,
+                    payload={'author_id': uid, 'preview': preview,
+                             'room_id': rid, 'room_kind': room.kind},
+                    push_title=f'{author_name} упомянул(а) вас',
+                    push_body=preview,
+                    push_url=push_url,
+                )
+                continue
             notify(
                 user_id=m.user_id, kind='chat_new_message',
                 section='chat', entity_type='chat_room', entity_id=rid,
@@ -636,10 +681,24 @@ def upload_message(rid):
         author = db.session.get(SystemUser, uid)
         author_name = (author.full_name if author else None) or 'Кто-то'
         push_url = _room_push_url(room)
-        for m in ChatMember.query.filter(
+        other = ChatMember.query.filter(
             ChatMember.room_id == rid,
             ChatMember.user_id != uid,
-        ).all():
+        ).all()
+        mentioned_ids = _parse_mentions(text or '', other)
+        for m in other:
+            if m.user_id in mentioned_ids:
+                notify(
+                    user_id=m.user_id, kind='chat_mention',
+                    section='chat', entity_type='chat_room', entity_id=rid,
+                    payload={'author_id': uid, 'preview': preview,
+                             'has_attachments': True,
+                             'room_id': rid, 'room_kind': room.kind},
+                    push_title=f'{author_name} упомянул(а) вас',
+                    push_body=preview,
+                    push_url=push_url,
+                )
+                continue
             notify(
                 user_id=m.user_id, kind='chat_new_message',
                 section='chat', entity_type='chat_room', entity_id=rid,
