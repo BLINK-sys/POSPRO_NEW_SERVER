@@ -825,6 +825,26 @@ def remove_member(did, uid):
         deal_id=did, user_id=user_id, kind='member_removed',
         payload={'user_id': uid, 'role': removed_role},
     ))
+
+    # Синхронизируем chat_member: убираем юзера из чата сделки, если он
+    # больше нигде не связан со сделкой (не creator, не responsible,
+    # не остался в других DealMember-ролях).
+    try:
+        from models.chat import ChatRoom, ChatMember
+        chat_room = ChatRoom.query.filter_by(kind='deal', related_deal_id=did).first()
+        if chat_room and d.creator_id != uid and d.responsible_user_id != uid:
+            still_member = DealMember.query.filter(
+                DealMember.deal_id == did,
+                DealMember.user_id == uid,
+                DealMember.id != m.id,
+            ).first()
+            if not still_member:
+                ChatMember.query.filter_by(
+                    room_id=chat_room.id, user_id=uid,
+                ).delete()
+    except Exception as e:
+        print(f'⚠️ deal chat member remove sync failed: {e}', flush=True)
+
     db.session.commit()
     return jsonify({'success': True}), 200
 

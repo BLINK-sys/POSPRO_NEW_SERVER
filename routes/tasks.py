@@ -752,6 +752,25 @@ def remove_task_member(tid, uid):
         task_id=tid, user_id=user_id, kind='member_removed',
         payload={'user_id': uid, 'role': removed_role},
     ))
+
+    # Синхронизируем chat_member — убираем юзера из чата задачи если
+    # он больше нигде не связан (не creator, не responsible).
+    try:
+        from models.chat import ChatRoom, ChatMember
+        chat_room = ChatRoom.query.filter_by(kind='task', related_task_id=tid).first()
+        if chat_room and t.creator_id != uid and t.responsible_id != uid:
+            still_member = TaskMember.query.filter(
+                TaskMember.task_id == tid,
+                TaskMember.user_id == uid,
+                TaskMember.id != m.id,
+            ).first()
+            if not still_member:
+                ChatMember.query.filter_by(
+                    room_id=chat_room.id, user_id=uid,
+                ).delete()
+    except Exception as e:
+        print(f'⚠️ task chat member remove sync failed: {e}', flush=True)
+
     db.session.commit()
     return jsonify({'success': True}), 200
 
