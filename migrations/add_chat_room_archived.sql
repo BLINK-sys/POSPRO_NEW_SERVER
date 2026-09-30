@@ -17,7 +17,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_room_archived
     ON chat_room (is_archived);
 
 -- Существующие orphan-чаты (ссылаются на удалённые сделки/задачи):
--- если есть сообщения, архивируем; иначе удаляем.
+-- если есть сообщения, архивируем — иначе удаляем.
 
 -- 1. Пустые чаты сделок с несуществующим related_deal_id — удалить.
 DELETE FROM chat_room
