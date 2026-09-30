@@ -64,10 +64,15 @@ def _safe_notify(**kwargs):
     Best-effort вызов notify() — сбой не валит основной путь. Импорт
     отложенный (в момент вызова), чтобы избежать циркулярной зависимости
     services→models при загрузке приложения.
+
+    Внутренний notify() только flush'ит запись, но НЕ коммитит. Мы
+    коммитим тут — иначе Notification останется в открытой транзакции,
+    и SSE-стрим её не увидит (звука/бейджа у получателя не будет).
     """
     try:
         from services.notifications import notify
         notify(**kwargs)
+        db.session.commit()
     except Exception as e:
         print(f'⚠️ notify failed: {e}', flush=True)
 
@@ -602,6 +607,26 @@ def delete_deal(did):
         return jsonify({'error': 'Сделка не найдена'}), 404
     if role != 'admin' and d.responsible_user_id != user_id:
         return jsonify({'error': 'Нет прав удалить'}), 403
+
+    # Чат сделки: если пусто — уходит CASCADE вместе со сделкой. Если
+    # в чате были сообщения — отвязываем (related_deal_id=NULL, чтоб
+    # CASCADE не снёс) + помечаем архивным + сохраняем название для
+    # /admin/chat сайдбара.
+    try:
+        from models.chat import ChatRoom, ChatMessage
+        chat_room = ChatRoom.query.filter_by(kind='deal', related_deal_id=d.id).first()
+        if chat_room:
+            has_messages = db.session.query(
+                ChatMessage.query.filter_by(room_id=chat_room.id).exists()
+            ).scalar()
+            if has_messages:
+                chat_room.name = chat_room.name or f'Сделка №{d.id} — {d.name}'
+                chat_room.related_deal_id = None
+                chat_room.is_archived = True
+                chat_room.archived_at = datetime.utcnow()
+                db.session.flush()
+    except Exception as e:
+        print(f'⚠️ deal chat archive failed for deal {d.id}: {e}', flush=True)
 
     db.session.delete(d)
     db.session.commit()

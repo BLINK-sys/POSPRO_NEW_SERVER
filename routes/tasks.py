@@ -55,10 +55,15 @@ tasks_bp = Blueprint('tasks', __name__)
 
 
 def _safe_notify(**kwargs):
-    """Best-effort — сбой не валит основной путь. Ленивая загрузка сервиса."""
+    """
+    Best-effort — сбой не валит основной путь. Ленивая загрузка сервиса.
+    Коммитим здесь: notify() внутри только flush'ит, без commit
+    Notification остаётся в открытой транзакции и SSE её не увидит.
+    """
     try:
         from services.notifications import notify
         notify(**kwargs)
+        db.session.commit()
     except Exception as e:
         print(f'⚠️ notify failed: {e}', flush=True)
 
@@ -553,6 +558,23 @@ def delete_task(tid):
         return jsonify({'error': 'Задача не найдена'}), 404
     if role != 'admin' and t.creator_id != user_id and t.responsible_id != user_id:
         return jsonify({'error': 'Нет прав удалить'}), 403
+
+    # Чат задачи: пустой уходит CASCADE, с историей — архивируем.
+    try:
+        from models.chat import ChatRoom, ChatMessage
+        chat_room = ChatRoom.query.filter_by(kind='task', related_task_id=t.id).first()
+        if chat_room:
+            has_messages = db.session.query(
+                ChatMessage.query.filter_by(room_id=chat_room.id).exists()
+            ).scalar()
+            if has_messages:
+                chat_room.name = chat_room.name or f'Задача №{t.id} — {t.title}'
+                chat_room.related_task_id = None
+                chat_room.is_archived = True
+                chat_room.archived_at = datetime.utcnow()
+                db.session.flush()
+    except Exception as e:
+        print(f'⚠️ task chat archive failed for task {t.id}: {e}', flush=True)
 
     db.session.delete(t)
     db.session.commit()

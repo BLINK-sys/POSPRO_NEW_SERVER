@@ -37,6 +37,10 @@ class ChatRoom(db.Model):
     related_task_id = db.Column(db.Integer, db.ForeignKey('task.id', ondelete='CASCADE'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # Архивные чаты — комната, чья сделка/задача уже удалена, но
+    # переписка сохранена (чтение-only в UI). Индикатор в списке комнат.
+    is_archived = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('FALSE'))
+    archived_at = db.Column(db.DateTime, nullable=True)
 
     members = db.relationship('ChatMember', backref='room', cascade='all, delete-orphan')
     messages = db.relationship(

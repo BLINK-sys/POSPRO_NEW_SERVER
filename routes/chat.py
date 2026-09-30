@@ -134,6 +134,8 @@ def _room_summary(room: ChatRoom, me_id: int) -> dict:
         'name': room.name,
         'related_deal_id': room.related_deal_id,
         'related_task_id': room.related_task_id,
+        'is_archived': bool(room.is_archived),
+        'archived_at': room.archived_at.isoformat() if room.archived_at else None,
         'created_at': room.created_at.isoformat() if room.created_at else None,
         'updated_at': room.updated_at.isoformat() if room.updated_at else None,
         'last_message': _message_dict(last_msg) if last_msg else None,
@@ -439,6 +441,8 @@ def send_message(rid):
     room = db.session.get(ChatRoom, rid)
     if not room or not _require_membership(rid, uid):
         return jsonify({'error': 'Комната не найдена'}), 404
+    if room.is_archived:
+        return jsonify({'error': 'Чат архивирован — писать нельзя'}), 403
 
     data = request.get_json() or {}
     text = (data.get('text') or '').strip()
@@ -523,6 +527,8 @@ def upload_message(rid):
     room = db.session.get(ChatRoom, rid)
     if not room or not _require_membership(rid, uid):
         return jsonify({'error': 'Комната не найдена'}), 404
+    if room.is_archived:
+        return jsonify({'error': 'Чат архивирован — писать нельзя'}), 403
 
     files = request.files.getlist('file')
     files = [f for f in files if f and f.filename]
