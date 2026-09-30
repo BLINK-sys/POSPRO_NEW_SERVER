@@ -799,6 +799,7 @@ def chat_stream():
     Events:
       event: message   — новое сообщение (или edited/deleted)
       event: reaction  — изменена реакция
+      event: read      — участник комнаты обновил last_read_at (для «глаза»)
       : ping <ts>      — heartbeat
 
     Клиент запоминает `last_message_id` и переподключается — не
@@ -823,6 +824,9 @@ def chat_stream():
         with app.app_context():
             last_message_id = request.args.get('since', type=int) or 0
             last_reaction_id = request.args.get('since_reaction', type=int) or 0
+            # Ловим только read-события ПОСЛЕ подключения — старые reads
+            # клиент и так забрал первичным snapshot'ом /read-status.
+            last_read_check = datetime.utcnow()
             last_ping = time.time()
 
             while True:
@@ -876,6 +880,32 @@ def chat_stream():
                     yield f'event: reaction\ndata: {payload}\n\n'
                     last_reaction_id = r.id
                     last_ping = time.time()
+
+                # Свежие read-receipts от других участников.
+                # Фильтр: чужие read-marks (свои клиент и так знает), в
+                # моих комнатах, обновлённые с прошлой итерации. Клиент
+                # использует это чтобы обновить «глаз прочитано» без
+                # polling'а /read-status.
+                now_check = datetime.utcnow()
+                new_reads = (
+                    ChatMember.query.filter(
+                        ChatMember.room_id.in_(my_rooms),
+                        ChatMember.user_id != uid,
+                        ChatMember.last_read_at.isnot(None),
+                        ChatMember.last_read_at > last_read_check,
+                    )
+                    .limit(100)
+                    .all()
+                )
+                for cm in new_reads:
+                    payload = json.dumps({
+                        'room_id': cm.room_id,
+                        'user_id': cm.user_id,
+                        'last_read_at': cm.last_read_at.isoformat() if cm.last_read_at else None,
+                    }, ensure_ascii=False)
+                    yield f'event: read\ndata: {payload}\n\n'
+                    last_ping = time.time()
+                last_read_check = now_check
 
                 if time.time() - last_ping > 25:
                     yield f': ping {int(time.time())}\n\n'
