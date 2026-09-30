@@ -190,6 +190,8 @@ def _message_dict(m: ChatMessage) -> dict:
         'created_at': m.created_at.isoformat() if m.created_at else None,
         'edited_at': m.edited_at.isoformat() if m.edited_at else None,
         'deleted_at': m.deleted_at.isoformat() if m.deleted_at else None,
+        'pinned_at': m.pinned_at.isoformat() if m.pinned_at else None,
+        'pinned_by': m.pinned_by,
         'reactions': [{'emoji': e, 'user_ids': uids} for e, uids in grouped.items()],
         'attachments': [
             {'id': a.id, 'file_url': a.file_url, 'file_name': a.file_name,
@@ -812,6 +814,84 @@ def delete_message(mid):
 # ============================================================================
 # Reactions
 # ============================================================================
+
+@chat_bp.route('/admin/chat/rooms/<int:rid>/pinned', methods=['GET'])
+@jwt_required()
+def list_pinned(rid):
+    """Список закреплённых сообщений комнаты, DESC by pinned_at."""
+    err = _check_admin_or_system()
+    if err:
+        return err
+    _, uid = _current_role_and_id()
+    room = db.session.get(ChatRoom, rid)
+    if not room or not _require_membership(rid, uid):
+        return jsonify({'error': 'Комната не найдена'}), 404
+
+    pinned = (
+        ChatMessage.query.filter(
+            ChatMessage.room_id == rid,
+            ChatMessage.pinned_at.isnot(None),
+            ChatMessage.deleted_at.is_(None),
+        )
+        .order_by(ChatMessage.pinned_at.desc())
+        .all()
+    )
+    return jsonify({
+        'success': True,
+        'messages': [_message_dict(m) for m in pinned],
+    }), 200
+
+
+@chat_bp.route('/admin/chat/messages/<int:mid>/pin', methods=['POST'])
+@jwt_required()
+def pin_message(mid):
+    """Закрепить сообщение. Только участники комнаты."""
+    err = _check_admin_or_system()
+    if err:
+        return err
+    _, uid = _current_role_and_id()
+
+    msg = db.session.get(ChatMessage, mid)
+    if not msg or msg.deleted_at:
+        return jsonify({'error': 'Сообщение не найдено'}), 404
+    if not _require_membership(msg.room_id, uid):
+        return jsonify({'error': 'Не участник комнаты'}), 403
+
+    if msg.pinned_at is None:
+        now = datetime.utcnow()
+        msg.pinned_at = now
+        msg.pinned_by = uid
+        # Bump edited_at чтобы SSE-цикл разослал обновление другим
+        # клиентам через существующий edited-sweep.
+        msg.edited_at = now
+        db.session.commit()
+    return jsonify({'success': True, 'message': _message_dict(msg)}), 200
+
+
+@chat_bp.route('/admin/chat/messages/<int:mid>/unpin', methods=['POST'])
+@jwt_required()
+def unpin_message(mid):
+    """Открепить сообщение. Может тот кто закрепил, admin, или автор."""
+    err = _check_admin_or_system()
+    if err:
+        return err
+    role, uid = _current_role_and_id()
+
+    msg = db.session.get(ChatMessage, mid)
+    if not msg:
+        return jsonify({'error': 'Сообщение не найдено'}), 404
+    if not _require_membership(msg.room_id, uid):
+        return jsonify({'error': 'Не участник комнаты'}), 403
+    if role != 'admin' and msg.pinned_by != uid and msg.author_id != uid:
+        return jsonify({'error': 'Нет прав откреплять'}), 403
+
+    if msg.pinned_at is not None:
+        msg.pinned_at = None
+        msg.pinned_by = None
+        msg.edited_at = datetime.utcnow()  # bump для SSE-обновления
+        db.session.commit()
+    return jsonify({'success': True, 'message': _message_dict(msg)}), 200
+
 
 @chat_bp.route('/admin/chat/messages/<int:mid>/reactions', methods=['POST'])
 @jwt_required()

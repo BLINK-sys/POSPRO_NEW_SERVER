@@ -84,6 +84,9 @@ class ChatMessage(db.Model):
     # Soft-delete — сообщение остаётся для целостности reply-ссылок,
     # но не показывается («Сообщение удалено»).
     deleted_at = db.Column(db.DateTime, nullable=True)
+    # Пиннинг — закреплённые сообщения показываются в шапке чата.
+    pinned_at = db.Column(db.DateTime, nullable=True)
+    pinned_by = db.Column(db.Integer, db.ForeignKey('system_users.id', ondelete='SET NULL'), nullable=True)
 
     reactions = db.relationship('ChatReaction', backref='message', cascade='all, delete-orphan')
     attachments = db.relationship('ChatAttachment', backref='message', cascade='all, delete-orphan')
