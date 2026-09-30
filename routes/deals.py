@@ -1043,28 +1043,29 @@ def get_deal_chat_room(did):
         db.session.flush()
         dirty = True
 
-    # Гарантируем membership для всех кто должен видеть чат: постановщик,
-    # ответственный, участники сделки, наблюдатели и текущий юзер
-    # (admin/system) если он их не в списках. Уникальность (room_id,
-    # user_id) обеспечивается индексом.
+    # Гарантируем membership только для тех кто явно связан со сделкой:
+    # постановщик, ответственный, участники (соисполнители/наблюдатели).
+    # Текущего юзера НЕ добавляем автоматически — иначе любой admin, кто
+    # просто зашёл на карточку, получит доступ к чату навсегда.
     existing = {
         cm.user_id for cm in ChatMember.query.filter_by(room_id=room.id).all()
     }
-    to_add: set[int] = set()
-    if d.creator_id and d.creator_id not in existing:
-        to_add.add(d.creator_id)
-    if d.responsible_user_id and d.responsible_user_id not in existing:
-        to_add.add(d.responsible_user_id)
+    allowed_ids: set[int] = set()
+    if d.creator_id:
+        allowed_ids.add(d.creator_id)
+    if d.responsible_user_id:
+        allowed_ids.add(d.responsible_user_id)
     for m in DealMember.query.filter_by(deal_id=did).all():
-        if m.user_id not in existing:
-            to_add.add(m.user_id)
-    if user_id and user_id not in existing:
-        to_add.add(user_id)
-    for uid in to_add:
+        allowed_ids.add(m.user_id)
+    for uid in allowed_ids - existing:
         db.session.add(ChatMember(room_id=room.id, user_id=uid))
         dirty = True
 
     if dirty:
         db.session.commit()
+
+    # Права: чат видит только тот, кто в списке участников или admin.
+    if role != 'admin' and user_id not in allowed_ids:
+        return jsonify({'error': 'Нет доступа к чату сделки'}), 403
 
     return jsonify({'success': True, 'room_id': room.id}), 200

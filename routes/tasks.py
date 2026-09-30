@@ -1044,21 +1044,22 @@ def get_task_chat_room(tid):
     existing = {
         cm.user_id for cm in ChatMember.query.filter_by(room_id=room.id).all()
     }
-    to_add: set[int] = set()
-    if t.creator_id and t.creator_id not in existing:
-        to_add.add(t.creator_id)
-    if t.responsible_id and t.responsible_id not in existing:
-        to_add.add(t.responsible_id)
+    allowed_ids: set[int] = set()
+    if t.creator_id:
+        allowed_ids.add(t.creator_id)
+    if t.responsible_id:
+        allowed_ids.add(t.responsible_id)
     for m in TaskMember.query.filter_by(task_id=tid).all():
-        if m.user_id not in existing:
-            to_add.add(m.user_id)
-    if user_id and user_id not in existing:
-        to_add.add(user_id)
-    for uid in to_add:
+        allowed_ids.add(m.user_id)
+    for uid in allowed_ids - existing:
         db.session.add(ChatMember(room_id=room.id, user_id=uid))
         dirty = True
 
     if dirty:
         db.session.commit()
+
+    # Права: чат видит только явный участник или admin.
+    if role != 'admin' and user_id not in allowed_ids:
+        return jsonify({'error': 'Нет доступа к чату задачи'}), 403
 
     return jsonify({'success': True, 'room_id': room.id}), 200
