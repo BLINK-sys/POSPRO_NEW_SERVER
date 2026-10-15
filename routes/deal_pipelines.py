@@ -31,8 +31,9 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt
 
 from extensions import db
-from models.deal_pipeline import DealPipeline, DealStage, DEAL_STAGE_TYPES
+from models.deal_pipeline import DealPipeline, DealPipelineViewer, DealStage, DEAL_STAGE_TYPES
 from models.deal import Deal
+from models.systemuser import SystemUser
 
 
 deal_pipelines_bp = Blueprint('deal_pipelines', __name__)
@@ -110,26 +111,149 @@ def _parse_stage_payload(data: dict, *, partial: bool = False):
 # Pipelines
 # ============================================================================
 
+def _visible_pipeline_ids_for(user_id: int | None) -> set[int] | None:
+    """
+    Какие воронки видны юзеру в UI (dropdown + настройки).
+
+    Возвращает:
+      - None   — ограничений нет, видны ВСЕ (owner / can_see_all_deals /
+                 can_manage_pipelines).
+      - set[int] — набор id разрешённых воронок (пустое множество = ничего
+                   не видно).
+
+    Правило для обычного менеджера: видит воронку если у неё пустой список
+    viewers (публичная) ИЛИ он есть в viewers (приватная с добавлением).
+    """
+    from services.perms import (
+        can_see_all_deals as _cs,
+        can_manage_pipelines as _cmp,
+    )
+    if not user_id:
+        return set()
+    if _cs(user_id) or _cmp(user_id):
+        return None
+
+    # Публичные воронки — те, где нет ни одной записи в viewer-table.
+    rows = db.session.query(DealPipelineViewer.pipeline_id).distinct().all()
+    private_ids = {r[0] for r in rows}
+    all_ids = {p.id for p in DealPipeline.query.with_entities(DealPipeline.id).all()}
+    public_ids = all_ids - private_ids
+
+    my_rows = DealPipelineViewer.query.filter_by(user_id=user_id).all()
+    my_ids = {r.pipeline_id for r in my_rows}
+
+    return public_ids | my_ids
+
+
 @deal_pipelines_bp.route('/admin/deal-pipelines', methods=['GET'])
 @jwt_required()
 def list_pipelines():
     """
-    Возвращает все воронки, отсортированные по `order`. Если передан
-    `?with_stages=1` — включает стадии в ответ (для UI Kanban при
-    первичной загрузке — одним запросом всё сразу).
+    Возвращает воронки, отсортированные по `order`. Если передан
+    `?with_stages=1` — включает стадии в ответ.
 
-    Менеджеры (system) могут читать список, чтобы Kanban мог отрисоваться —
-    write защищён на уровне отдельных endpoint'ов.
+    Фильтр по видимости (`DealPipelineViewer`):
+      - owner / can_see_all_deals / can_manage_pipelines → все воронки
+      - обычный менеджер → публичные (нет записей в viewers) + те, где
+        он явно добавлен
     """
+    from flask_jwt_extended import get_jwt_identity
     role = (get_jwt() or {}).get('role')
     if role not in ('admin', 'system'):
         return jsonify({'error': 'Доступ запрещён'}), 403
 
+    try:
+        uid = int(get_jwt_identity()) if get_jwt_identity() else None
+    except (TypeError, ValueError):
+        uid = None
+    visible = _visible_pipeline_ids_for(uid)
+
     include_stages = request.args.get('with_stages') == '1'
-    pipelines = DealPipeline.query.order_by(DealPipeline.order, DealPipeline.id).all()
+    q = DealPipeline.query
+    if visible is not None:
+        if not visible:
+            return jsonify({'success': True, 'pipelines': []}), 200
+        q = q.filter(DealPipeline.id.in_(visible))
+    pipelines = q.order_by(DealPipeline.order, DealPipeline.id).all()
     return jsonify({
         'success': True,
         'pipelines': [p.to_dict(include_stages=include_stages) for p in pipelines],
+    }), 200
+
+
+@deal_pipelines_bp.route('/admin/deal-pipelines/<int:pid>/viewers', methods=['GET'])
+@jwt_required()
+def get_pipeline_viewers(pid):
+    """
+    Текущий белый список юзеров для воронки + полный список SystemUser'ов
+    для выбора в модалке (чтобы фронт не делал отдельный запрос).
+
+    Читать может только тот кто управляет воронками (can_manage_pipelines
+    или owner) — остальным незачем видеть кому выдан доступ.
+    """
+    err = _check_admin_only()
+    if err:
+        return err
+    if not DealPipeline.query.get(pid):
+        return jsonify({'error': 'Воронка не найдена'}), 404
+    rows = DealPipelineViewer.query.filter_by(pipeline_id=pid).all()
+    allowed = [r.user_id for r in rows]
+    users = SystemUser.query.order_by(SystemUser.full_name, SystemUser.email).all()
+    return jsonify({
+        'success': True,
+        'pipeline_id': pid,
+        'allowed_user_ids': allowed,
+        'system_users': [
+            {
+                'id': u.id,
+                'email': u.email,
+                'full_name': u.full_name,
+                'is_owner': bool(u.is_owner),
+            }
+            for u in users
+        ],
+    }), 200
+
+
+@deal_pipelines_bp.route('/admin/deal-pipelines/<int:pid>/viewers', methods=['PUT'])
+@jwt_required()
+def put_pipeline_viewers(pid):
+    """Заменить белый список юзеров для воронки. Body: {user_ids: [int, ...]}."""
+    err = _check_admin_only()
+    if err:
+        return err
+    if not DealPipeline.query.get(pid):
+        return jsonify({'error': 'Воронка не найдена'}), 404
+    data = request.get_json() or {}
+    raw = data.get('user_ids') or []
+    if not isinstance(raw, list):
+        return jsonify({'error': 'user_ids должен быть массивом'}), 400
+
+    # Нормализуем: int, уникальные, только существующие SystemUser'ы.
+    cleaned: list[int] = []
+    seen = set()
+    for v in raw:
+        try:
+            uid = int(v)
+        except (TypeError, ValueError):
+            continue
+        if uid in seen:
+            continue
+        if not SystemUser.query.get(uid):
+            continue
+        seen.add(uid)
+        cleaned.append(uid)
+
+    # Полная замена: удаляем всё и вставляем заново. Для 2-50 юзеров быстрее
+    # и проще диффа.
+    DealPipelineViewer.query.filter_by(pipeline_id=pid).delete()
+    for uid in cleaned:
+        db.session.add(DealPipelineViewer(pipeline_id=pid, user_id=uid))
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'pipeline_id': pid,
+        'allowed_user_ids': cleaned,
     }), 200
 
 

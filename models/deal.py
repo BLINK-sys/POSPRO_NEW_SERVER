@@ -64,7 +64,13 @@ class Deal(db.Model):
     currency = db.Column(db.String(8), nullable=False, default='KZT', server_default=db.text("'KZT'"))
     expected_close_at = db.Column(db.DateTime, nullable=True)
     priority = db.Column(db.String(16), nullable=False, default='normal', server_default=db.text("'normal'"))
+    # Устаревшее enum-поле (site/incoming/cold/warm/referral/ingest) — больше
+    # не используется, оставлено как «deprecated» для старых значений в БД
+    # (миграция add_deal_source_fk обнулила его). Новое поле — `source_id`.
     source = db.Column(db.String(32), nullable=True)
+    source_id = db.Column(
+        db.Integer, db.ForeignKey('deal_source.id', ondelete='SET NULL'), nullable=True,
+    )
     status = db.Column(db.String(16), nullable=False, default='open', server_default=db.text("'open'"))
     tags = db.Column(JSONB, nullable=False, default=list, server_default=db.text("'[]'::jsonb"))
     notes = db.Column(db.Text, nullable=True)
@@ -100,6 +106,7 @@ class Deal(db.Model):
             'expected_close_at': self.expected_close_at.isoformat() if self.expected_close_at else None,
             'priority': self.priority,
             'source': self.source,
+            'source_id': self.source_id,
             'status': self.status,
             'tags': self.tags or [],
             'notes': self.notes,

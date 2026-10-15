@@ -36,6 +36,7 @@ from routes.kp_share import kp_share_bp
 from routes.kp_clients import kp_clients_bp
 from routes.kp_templates import kp_templates_bp
 from routes.deal_pipelines import deal_pipelines_bp
+from routes.deal_sources import deal_sources_bp
 from routes.deals import deals_bp
 from routes.crm_sources import crm_sources_bp
 from routes.crm_webhooks import crm_webhooks_bp
@@ -126,6 +127,7 @@ def create_app():
     # 🔹 CRM: Сделки (Этап 3.1 — воронки/стадии, 3.2 — CRUD сделок + Kanban move,
     #            3.3 — публичный webhook ingest, 3.4 — админ-CRUD ingest-источников)
     app.register_blueprint(deal_pipelines_bp, url_prefix='/api')  # /api/admin/deal-pipelines, /api/admin/deal-stages
+    app.register_blueprint(deal_sources_bp, url_prefix='/api')    # /api/admin/deal-sources (справочник «Источник сделки»)
     app.register_blueprint(deals_bp, url_prefix='/api')           # /api/admin/deals
     app.register_blueprint(crm_sources_bp, url_prefix='/api')     # /api/admin/crm-sources
     app.register_blueprint(crm_webhooks_bp, url_prefix='/api')    # /api/webhooks/crm/ingest/<token>

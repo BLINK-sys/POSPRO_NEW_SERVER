@@ -211,6 +211,21 @@ def _deal_full_dict(deal: Deal) -> dict:
         for o, order in orders
     ]
 
+    # Разворачиваем источник сделки (DealSource) — название + цвет для чипа.
+    d['deal_source'] = None
+    if deal.source_id:
+        try:
+            from models.deal_source import DealSource
+            ds = DealSource.query.get(deal.source_id)
+            if ds:
+                d['deal_source'] = {
+                    'id': ds.id,
+                    'name': ds.name,
+                    'color': ds.color,
+                }
+        except Exception:
+            pass
+
     # Название источника ingest'а (для метки на карточке). Одиночный
     # deal — точечно ищем правило, не тянем всю таблицу.
     d['source_name'] = None
@@ -295,6 +310,16 @@ def _parse_deal_payload(data: dict, *, partial: bool = False):
         if s and s not in DEAL_SOURCES:
             return False, f'source: {", ".join(DEAL_SOURCES)}', {}
         fields['source'] = s or None
+
+    if 'source_id' in data:
+        sid = data.get('source_id')
+        if sid in (None, '', 0):
+            fields['source_id'] = None
+        else:
+            try:
+                fields['source_id'] = int(sid)
+            except (TypeError, ValueError):
+                return False, 'source_id должен быть числом', {}
 
     if 'status' in data:
         st = data.get('status')
@@ -489,6 +514,7 @@ def create_deal():
         expected_close_at=fields.get('expected_close_at'),
         priority=fields.get('priority', 'normal'),
         source=fields.get('source'),
+        source_id=fields.get('source_id'),
         status=status,
         tags=fields.get('tags', []),
         notes=fields.get('notes'),

@@ -132,6 +132,7 @@ def _apply(rule: CrmIngestSource, payload: dict) -> IngestResult:
         currency=_get_str(payload, 'currency') or 'KZT',
         priority=_get_str(payload, 'priority') or rule.priority,
         source='ingest',
+        source_id=rule.default_deal_source_id,
         status='open',
         tags=[],
         notes=notes,

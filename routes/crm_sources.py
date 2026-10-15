@@ -164,6 +164,16 @@ def _parse_payload(data: dict, *, partial: bool = False, current: CrmIngestSourc
             except (TypeError, ValueError):
                 return False, 'fixed_user_id должен быть числом', {}
 
+    if 'default_deal_source_id' in data:
+        v = data.get('default_deal_source_id')
+        if v in (None, '', 0):
+            fields['default_deal_source_id'] = None
+        else:
+            try:
+                fields['default_deal_source_id'] = int(v)
+            except (TypeError, ValueError):
+                return False, 'default_deal_source_id должен быть числом', {}
+
     if 'dedupe_by_ref' in data:
         fields['dedupe_by_ref'] = bool(data.get('dedupe_by_ref'))
     if 'active' in data:
@@ -285,6 +295,7 @@ def create_source():
         pool_user_ids=fields.get('pool_user_ids', []),
         fixed_user_id=fields.get('fixed_user_id'),
         client_resolution=fields.get('client_resolution', 'none'),
+        default_deal_source_id=fields.get('default_deal_source_id'),
         dedupe_by_ref=fields.get('dedupe_by_ref', True),
         active=fields.get('active', True),
         created_by=_current_user_id(),

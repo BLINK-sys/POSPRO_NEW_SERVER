@@ -78,6 +78,13 @@ class CrmIngestSource(db.Model):
         db.String(24), nullable=False, default='none', server_default=db.text("'none'"),
     )
 
+    # «Источник сделки по умолчанию» — проставляется в Deal.source_id для
+    # сделок, автосозданных через этот ingest. NULL — не ставим, менеджер
+    # потом сам выберет (или оставит пустым).
+    default_deal_source_id = db.Column(
+        db.Integer, db.ForeignKey('deal_source.id', ondelete='SET NULL'), nullable=True,
+    )
+
     # Дедупликация: если true и уже есть Deal с (source_ref_type,
     # source_ref_id) — возвращаем существующий вместо создания второго.
     dedupe_by_ref = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('true'))
@@ -107,6 +114,7 @@ class CrmIngestSource(db.Model):
             'pool_user_ids': self.pool_user_ids or [],
             'fixed_user_id': self.fixed_user_id,
             'client_resolution': self.client_resolution,
+            'default_deal_source_id': self.default_deal_source_id,
             'dedupe_by_ref': bool(self.dedupe_by_ref),
             'active': bool(self.active),
             'last_used_at': self.last_used_at.isoformat() if self.last_used_at else None,

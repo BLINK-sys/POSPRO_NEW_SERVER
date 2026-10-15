@@ -79,3 +79,32 @@ class DealStage(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class DealPipelineViewer(db.Model):
+    """
+    Белый список пользователей, которым воронка видна в UI (dropdown на
+    /admin/deals + в настройках). Если для воронки список ПУСТОЙ — она
+    считается публичной (видна всем). Если в списке есть хоть одна запись
+    — видна только owner / can_see_all_deals / can_manage_pipelines + юзерам
+    из этого списка.
+
+    Это ТОЛЬКО фильтр списка воронок — не меняет _visible_deals_query.
+    То есть если менеджер responsible по сделке из «закрытой» воронки,
+    куда его в viewers не добавили, он всё равно откроет сделку по прямой
+    ссылке и будет видеть/править её (как и раньше). Просто в dropdown
+    этой воронки у него не будет.
+    """
+    __tablename__ = 'deal_pipeline_viewer'
+
+    pipeline_id = db.Column(
+        db.Integer,
+        db.ForeignKey('deal_pipeline.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('system_users.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    added_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
