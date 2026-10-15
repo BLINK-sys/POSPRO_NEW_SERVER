@@ -103,6 +103,27 @@ def list_clients():
     clients = query.order_by(KpClient.full_name).all()
 
     out = [c.to_dict() for c in clients]
+
+    # Автор клиента — батч-резолв в имя (чтобы фронт мог рендерить
+    # «Кем создан» и фильтр без второго запроса в system-users).
+    creator_ids = {c.created_by for c in clients if c.created_by}
+    if creator_ids:
+        from models.systemuser import SystemUser
+        creators = {
+            u.id: {
+                'id': u.id,
+                'name': u.full_name or u.email,
+                'email': u.email,
+            }
+            for u in SystemUser.query.filter(SystemUser.id.in_(creator_ids)).all()
+        }
+        for row in out:
+            cb = row.get('created_by')
+            row['creator'] = creators.get(cb) if cb else None
+    else:
+        for row in out:
+            row['creator'] = None
+
     if with_counts and clients:
         # Батч-подсчёт где именно используется клиент: КП / сделки / задачи.
         # Три GROUP BY — не N+1, одним SQL-запросом каждый.
