@@ -90,6 +90,8 @@ def list_clients():
     # Опциональный поиск по ФИО / объекту. По contacts JSONB не ищем —
     # списки на бэке короткие, фронт всё равно фильтрует уже отрисованное.
     q = (request.args.get('q') or '').strip()
+    with_counts = request.args.get('with_counts') == '1'
+
     query = KpClient.query
     if q:
         like = f'%{q.lower()}%'
@@ -99,9 +101,32 @@ def list_clients():
         ))
 
     clients = query.order_by(KpClient.full_name).all()
+
+    out = [c.to_dict() for c in clients]
+    if with_counts and clients:
+        # Батч-подсчёт где именно используется клиент: КП / сделки / задачи.
+        # Три GROUP BY — не N+1, одним SQL-запросом каждый.
+        from models.deal import Deal
+        from models.task import Task
+        ids = [c.id for c in clients]
+        kp_counts = dict(db.session.query(
+            KPHistory.client_id, db.func.count(KPHistory.id),
+        ).filter(KPHistory.client_id.in_(ids)).group_by(KPHistory.client_id).all())
+        deal_counts = dict(db.session.query(
+            Deal.client_id, db.func.count(Deal.id),
+        ).filter(Deal.client_id.in_(ids)).group_by(Deal.client_id).all())
+        task_counts = dict(db.session.query(
+            Task.client_id, db.func.count(Task.id),
+        ).filter(Task.client_id.in_(ids)).group_by(Task.client_id).all())
+        for row in out:
+            cid = row['id']
+            row['kp_count'] = int(kp_counts.get(cid, 0))
+            row['deal_count'] = int(deal_counts.get(cid, 0))
+            row['task_count'] = int(task_counts.get(cid, 0))
+
     return jsonify({
         'success': True,
-        'clients': [c.to_dict() for c in clients],
+        'clients': out,
     }), 200
 
 
@@ -190,12 +215,26 @@ def delete_client(client_id):
     if not client:
         return jsonify({'error': 'Клиент не найден'}), 404
 
-    in_use_count = KPHistory.query.filter_by(client_id=client_id).count()
-    if in_use_count > 0:
+    # Проверяем ссылки из КП, сделок, задач. Если есть хоть где — блокируем,
+    # чтобы не осиротить документы (данные клиента + история общения ценные).
+    from models.deal import Deal
+    from models.task import Task
+    kp_cnt = KPHistory.query.filter_by(client_id=client_id).count()
+    deal_cnt = Deal.query.filter_by(client_id=client_id).count()
+    task_cnt = Task.query.filter_by(client_id=client_id).count()
+    total = kp_cnt + deal_cnt + task_cnt
+    if total > 0:
+        parts = []
+        if kp_cnt: parts.append(f'{kp_cnt} КП')
+        if deal_cnt: parts.append(f'{deal_cnt} сделок')
+        if task_cnt: parts.append(f'{task_cnt} задач')
         return jsonify({
-            'error': f'Нельзя удалить — клиент используется в {in_use_count} КП. '
-                     f'Сначала отвяжите его от этих документов или удалите КП.',
-            'in_use_count': in_use_count,
+            'error': f'Нельзя удалить — клиент используется в: {", ".join(parts)}. '
+                     f'Сначала отвяжите его.',
+            'in_use_count': total,
+            'kp_count': kp_cnt,
+            'deal_count': deal_cnt,
+            'task_count': task_cnt,
         }), 409
 
     db.session.delete(client)
