@@ -99,20 +99,37 @@ def list_clients():
     if err:
         return err
 
-    # Опциональный поиск по ФИО / объекту. По contacts JSONB не ищем —
-    # списки на бэке короткие, фронт всё равно фильтрует уже отрисованное.
+    # Опциональный поиск по ФИО / объекту / телефонам / email в contacts[].
+    # Телефоны/email лежат в JSONB `contacts` — делаем cast к text и
+    # LIKE по сериализованному представлению (компромисс, но достаточно
+    # для адресной книги на десятки тысяч записей; индекса JSONB пока нет).
     q = (request.args.get('q') or '').strip()
     with_counts = request.args.get('with_counts') == '1'
+    creator_id_arg = request.args.get('creator_id', type=int)
+    none_creator = request.args.get('creator_id') == 'none'
 
     query = KpClient.query
     if q:
         like = f'%{q.lower()}%'
         query = query.filter(db.or_(
-            db.func.lower(KpClient.full_name).like(like),
-            db.func.lower(KpClient.object).like(like),
+            db.func.lower(db.func.coalesce(KpClient.full_name, '')).like(like),
+            db.func.lower(db.func.coalesce(KpClient.object, '')).like(like),
+            db.func.lower(db.cast(KpClient.contacts, db.Text)).like(like),
         ))
 
-    clients = query.order_by(KpClient.full_name).all()
+    if none_creator:
+        query = query.filter(KpClient.created_by.is_(None))
+    elif creator_id_arg:
+        query = query.filter(KpClient.created_by == creator_id_arg)
+
+    total = query.count()
+    limit = min(request.args.get('limit', 100, type=int), 500)
+    offset = max(request.args.get('offset', 0, type=int), 0)
+
+    clients = (
+        query.order_by(KpClient.full_name.asc().nulls_last())
+        .limit(limit).offset(offset).all()
+    )
 
     out = [c.to_dict() for c in clients]
 
@@ -160,6 +177,43 @@ def list_clients():
     return jsonify({
         'success': True,
         'clients': out,
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+    }), 200
+
+
+@kp_clients_bp.route('/kp-clients/creators', methods=['GET'])
+@jwt_required()
+def list_client_creators():
+    """
+    Все уникальные авторы клиентов — для dropdown-фильтра «Чей клиент»
+    на /admin/clients. Без пагинации возвращать нельзя (у юзера может
+    быть 29k клиентов, но авторов — максимум десятки).
+    """
+    err = _check_admin_role()
+    if err:
+        return err
+    from models.systemuser import SystemUser
+    creator_ids = [
+        row[0] for row in db.session.query(KpClient.created_by)
+        .filter(KpClient.created_by.isnot(None))
+        .distinct().all()
+    ]
+    creators = []
+    if creator_ids:
+        users = SystemUser.query.filter(SystemUser.id.in_(creator_ids)).all()
+        creators = [
+            {'id': u.id, 'name': u.full_name or u.email, 'email': u.email}
+            for u in users
+        ]
+        creators.sort(key=lambda x: (x['name'] or '').lower())
+    # Отдельный флаг: есть ли клиенты без автора — показать «без автора» в фильтре.
+    has_null = db.session.query(KpClient.id).filter(KpClient.created_by.is_(None)).first() is not None
+    return jsonify({
+        'success': True,
+        'creators': creators,
+        'has_null': bool(has_null),
     }), 200
 
 
