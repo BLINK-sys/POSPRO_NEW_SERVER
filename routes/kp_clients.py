@@ -183,7 +183,7 @@ def list_clients():
     }), 200
 
 
-@kp_clients_bp.route('/kp-clients/creators', methods=['GET'])
+@kp_clients_bp.route('/kp-clients/creators', methods=['GET'], strict_slashes=False)
 @jwt_required()
 def list_client_creators():
     """
