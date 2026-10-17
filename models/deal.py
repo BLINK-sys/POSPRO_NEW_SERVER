@@ -52,7 +52,11 @@ class Deal(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
+    # client_id — PRIMARY контакт сделки для обратной совместимости и быстрой
+    # отрисовки в списках. Дополнительные контакты — через `DealContact`.
     client_id = db.Column(db.Integer, db.ForeignKey('kp_client.id', ondelete='SET NULL'), nullable=True)
+    # Опциональная привязка к компании (`kp_company`). Независимо от `client_id`.
+    company_id = db.Column(db.Integer, db.ForeignKey('kp_company.id', ondelete='SET NULL'), nullable=True)
     responsible_user_id = db.Column(db.Integer, db.ForeignKey('system_users.id', ondelete='SET NULL'), nullable=True)
     # Постановщик — автор сделки. Проставляется один раз при create и
     # больше не редактируется (в UI показан readonly, как «автор» в Git).
@@ -97,6 +101,7 @@ class Deal(db.Model):
             'id': self.id,
             'name': self.name,
             'client_id': self.client_id,
+            'company_id': self.company_id,
             'responsible_user_id': self.responsible_user_id,
             'creator_id': self.creator_id,
             'pipeline_id': self.pipeline_id,

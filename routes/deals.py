@@ -226,6 +226,46 @@ def _deal_full_dict(deal: Deal) -> dict:
         except Exception:
             pass
 
+    # Компания (`kp_company`) и мультисвязь контактов — JOIN одной выборкой.
+    d['company'] = None
+    if deal.company_id:
+        try:
+            from models.kp_company import KpCompany
+            co = KpCompany.query.get(deal.company_id)
+            if co:
+                d['company'] = {
+                    'id': co.id,
+                    'name': co.name,
+                    'bin': co.bin,
+                    'phone': co.phone,
+                }
+        except Exception:
+            pass
+
+    d['contacts'] = []
+    try:
+        from models.kp_company import DealContact
+        from models.kp_client import KpClient
+        rows = (
+            db.session.query(DealContact, KpClient)
+            .join(KpClient, KpClient.id == DealContact.client_id)
+            .filter(DealContact.deal_id == deal.id)
+            .order_by(DealContact.is_primary.desc(), DealContact.added_at.asc())
+            .all()
+        )
+        d['contacts'] = [
+            {
+                'client_id': cl.id,
+                'name': cl.display_name,
+                'is_primary': bool(dc.is_primary),
+                'contacts': cl.contacts or [],
+                'company_id': cl.company_id,
+            }
+            for dc, cl in rows
+        ]
+    except Exception:
+        pass
+
     # Название источника ingest'а (для метки на карточке). Одиночный
     # deal — точечно ищем правило, не тянем всю таблицу.
     d['source_name'] = None
@@ -275,7 +315,7 @@ def _parse_deal_payload(data: dict, *, partial: bool = False):
                 return False, f'{k} обязателен', {}
 
     # Опциональные для PUT/POST.
-    for k in ('pipeline_id', 'stage_id', 'client_id', 'responsible_user_id'):
+    for k in ('pipeline_id', 'stage_id', 'client_id', 'company_id', 'responsible_user_id'):
         if k in data and data[k] is not None and k not in fields:
             try:
                 fields[k] = int(data[k])
@@ -283,6 +323,36 @@ def _parse_deal_payload(data: dict, *, partial: bool = False):
                 return False, f'{k} должен быть числом', {}
         elif k in data and data[k] is None:
             fields[k] = None  # явное «сбросить»
+
+    # contact_ids: [int, …] — список привязанных контактов сделки.
+    # primary_contact_id — какой из них «основной» (dedup `deal.client_id`).
+    # Если передан contact_ids без primary — primary = первый из списка.
+    if 'contact_ids' in data:
+        raw = data.get('contact_ids') or []
+        if not isinstance(raw, list):
+            return False, 'contact_ids должен быть массивом', {}
+        try:
+            ids = [int(x) for x in raw if x is not None]
+        except (TypeError, ValueError):
+            return False, 'contact_ids должен содержать числа', {}
+        # dedup с сохранением порядка
+        seen = set()
+        clean: list[int] = []
+        for x in ids:
+            if x not in seen:
+                seen.add(x)
+                clean.append(x)
+        fields['contact_ids'] = clean
+
+    if 'primary_contact_id' in data:
+        v = data.get('primary_contact_id')
+        if v in (None, '', 0):
+            fields['primary_contact_id'] = None
+        else:
+            try:
+                fields['primary_contact_id'] = int(v)
+            except (TypeError, ValueError):
+                return False, 'primary_contact_id должен быть числом', {}
 
     if 'amount' in data:
         v = data['amount']
@@ -502,9 +572,24 @@ def create_deal():
     # переносит в won/lost стадию.
     status = fields.get('status', 'open')
 
+    # Мульти-контакты + primary. Если переданы contact_ids — primary
+    # должен быть в этом же списке; иначе берём первый из contact_ids.
+    # deal.client_id зеркалим с primary для обратной совместимости.
+    contact_ids: list[int] = fields.get('contact_ids') or []
+    primary_contact_id: int | None = fields.get('primary_contact_id')
+    if contact_ids and (primary_contact_id is None or primary_contact_id not in contact_ids):
+        primary_contact_id = contact_ids[0]
+    # Если явного contact_ids нет, но передан client_id — создадим одну
+    # привязку на client_id как primary (back-compat).
+    legacy_client_id = fields.get('client_id')
+    if not contact_ids and legacy_client_id:
+        contact_ids = [legacy_client_id]
+        primary_contact_id = legacy_client_id
+
     d = Deal(
         name=fields['name'],
-        client_id=fields.get('client_id'),
+        client_id=primary_contact_id or legacy_client_id,
+        company_id=fields.get('company_id'),
         responsible_user_id=responsible,
         creator_id=user_id,
         pipeline_id=pipeline_id,
@@ -521,6 +606,16 @@ def create_deal():
     )
     db.session.add(d)
     db.session.flush()
+
+    # Записываем мультисвязь (если есть что писать).
+    if contact_ids:
+        from models.kp_company import DealContact
+        for cid in contact_ids:
+            db.session.add(DealContact(
+                deal_id=d.id,
+                client_id=cid,
+                is_primary=(cid == primary_contact_id),
+            ))
 
     db.session.add(DealActivity(
         deal_id=d.id, user_id=user_id, kind='created', payload={
@@ -584,6 +679,25 @@ def update_deal(did):
     # авто-логику статуса и запись в activity).
     if 'stage_id' in fields and fields['stage_id'] != d.stage_id:
         return jsonify({'error': 'Смена стадии — через POST /deals/<id>/move'}), 400
+
+    # Обработка мульти-контактов отдельно — это не колонка Deal.
+    contact_ids_payload = fields.pop('contact_ids', None)
+    primary_contact_id = fields.pop('primary_contact_id', None)
+    if contact_ids_payload is not None:
+        if contact_ids_payload and (
+            primary_contact_id is None or primary_contact_id not in contact_ids_payload
+        ):
+            primary_contact_id = contact_ids_payload[0]
+        from models.kp_company import DealContact
+        DealContact.query.filter_by(deal_id=d.id).delete(synchronize_session=False)
+        for cid in contact_ids_payload:
+            db.session.add(DealContact(
+                deal_id=d.id,
+                client_id=cid,
+                is_primary=(cid == primary_contact_id),
+            ))
+        # Синхронизируем deal.client_id с primary для back-compat.
+        fields['client_id'] = primary_contact_id
 
     # Отслеживание изменений для activity.
     changes = {}

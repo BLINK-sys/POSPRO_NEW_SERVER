@@ -34,6 +34,7 @@ from routes.kp_settings import kp_settings_bp
 from routes.kp_history import kp_history_bp
 from routes.kp_share import kp_share_bp
 from routes.kp_clients import kp_clients_bp
+from routes.kp_companies import kp_companies_bp
 from routes.kp_templates import kp_templates_bp
 from routes.deal_pipelines import deal_pipelines_bp
 from routes.deal_sources import deal_sources_bp
@@ -70,6 +71,8 @@ from routes.static_pages import static_pages_bp
 from models.systemuser import SystemUser
 # Импорт нужен чтобы db.create_all() увидел модель шаблонов на свежей БД.
 from models.kp_template import KpTemplate  # noqa: F401
+# То же для компаний CRM и мультисвязи сделка↔контакт.
+from models.kp_company import KpCompany, DealContact  # noqa: F401
 
 
 def create_app():
@@ -122,6 +125,7 @@ def create_app():
     app.register_blueprint(kp_history_bp, url_prefix='/api')   # /api/kp-history
     app.register_blueprint(kp_share_bp, url_prefix='/api')     # /api/kp-history/<id>/share, /api/admin/kp-super-admin-access
     app.register_blueprint(kp_clients_bp, url_prefix='/api')   # /api/kp-clients
+    app.register_blueprint(kp_companies_bp, url_prefix='/api') # /api/admin/kp-companies
     app.register_blueprint(kp_templates_bp, url_prefix='/api') # /api/kp-templates
 
     # 🔹 CRM: Сделки (Этап 3.1 — воронки/стадии, 3.2 — CRUD сделок + Kanban move,

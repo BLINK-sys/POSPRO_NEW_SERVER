@@ -31,6 +31,15 @@ class KpClient(db.Model):
     object = db.Column(db.Text, nullable=True)
     contacts = db.Column(JSONB, nullable=False, default=list, server_default='[]')
 
+    # Опциональная привязка к компании (`kp_company`). При удалении
+    # компании оставляем контакт жить (SET NULL) — контакт сам по себе
+    # ценен, даже если компания закрылась/объединилась.
+    company_id = db.Column(
+        db.Integer,
+        db.ForeignKey('kp_company.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+
     # Кто создал — для аудита, не используется для гейтинга доступа.
     created_by = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -48,6 +57,7 @@ class KpClient(db.Model):
             'object': self.object,
             'contacts': self.contacts or [],
             'display_name': self.display_name,
+            'company_id': self.company_id,
             'created_by': self.created_by,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,

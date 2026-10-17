@@ -73,10 +73,22 @@ def _validate_payload(data: dict, *, partial: bool = False) -> tuple[bool, str |
     else:
         contacts = None  # сигнал «не обновлять» для PUT
 
+    # company_id: int, null или отсутствует (отсутствует = «не менять» в PUT).
+    company_id_present = 'company_id' in data
+    company_id = None
+    if company_id_present:
+        raw = data.get('company_id')
+        if raw not in (None, '', 0):
+            try:
+                company_id = int(raw)
+            except (TypeError, ValueError):
+                return False, 'Некорректный company_id', {}
+
     return True, None, {
         'full_name': full_name,
         'object': object_,
         'contacts': contacts,
+        'company_id': company_id if company_id_present else '__skip__',
     }
 
 
@@ -182,6 +194,8 @@ def create_client():
         contacts=fields['contacts'] or [],
         created_by=viewer_id,
     )
+    if fields.get('company_id') not in (None, '__skip__'):
+        client.company_id = fields['company_id']
     db.session.add(client)
     db.session.commit()
     return jsonify({'success': True, 'client': client.to_dict()}), 201
@@ -210,6 +224,8 @@ def update_client(client_id):
         client.object = fields['object']
     if fields['contacts'] is not None:
         client.contacts = fields['contacts']
+    if fields.get('company_id') != '__skip__':
+        client.company_id = fields['company_id']  # None = отвязать
 
     if not client.full_name:
         return jsonify({'error': 'ФИО клиента обязательно'}), 400
