@@ -563,10 +563,23 @@ def list_deals():
             return None
         return source_by_key.get(ref_type)
 
+    # Батч-резолв DealSource для всех сделок страницы — чтобы карточки
+    # канбана могли показать «Источник» (deal_source.name + color).
+    sources_by_id: dict[int, dict] = {}
+    source_ids = {d.source_id for d in deals if d.source_id}
+    if source_ids:
+        try:
+            from models.deal_source import DealSource
+            for s in DealSource.query.filter(DealSource.id.in_(source_ids)).all():
+                sources_by_id[s.id] = {'id': s.id, 'name': s.name, 'color': s.color}
+        except Exception:
+            pass
+
     out = []
     for d in deals:
         row = d.to_dict()
         row['source_name'] = _resolve_source_name(d.source_ref_type)
+        row['deal_source'] = sources_by_id.get(d.source_id) if d.source_id else None
         out.append(row)
 
     return jsonify({
