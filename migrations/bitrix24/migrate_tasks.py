@@ -41,11 +41,43 @@ from extensions import db
 from models.systemuser import SystemUser
 from models.task import Task, TaskMember
 
-from migrations.bitrix24._b24 import iter_list
+from migrations.bitrix24._b24 import call
 from migrations.bitrix24._utils import (
     load_mapping, user_pospro_id,
     mirror_get, mirror_set,
 )
+
+
+def iter_tasks_by_id(select_fields: list[str]):
+    """
+    Пагинация tasks.task.list через `filter[>ID]=<last_id>` вместо
+    стандартного start-cursor'а. Нужна потому что start-пагинация в
+    tasks.task.list глохнет где-то после ~2500 задач (iter_list срабатывает
+    защитой nxt_i<=start — возвращает кривой cursor).
+
+    ORDER BY ID ASC — задачи идут от самых старых к свежим.
+    """
+    last_id = 0
+    while True:
+        out = call('tasks.task.list', {
+            'select[]': select_fields,
+            'order[ID]': 'ASC',
+            'filter[>ID]': last_id,
+            'start': 0,  # «отключаем» встроенную пагинацию: каждый запрос
+                         # с нуля, фильтр по ID двигает курсор.
+        })
+        result = out.get('result') or {}
+        tasks = result.get('tasks') if isinstance(result, dict) else []
+        if not tasks:
+            return
+        for t in tasks:
+            yield t
+        try:
+            last_id = max(int(t.get('id') or 0) for t in tasks)
+        except (TypeError, ValueError):
+            return
+        if last_id <= 0:
+            return
 
 
 # tasks.task.list использует другие имена полей и nested selection:
@@ -191,14 +223,10 @@ def main():
         owner_id = owner.id
 
         n_total = n_created = n_skipped = 0
-        # tasks.task.list требует select[] в особом синтаксисе — передаём
-        # массив полей и получаем в result.tasks.
-        for t in iter_list('tasks.task.list', {
-            # tasks.task.list ждёт `select[]=…&select[]=…`, а не `select=…`.
-            # Б24 различает их и возвращает 400 на второй форме.
-            'select[]': FIELDS,
-            'order[ID]': 'ASC',
-        }):
+        # Используем ID-пагинацию (iter_tasks_by_id) вместо стандартного
+        # iter_list — у tasks.task.list start-cursor глючит после ~2500
+        # записей, из-за чего прошлый импорт остановился на апреле 2024.
+        for t in iter_tasks_by_id(FIELDS):
             n_total += 1
             try:
                 result = migrate_one(t, mapping, owner_id, args.dry_run)
