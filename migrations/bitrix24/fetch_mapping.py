@@ -36,7 +36,7 @@ from migrations.bitrix24._b24 import call as b24_call
 
 
 OUT_PATHS = [
-    '/opt/render/project/src/disk/b24_mapping.json',
+    '/disk/b24_migration/b24_mapping.json',
     '/tmp/b24_mapping.json',
 ]
 
@@ -265,10 +265,12 @@ def main():
         except Exception as e:
             print(f'  (could not save to {path}: {e})', flush=True)
     if saved:
-        print(f'\n✅ Mapping saved to: {saved}', flush=True)
-
-    print('\n=== FULL JSON (copy below) ===', flush=True)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+        size_kb = os.path.getsize(saved) / 1024
+        print(f'\n✅ Mapping saved to: {saved} ({size_kb:.1f} KB)', flush=True)
+        print(
+            'Retrieve via: GET /api/admin/b24-migration/mapping (owner-only)',
+            flush=True,
+        )
 
 
 if __name__ == '__main__':
