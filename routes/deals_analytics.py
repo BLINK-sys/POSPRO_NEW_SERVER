@@ -144,11 +144,14 @@ def stats():
         func.coalesce(
             func.sum(case((Deal.status == 'won', Deal.amount), else_=0)), 0,
         ),
+        func.coalesce(
+            func.sum(case((Deal.status == 'lost', Deal.amount), else_=0)), 0,
+        ),
         func.count(case((Deal.status == 'won', 1))),
     ).select_from(Deal).filter(
         Deal.id.in_(q.with_entities(Deal.id).subquery())
     ).one()
-    total, sum_open, sum_won, won_count = row
+    total, sum_open, sum_won, sum_lost, won_count = row
     avg_won = float(sum_won) / won_count if won_count else 0.0
 
     return jsonify({
@@ -156,6 +159,7 @@ def stats():
         'total': int(total or 0),
         'sum_open': float(sum_open or 0),
         'sum_won': float(sum_won or 0),
+        'sum_lost': float(sum_lost or 0),
         'avg_won': float(avg_won),
     }), 200
 
