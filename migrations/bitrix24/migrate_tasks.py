@@ -194,7 +194,9 @@ def main():
         # tasks.task.list требует select[] в особом синтаксисе — передаём
         # массив полей и получаем в result.tasks.
         for t in iter_list('tasks.task.list', {
-            'select': FIELDS,
+            # tasks.task.list ждёт `select[]=…&select[]=…`, а не `select=…`.
+            # Б24 различает их и возвращает 400 на второй форме.
+            'select[]': FIELDS,
             'order[ID]': 'ASC',
         }):
             n_total += 1
