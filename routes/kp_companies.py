@@ -101,6 +101,16 @@ def list_companies():
             func.lower(func.coalesce(KpCompany.email, '')).like(like),
         ))
 
+    # Фильтр «Кем создана»: int → конкретный юзер, 'none' → без автора.
+    creator_id_raw = request.args.get('creator_id')
+    if creator_id_raw == 'none':
+        q = q.filter(KpCompany.created_by.is_(None))
+    elif creator_id_raw:
+        try:
+            q = q.filter(KpCompany.created_by == int(creator_id_raw))
+        except (TypeError, ValueError):
+            pass
+
     total = q.count()
     limit = min(request.args.get('limit', 100, type=int), 500)
     offset = max(request.args.get('offset', 0, type=int), 0)
@@ -114,6 +124,41 @@ def list_companies():
         'total': total,
         'limit': limit,
         'offset': offset,
+    }), 200
+
+
+@kp_companies_bp.route('/admin/kp-companies/creators', methods=['GET'],
+                       strict_slashes=False)
+@jwt_required()
+def list_company_creators():
+    """
+    Все уникальные авторы компаний — для dropdown-фильтра «Кем создана»
+    на /admin/clients?tab=companies. Аналог /api/kp-clients/creators.
+    """
+    err = _check_admin_role()
+    if err:
+        return err
+    creator_ids = [
+        row[0] for row in db.session.query(KpCompany.created_by)
+        .filter(KpCompany.created_by.isnot(None))
+        .distinct().all()
+    ]
+    creators = []
+    if creator_ids:
+        users = SystemUser.query.filter(SystemUser.id.in_(creator_ids)).all()
+        creators = [
+            {'id': u.id, 'name': (u.full_name or '').strip() or u.email,
+             'email': u.email}
+            for u in users
+        ]
+        creators.sort(key=lambda x: (x['name'] or '').lower())
+    has_null = db.session.query(KpCompany.id).filter(
+        KpCompany.created_by.is_(None),
+    ).first() is not None
+    return jsonify({
+        'success': True,
+        'creators': creators,
+        'has_null': bool(has_null),
     }), 200
 
 
