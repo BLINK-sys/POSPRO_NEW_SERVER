@@ -65,8 +65,13 @@ def _enrich(company_dicts: list[dict]) -> list[dict]:
     creators_by_id: dict[int, dict] = {}
     if creator_ids:
         for u in SystemUser.query.filter(SystemUser.id.in_(creator_ids)).all():
-            full = ' '.join(filter(None, [u.last_name, u.first_name])).strip() or u.email
-            creators_by_id[u.id] = {'id': u.id, 'name': full, 'email': u.email}
+            # В модели SystemUser только одно поле full_name, без разделения
+            # на first/last — используем его как есть, с fallback на email.
+            creators_by_id[u.id] = {
+                'id': u.id,
+                'name': (u.full_name or '').strip() or u.email,
+                'email': u.email,
+            }
 
     for c in company_dicts:
         c['clients_count'] = clients_count.get(c['id'], 0)
