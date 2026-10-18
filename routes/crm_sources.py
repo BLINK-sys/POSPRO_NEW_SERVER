@@ -405,10 +405,14 @@ def test_source(sid):
     if not isinstance(payload, dict):
         return jsonify({'error': 'Payload должен быть объектом'}), 400
 
-    # savepoint позволит откатить всё что натворил _apply, оставив
-    # исходную транзакцию нетронутой.
+    # Dry-run: `_apply` внутри делает несколько commit() (так работает
+    # production-ingest). Чтобы ничего не осталось в БД — подменяем
+    # commit на flush на время вызова, затем откатываем всю транзакцию.
+    # Savepoint тут не работает: первый же commit() внутри _apply
+    # освобождает savepoint, и дальше transaction is closed.
+    original_commit = db.session.commit
+    db.session.commit = db.session.flush  # type: ignore[assignment]
     try:
-        savepoint = db.session.begin_nested()
         result = _apply(s, payload)
         preview = None
         if result.ok and result.deal_id:
@@ -416,23 +420,24 @@ def test_source(sid):
             deal = Deal.query.get(result.deal_id)
             if deal:
                 preview = deal.to_dict()
-        # Откатываем всё (создание сделки, activity, изменения rule.stats).
-        savepoint.rollback()
-        # Внешняя транзакция всё ещё активна — коммитим её пустой, чтобы
-        # SQLAlchemy сессия не подвисла.
-        db.session.rollback()
-        return jsonify({
-            'success': True,
-            'result': {
-                'ok': result.ok,
-                'deal_id': result.deal_id,
-                'responsible_id': result.responsible_id,
-                'dedupe': result.dedupe,
-                'error': result.error,
-            },
-            'preview_deal': preview,
-            'note': 'Тестовый вызов, ничего не сохранено в БД',
-        }), 200
     except Exception as e:
+        db.session.commit = original_commit  # type: ignore[assignment]
         db.session.rollback()
         return jsonify({'error': f'Тестовый вызов упал: {e}'}), 500
+    finally:
+        db.session.commit = original_commit  # type: ignore[assignment]
+
+    # Откатываем всё что натворил _apply — ничего не сохраняется в БД.
+    db.session.rollback()
+    return jsonify({
+        'success': True,
+        'result': {
+            'ok': result.ok,
+            'deal_id': result.deal_id,
+            'responsible_id': result.responsible_id,
+            'dedupe': result.dedupe,
+            'error': result.error,
+        },
+        'preview_deal': preview,
+        'note': 'Тестовый вызов, ничего не сохранено в БД',
+    }), 200
