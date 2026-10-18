@@ -56,7 +56,13 @@ def _apply_filters(q):
     stage_id = request.args.get('stage_id', type=int)
     client_id = request.args.get('client_id', type=int)
     company_id = request.args.get('company_id', type=int)
-    responsible_id = request.args.get('responsible_id', type=int)
+    responsible_id_raw = request.args.get('responsible_id')
+    # 'none' → responsible IS NULL, число — конкретный, иначе не фильтруем
+    responsible_none = responsible_id_raw == 'none'
+    try:
+        responsible_id = int(responsible_id_raw) if responsible_id_raw and not responsible_none else None
+    except (TypeError, ValueError):
+        responsible_id = None
     source_id = request.args.get('source_id')  # int или 'none' для без источника
     amount_min = request.args.get('amount_min', type=float)
     amount_max = request.args.get('amount_max', type=float)
@@ -93,7 +99,9 @@ def _apply_filters(q):
         ))
     if company_id:
         q = q.filter(Deal.company_id == company_id)
-    if responsible_id:
+    if responsible_none:
+        q = q.filter(Deal.responsible_user_id.is_(None))
+    elif responsible_id:
         q = q.filter(Deal.responsible_user_id == responsible_id)
     if source_id == 'none':
         q = q.filter(Deal.source_id.is_(None))

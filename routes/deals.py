@@ -452,7 +452,14 @@ def list_deals():
     pipeline_id = request.args.get('pipeline_id', type=int)
     stage_id = request.args.get('stage_id', type=int)
     status = request.args.get('status')
-    responsible_id = request.args.get('responsible_id', type=int)
+    responsible_id_raw = request.args.get('responsible_id')
+    # 'none' → фильтр «Без ответственного» (responsible_user_id IS NULL),
+    # число → конкретный юзер, иначе — не фильтруем.
+    responsible_none = responsible_id_raw == 'none'
+    try:
+        responsible_id = int(responsible_id_raw) if responsible_id_raw and not responsible_none else None
+    except (TypeError, ValueError):
+        responsible_id = None
     client_id = request.args.get('client_id', type=int)
     company_id = request.args.get('company_id', type=int)
     mine = request.args.get('mine') == '1'
@@ -478,6 +485,8 @@ def list_deals():
         q = q.filter(Deal.status == status)
     if mine and user_id:
         q = q.filter(Deal.responsible_user_id == user_id)
+    elif responsible_none:
+        q = q.filter(Deal.responsible_user_id.is_(None))
     elif responsible_id:
         q = q.filter(Deal.responsible_user_id == responsible_id)
     if client_id:
