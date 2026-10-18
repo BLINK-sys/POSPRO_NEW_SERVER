@@ -153,3 +153,24 @@ class TaskActivity(db.Model):
     kind = db.Column(db.String(32), nullable=False)
     payload = db.Column(JSONB, nullable=False, default=dict, server_default=db.text("'{}'::jsonb"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class TaskWatcher(db.Model):
+    """
+    Per-user «избранные» задачи — личный список, который юзер пополняет
+    через звёздочку в списке/карточке задачи. От ролей (creator/responsible/
+    member) не зависит, видимость стандартная (см. _visible_tasks_query).
+    """
+    __tablename__ = 'task_watcher'
+
+    user_id = db.Column(
+        db.Integer, db.ForeignKey('system_users.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    task_id = db.Column(
+        db.Integer, db.ForeignKey('task.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    created_at = db.Column(
+        db.DateTime, default=datetime.utcnow, nullable=False,
+    )

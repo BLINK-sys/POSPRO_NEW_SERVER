@@ -657,21 +657,9 @@ def create_deal():
     ))
     db.session.commit()
 
-    # Автосоздание чата сделки + membership для creator и responsible.
-    # Best-effort — сбой не валит основной путь.
-    try:
-        from models.chat import ChatRoom, ChatMember
-        chat_room = ChatRoom(kind='deal', related_deal_id=d.id)
-        db.session.add(chat_room)
-        db.session.flush()
-        seen: set[int] = set()
-        for uid_ in (user_id, responsible):
-            if uid_ and uid_ not in seen:
-                db.session.add(ChatMember(room_id=chat_room.id, user_id=uid_))
-                seen.add(uid_)
-        db.session.commit()
-    except Exception as e:
-        print(f'⚠️ deal chat auto-create failed for deal {d.id}: {e}', flush=True)
+    # Чат сделки создаётся ЛЕНИВО при первом открытии (см.
+    # GET /api/admin/deals/<did>/chat-room, routes/deals.py:~1217).
+    # Так пустые чаты по неоткрытым сделкам не плодятся — помойка не растёт.
 
     # Уведомление ответственному если это не сам создатель.
     if responsible and responsible != user_id:
@@ -750,6 +738,12 @@ def update_deal(did):
                 deal_id=d.id, user_id=user_id, kind='responsible_changed',
                 payload=changes['responsible_user_id'],
             ))
+            # Синхронизируем ChatMember с новым ответственным.
+            _sync_deal_chat_membership(
+                d,
+                old_responsible_id=changes['responsible_user_id']['old'],
+                new_responsible_id=changes['responsible_user_id']['new'],
+            )
         if len(changes) > 1 or 'responsible_user_id' not in changes:
             db.session.add(DealActivity(
                 deal_id=d.id, user_id=user_id, kind='field_changed',
@@ -758,6 +752,49 @@ def update_deal(did):
 
     db.session.commit()
     return jsonify({'success': True, 'deal': _deal_full_dict(d)}), 200
+
+
+def _sync_deal_chat_membership(deal, old_responsible_id, new_responsible_id):
+    """
+    Синхронизирует ChatMember чата сделки с новым ответственным.
+    - Добавляет нового ответственного (если его там ещё нет).
+    - Убирает старого, если он не creator сделки и не писал ни одного
+      сообщения в чате — чтобы чужие чаты не висели у бывшего ответственного.
+    - Если чата нет (ленивое создание, его ещё не открывали) — noop.
+    - Коммит делает caller.
+    """
+    if not deal:
+        return
+    try:
+        from models.chat import ChatRoom, ChatMember, ChatMessage
+        room = ChatRoom.query.filter_by(
+            kind='deal', related_deal_id=deal.id,
+        ).first()
+        if not room:
+            return
+        if new_responsible_id:
+            exists = ChatMember.query.filter_by(
+                room_id=room.id, user_id=new_responsible_id,
+            ).first()
+            if not exists:
+                db.session.add(ChatMember(
+                    room_id=room.id, user_id=new_responsible_id,
+                ))
+        if old_responsible_id and old_responsible_id != new_responsible_id:
+            # creator остаётся всегда, тех кто писал — тоже оставляем.
+            if old_responsible_id != deal.creator_id:
+                has_written = ChatMessage.query.filter_by(
+                    room_id=room.id, author_id=old_responsible_id,
+                ).first() is not None
+                if not has_written:
+                    ChatMember.query.filter_by(
+                        room_id=room.id, user_id=old_responsible_id,
+                    ).delete(synchronize_session=False)
+    except Exception as e:
+        print(
+            f'⚠️ sync deal chat membership failed for deal {deal.id}: {e}',
+            flush=True,
+        )
 
 
 def _json_safe(v):

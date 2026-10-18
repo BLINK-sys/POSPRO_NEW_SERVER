@@ -1153,3 +1153,123 @@ def chat_stream():
         'X-Accel-Buffering': 'no',
     }
     return Response(stream_with_context(event_gen()), headers=headers)
+
+
+# ============================================================================
+# Auto-archive: chats of closed deals/tasks with no activity for N days.
+# Ручной запуск админом + готов под Render Cron Job.
+# ============================================================================
+
+@chat_bp.route('/admin/chat/auto-archive', methods=['POST'],
+               strict_slashes=False)
+@jwt_required()
+def auto_archive_chats():
+    """
+    Архивирует неактивные чаты закрытых сделок/задач.
+
+    Критерий:
+      - kind='deal'  → deal.status  in ('won','lost')
+      - kind='task'  → task.status  == 'done'
+      - НЕ архивные
+      - last_activity (max из last_message.created_at, room.updated_at,
+        room.created_at) старше `days` дней (по умолчанию 30)
+
+    Query-параметры:
+      - days=N          — порог неактивности, по умолчанию 30
+      - dry_run=1       — ничего не меняет, возвращает что было бы заархивировано
+      - kinds=deal,task — какие виды архивировать (по умолчанию обе)
+
+    Доступ: только owner / admin. Под Render Cron будет вызываться
+    system-пользователем с admin-ролью (отдельный JWT).
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    role, _ = _current_role_and_id()
+    if role != 'admin':
+        # system не должен запускать массовое изменение чужих чатов.
+        return jsonify({'error': 'Только админ'}), 403
+
+    try:
+        days = int(request.args.get('days', 30))
+    except (TypeError, ValueError):
+        days = 30
+    if days < 1:
+        days = 1
+    dry_run = request.args.get('dry_run') in ('1', 'true', 'yes')
+    kinds_raw = (request.args.get('kinds') or 'deal,task').lower()
+    kinds = [k.strip() for k in kinds_raw.split(',') if k.strip()]
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    # Subquery: last_message_at per room (NULL если сообщений не было).
+    last_msg_sq = db.session.query(
+        ChatMessage.room_id.label('room_id'),
+        func.max(ChatMessage.created_at).label('last_at'),
+    ).group_by(ChatMessage.room_id).subquery()
+
+    # «Активность» = max(last_message, updated_at, created_at). GREATEST
+    # не везде есть, собираем через вложенные coalesce.
+    last_at_expr = func.coalesce(
+        last_msg_sq.c.last_at,
+        ChatRoom.updated_at,
+        ChatRoom.created_at,
+    )
+
+    result = {'deal': 0, 'task': 0}
+    details: dict = {}
+
+    if 'deal' in kinds:
+        from models.deal import Deal
+        q = db.session.query(ChatRoom.id).join(
+            Deal, Deal.id == ChatRoom.related_deal_id,
+        ).outerjoin(
+            last_msg_sq, last_msg_sq.c.room_id == ChatRoom.id,
+        ).filter(
+            ChatRoom.kind == 'deal',
+            ChatRoom.is_archived.is_(False),
+            Deal.status.in_(['won', 'lost']),
+            last_at_expr < cutoff,
+        )
+        ids = [r[0] for r in q.all()]
+        result['deal'] = len(ids)
+        details['deal_ids'] = ids[:50]
+        if ids and not dry_run:
+            ChatRoom.query.filter(ChatRoom.id.in_(ids)).update({
+                ChatRoom.is_archived: True,
+                ChatRoom.archived_at: datetime.utcnow(),
+            }, synchronize_session=False)
+
+    if 'task' in kinds:
+        from models.task import Task
+        q = db.session.query(ChatRoom.id).join(
+            Task, Task.id == ChatRoom.related_task_id,
+        ).outerjoin(
+            last_msg_sq, last_msg_sq.c.room_id == ChatRoom.id,
+        ).filter(
+            ChatRoom.kind == 'task',
+            ChatRoom.is_archived.is_(False),
+            Task.status == 'done',
+            last_at_expr < cutoff,
+        )
+        ids = [r[0] for r in q.all()]
+        result['task'] = len(ids)
+        details['task_ids'] = ids[:50]
+        if ids and not dry_run:
+            ChatRoom.query.filter(ChatRoom.id.in_(ids)).update({
+                ChatRoom.is_archived: True,
+                ChatRoom.archived_at: datetime.utcnow(),
+            }, synchronize_session=False)
+
+    if not dry_run:
+        db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'dry_run': dry_run,
+        'days': days,
+        'cutoff': cutoff.isoformat() + 'Z',
+        'archived': result,
+        'total': result['deal'] + result['task'],
+        'sample_ids': details,
+    }), 200

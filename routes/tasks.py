@@ -135,8 +135,19 @@ def _can_edit_task(task: Task, role: str, user_id: int | None) -> bool:
 # Serialization
 # ============================================================================
 
-def _task_full_dict(task: Task) -> dict:
+def _task_full_dict(task: Task, viewer_user_id: int | None = None) -> dict:
     d = task.to_dict()
+    # is_watched для текущего зрителя — звёздочка на карточке. Для чужих
+    # ответов (без контекста юзера) оставляем False, фронт пересчитает.
+    if viewer_user_id is None:
+        _, viewer_user_id = _current_role_and_id()
+    if viewer_user_id:
+        from models.task import TaskWatcher
+        d['is_watched'] = TaskWatcher.query.filter_by(
+            user_id=viewer_user_id, task_id=task.id,
+        ).first() is not None
+    else:
+        d['is_watched'] = False
     members = TaskMember.query.filter_by(task_id=task.id).all()
     d['members'] = [
         {'id': m.id, 'user_id': m.user_id, 'role': m.role,
@@ -306,6 +317,7 @@ def list_tasks():
     mine = request.args.get('mine') == '1'
     role_as = (request.args.get('role_as') or '').strip().lower()
     overdue = request.args.get('overdue') == '1'
+    watched = request.args.get('watched') == '1'
     search = (request.args.get('q') or '').strip()
 
     if status in TASK_STATUSES:
@@ -356,6 +368,11 @@ def list_tasks():
         q = q.filter(Task.project_id == project_id)
     if overdue:
         q = q.filter(Task.due_at.isnot(None), Task.due_at < datetime.utcnow(), Task.status != 'done')
+    if watched and user_id:
+        from models.task import TaskWatcher
+        q = q.filter(Task.id.in_(
+            db.session.query(TaskWatcher.task_id).filter(TaskWatcher.user_id == user_id)
+        ))
     if search:
         like = f'%{search.lower()}%'
         q = q.filter(db.func.lower(Task.title).like(like))
@@ -382,11 +399,22 @@ def list_tasks():
             p.id: p for p in Project.query.filter(Project.id.in_(proj_ids)).all()
         }
 
+    # Батчим is_watched: одна выборка на всех task_id в странице.
+    watched_ids: set[int] = set()
+    if user_id and tasks:
+        from models.task import TaskWatcher
+        rows = db.session.query(TaskWatcher.task_id).filter(
+            TaskWatcher.user_id == user_id,
+            TaskWatcher.task_id.in_([t.id for t in tasks]),
+        ).all()
+        watched_ids = {r[0] for r in rows}
+
     out = []
     for t in tasks:
         row = t.to_dict()
         row['deal_ref'] = None
         row['project_ref'] = None
+        row['is_watched'] = t.id in watched_ids
         if t.deal_id and t.deal_id in deals_map:
             deal = deals_map[t.deal_id]
             row['deal_ref'] = {'id': deal.id, 'name': deal.name}
@@ -461,20 +489,8 @@ def create_task():
     ))
     db.session.commit()
 
-    # Автосоздание чата задачи + membership для creator и responsible.
-    try:
-        from models.chat import ChatRoom, ChatMember
-        chat_room = ChatRoom(kind='task', related_task_id=t.id)
-        db.session.add(chat_room)
-        db.session.flush()
-        seen: set[int] = set()
-        for uid_ in (user_id, responsible):
-            if uid_ and uid_ not in seen:
-                db.session.add(ChatMember(room_id=chat_room.id, user_id=uid_))
-                seen.add(uid_)
-        db.session.commit()
-    except Exception as e:
-        print(f'⚠️ task chat auto-create failed for task {t.id}: {e}', flush=True)
+    # Чат задачи создаётся ЛЕНИВО при первом открытии (см.
+    # GET /api/admin/tasks/<tid>/chat-room, routes/tasks.py:~1039).
 
     if responsible and responsible != user_id:
         _safe_notify(
@@ -533,6 +549,11 @@ def update_task(tid):
                 task_id=t.id, user_id=user_id, kind='responsible_changed',
                 payload=changes['responsible_id'],
             ))
+            _sync_task_chat_membership(
+                t,
+                old_responsible_id=changes['responsible_id']['old'],
+                new_responsible_id=changes['responsible_id']['new'],
+            )
         if 'due_at' in changes:
             db.session.add(TaskActivity(
                 task_id=t.id, user_id=user_id, kind='due_at_changed',
@@ -547,6 +568,45 @@ def update_task(tid):
 
     db.session.commit()
     return jsonify({'success': True, 'task': _task_full_dict(t)}), 200
+
+
+def _sync_task_chat_membership(task, old_responsible_id, new_responsible_id):
+    """
+    Синхронизирует ChatMember чата задачи с новым ответственным.
+    См. _sync_deal_chat_membership в routes/deals.py — та же логика.
+    Коммит делает caller.
+    """
+    if not task:
+        return
+    try:
+        from models.chat import ChatRoom, ChatMember, ChatMessage
+        room = ChatRoom.query.filter_by(
+            kind='task', related_task_id=task.id,
+        ).first()
+        if not room:
+            return
+        if new_responsible_id:
+            exists = ChatMember.query.filter_by(
+                room_id=room.id, user_id=new_responsible_id,
+            ).first()
+            if not exists:
+                db.session.add(ChatMember(
+                    room_id=room.id, user_id=new_responsible_id,
+                ))
+        if old_responsible_id and old_responsible_id != new_responsible_id:
+            if old_responsible_id != task.creator_id:
+                has_written = ChatMessage.query.filter_by(
+                    room_id=room.id, author_id=old_responsible_id,
+                ).first() is not None
+                if not has_written:
+                    ChatMember.query.filter_by(
+                        room_id=room.id, user_id=old_responsible_id,
+                    ).delete(synchronize_session=False)
+    except Exception as e:
+        print(
+            f'⚠️ sync task chat membership failed for task {task.id}: {e}',
+            flush=True,
+        )
 
 
 @tasks_bp.route('/admin/tasks/<int:tid>', methods=['DELETE'])
@@ -1092,3 +1152,53 @@ def get_task_chat_room(tid):
         return jsonify({'error': 'Нет доступа к чату задачи'}), 403
 
     return jsonify({'success': True, 'room_id': room.id}), 200
+
+
+# ============================================================================
+# Watchers (per-user «избранное»)
+# ============================================================================
+
+@tasks_bp.route('/admin/tasks/<int:tid>/watch', methods=['POST'],
+                strict_slashes=False)
+@jwt_required()
+def watch_task(tid):
+    """Добавить задачу в личный список «Отслеживаемые»."""
+    err = _check_admin_or_system()
+    if err:
+        return err
+    role, user_id = _current_role_and_id()
+    if not user_id:
+        return jsonify({'error': 'Нет пользователя'}), 401
+    # Проверяем видимость — нельзя отслеживать то, чего не видишь.
+    t = _visible_tasks_query(role, user_id).filter(Task.id == tid).first()
+    if not t:
+        return jsonify({'error': 'Задача не найдена'}), 404
+
+    from models.task import TaskWatcher
+    existing = TaskWatcher.query.filter_by(
+        user_id=user_id, task_id=tid,
+    ).first()
+    if not existing:
+        db.session.add(TaskWatcher(user_id=user_id, task_id=tid))
+        db.session.commit()
+    return jsonify({'success': True, 'is_watched': True}), 200
+
+
+@tasks_bp.route('/admin/tasks/<int:tid>/watch', methods=['DELETE'],
+                strict_slashes=False)
+@jwt_required()
+def unwatch_task(tid):
+    """Убрать задачу из личного списка «Отслеживаемые»."""
+    err = _check_admin_or_system()
+    if err:
+        return err
+    _, user_id = _current_role_and_id()
+    if not user_id:
+        return jsonify({'error': 'Нет пользователя'}), 401
+
+    from models.task import TaskWatcher
+    TaskWatcher.query.filter_by(
+        user_id=user_id, task_id=tid,
+    ).delete(synchronize_session=False)
+    db.session.commit()
+    return jsonify({'success': True, 'is_watched': False}), 200
