@@ -37,6 +37,7 @@ from routes.kp_clients import kp_clients_bp
 from routes.kp_companies import kp_companies_bp
 from routes.kp_templates import kp_templates_bp
 from routes.b24_migration import b24_migration_bp
+from routes.user_preferences import user_prefs_bp
 from routes.deal_pipelines import deal_pipelines_bp
 from routes.deal_sources import deal_sources_bp
 from routes.deals import deals_bp
@@ -76,6 +77,8 @@ from models.kp_template import KpTemplate  # noqa: F401
 from models.kp_company import KpCompany, DealContact  # noqa: F401
 # Таблица-зеркало импорта из Bitrix24 (идемпотентность + rollback).
 from models.b24_mirror import B24Mirror  # noqa: F401
+# Пользовательские настройки UI (key-value JSONB).
+from models.user_preference import UserPreference  # noqa: F401
 
 
 def create_app():
@@ -135,6 +138,7 @@ def create_app():
     #            3.3 — публичный webhook ingest, 3.4 — админ-CRUD ingest-источников)
     app.register_blueprint(deal_pipelines_bp, url_prefix='/api')  # /api/admin/deal-pipelines, /api/admin/deal-stages
     app.register_blueprint(b24_migration_bp, url_prefix='/api')  # /api/admin/b24-migration/*
+    app.register_blueprint(user_prefs_bp, url_prefix='/api')  # /api/user-prefs/<key>
     app.register_blueprint(deal_sources_bp, url_prefix='/api')    # /api/admin/deal-sources (справочник «Источник сделки»)
     app.register_blueprint(deals_bp, url_prefix='/api')           # /api/admin/deals
     app.register_blueprint(crm_sources_bp, url_prefix='/api')     # /api/admin/crm-sources

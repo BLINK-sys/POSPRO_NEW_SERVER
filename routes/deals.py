@@ -453,8 +453,22 @@ def list_deals():
     stage_id = request.args.get('stage_id', type=int)
     status = request.args.get('status')
     responsible_id = request.args.get('responsible_id', type=int)
+    client_id = request.args.get('client_id', type=int)
+    company_id = request.args.get('company_id', type=int)
     mine = request.args.get('mine') == '1'
     search = (request.args.get('q') or '').strip()
+
+    # created_after/created_before: ISO date (YYYY-MM-DD) или ISO datetime.
+    # Используется для фильтра «период» на канбане (default 3 мес).
+    def _parse_iso(v):
+        if not v:
+            return None
+        try:
+            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+        except (TypeError, ValueError):
+            return None
+    created_after = _parse_iso(request.args.get('created_after'))
+    created_before = _parse_iso(request.args.get('created_before'))
 
     if pipeline_id:
         q = q.filter(Deal.pipeline_id == pipeline_id)
@@ -466,6 +480,23 @@ def list_deals():
         q = q.filter(Deal.responsible_user_id == user_id)
     elif responsible_id:
         q = q.filter(Deal.responsible_user_id == responsible_id)
+    if client_id:
+        # Сделки где client_id = primary ИЛИ где этот клиент в DealContact
+        # (мульти-привязка). Через subquery чтобы не дёргать join дважды.
+        from models.kp_company import DealContact
+        contact_deal_ids = db.session.query(DealContact.deal_id).filter(
+            DealContact.client_id == client_id,
+        ).subquery()
+        q = q.filter(or_(
+            Deal.client_id == client_id,
+            Deal.id.in_(contact_deal_ids),
+        ))
+    if company_id:
+        q = q.filter(Deal.company_id == company_id)
+    if created_after:
+        q = q.filter(Deal.created_at >= created_after)
+    if created_before:
+        q = q.filter(Deal.created_at <= created_before)
     if search:
         like = f'%{search.lower()}%'
         q = q.filter(or_(
@@ -477,7 +508,8 @@ def list_deals():
     limit = min(request.args.get('limit', 50, type=int), 200)
     offset = max(request.args.get('offset', 0, type=int), 0)
 
-    deals = q.order_by(Deal.updated_at.desc()).limit(limit).offset(offset).all()
+    # ORDER BY created_at DESC: канбан показывает свежие сделки сверху.
+    deals = q.order_by(Deal.created_at.desc()).limit(limit).offset(offset).all()
 
     # Денормализуем source_name из CrmIngestSource. Собираем всех
     # источников в один запрос: internal — по `source_key`, webhook —
