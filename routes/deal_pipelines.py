@@ -99,6 +99,8 @@ def _parse_stage_payload(data: dict, *, partial: bool = False):
         fields['color'] = color
     if stype is not None:
         fields['type'] = stype
+    if 'is_active' in data:
+        fields['is_active'] = bool(data.get('is_active'))
     if not partial and 'pipeline_id' in data:
         try:
             fields['pipeline_id'] = int(data['pipeline_id'])
@@ -467,6 +469,8 @@ def update_stage(sid):
         s.color = fields['color']
     if 'type' in fields:
         s.type = fields['type']
+    if 'is_active' in fields:
+        s.is_active = fields['is_active']
     s.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({'success': True, 'stage': s.to_dict()}), 200
@@ -490,9 +494,12 @@ def delete_stage(sid):
     in_use = Deal.query.filter_by(stage_id=sid).count()
     if in_use > 0:
         return jsonify({
-            'error': f'Нельзя удалить — в стадии {in_use} сделок. '
-                     f'Сначала переместите их в другую стадию.',
+            'error': f'Нельзя удалить — на стадии {in_use} сделок '
+                     f'(в т.ч. исторических). Деактивируйте стадию — '
+                     f'она скроется из канбана и селектов, но сделки '
+                     f'на ней останутся с полной историей.',
             'in_use_count': in_use,
+            'suggest': 'deactivate',
         }), 409
 
     db.session.delete(s)

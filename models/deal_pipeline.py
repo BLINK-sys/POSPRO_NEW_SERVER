@@ -65,6 +65,13 @@ class DealStage(db.Model):
     order = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))
     # normal / won / lost — см. DEAL_STAGE_TYPES.
     type = db.Column(db.String(16), nullable=False, default='normal', server_default=db.text("'normal'"))
+    # Активна ли стадия. false = скрыта в канбане и в селектах стадий
+    # (кроме случая когда у текущей сделки эта стадия — тогда остаётся
+    # в селекте, помечена «архив»). Удалять стадию с привязанными
+    # сделками Postgres не даст (ondelete='RESTRICT' на deal.stage_id):
+    # UI должен подсказать деактивировать вместо удаления.
+    is_active = db.Column(db.Boolean, nullable=False, default=True,
+                          server_default=db.text('true'))
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -76,6 +83,7 @@ class DealStage(db.Model):
             'color': self.color,
             'order': self.order,
             'type': self.type,
+            'is_active': bool(self.is_active),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
