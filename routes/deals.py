@@ -502,6 +502,22 @@ def list_deals():
         ))
     if company_id:
         q = q.filter(Deal.company_id == company_id)
+    # Фильтр по источнику: 'none' → без источника, int → конкретный.
+    source_id = request.args.get('source_id')
+    if source_id == 'none':
+        q = q.filter(Deal.source_id.is_(None))
+    elif source_id:
+        try:
+            q = q.filter(Deal.source_id == int(source_id))
+        except (TypeError, ValueError):
+            pass
+    # Диапазон суммы — для фильтра на /admin/deals/history.
+    amount_min = request.args.get('amount_min', type=float)
+    amount_max = request.args.get('amount_max', type=float)
+    if amount_min is not None:
+        q = q.filter(Deal.amount >= amount_min)
+    if amount_max is not None:
+        q = q.filter(Deal.amount <= amount_max)
     if created_after:
         q = q.filter(Deal.created_at >= created_after)
     if created_before:
