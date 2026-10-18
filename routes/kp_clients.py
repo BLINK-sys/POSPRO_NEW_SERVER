@@ -127,7 +127,7 @@ def list_clients():
     offset = max(request.args.get('offset', 0, type=int), 0)
 
     clients = (
-        query.order_by(KpClient.full_name.asc().nulls_last())
+        query.order_by(KpClient.created_at.desc().nulls_last())
         .limit(limit).offset(offset).all()
     )
 

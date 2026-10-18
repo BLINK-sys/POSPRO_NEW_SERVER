@@ -115,7 +115,7 @@ def list_companies():
     limit = min(request.args.get('limit', 100, type=int), 500)
     offset = max(request.args.get('offset', 0, type=int), 0)
 
-    rows = q.order_by(KpCompany.updated_at.desc()).limit(limit).offset(offset).all()
+    rows = q.order_by(KpCompany.created_at.desc()).limit(limit).offset(offset).all()
     companies = _enrich([c.to_dict() for c in rows])
 
     return jsonify({

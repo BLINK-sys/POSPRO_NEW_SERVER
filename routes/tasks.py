@@ -381,7 +381,7 @@ def list_tasks():
     limit = min(request.args.get('limit', 50, type=int), 200)
     offset = max(request.args.get('offset', 0, type=int), 0)
 
-    tasks = q.order_by(Task.updated_at.desc()).limit(limit).offset(offset).all()
+    tasks = q.order_by(Task.created_at.desc()).limit(limit).offset(offset).all()
 
     # Денормализуем сделку и проект отдельно — задача может быть
     # привязана к обоим сразу. Оба батчим одним запросом на тип.
