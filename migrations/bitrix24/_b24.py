@@ -58,9 +58,14 @@ def iter_list(method: str, params: dict | None = None):
     """
     Итерируется по пагинированному методу Б24 (использует `start` cursor
     и поле `next` в ответе). yield-ит сущности по одной.
+
+    Защита от бесконечного цикла: некоторые методы (`tasks.task.list`)
+    возвращают кривое `next` после конца данных, из-за чего pagination
+    зацикливалась. Теперь если `next` не растёт или items пустые — выход.
     """
     p = dict(params or {})
     start = 0
+    seen_next = set()
     while True:
         p['start'] = start
         out = call(method, p)
@@ -73,9 +78,22 @@ def iter_list(method: str, params: dict | None = None):
                      or items.get('deals')
                      or items.get('tasks')
                      or [])
+        if not items:
+            return
         for it in items:
             yield it
         nxt = out.get('next')
         if nxt is None:
             return
-        start = int(nxt)
+        try:
+            nxt_i = int(nxt)
+        except (TypeError, ValueError):
+            return
+        # Защита: next не должен быть ≤ текущему start (иначе цикл).
+        if nxt_i <= start:
+            return
+        # Защита: next мы уже видели — тоже цикл.
+        if nxt_i in seen_next:
+            return
+        seen_next.add(nxt_i)
+        start = nxt_i
