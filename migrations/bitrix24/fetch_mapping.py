@@ -82,6 +82,26 @@ def fetch_pospro_users() -> list[dict]:
     return out
 
 
+def fetch_pospro_email_aliases() -> dict[str, int]:
+    """
+    Email-алиасы для system_users: `alt_email → user_id`. Нужны чтобы
+    смерженные дубли (например ant@pospro.kz → id основного юзера)
+    не создавались повторно при следующем B24-импорте.
+
+    Таблица создаётся миграцией apply_system_user_email_alias.py — если
+    её нет, тихо возвращаем пустую мапу.
+    """
+    from extensions import db
+    from sqlalchemy import text
+    try:
+        rows = db.session.execute(text(
+            "SELECT email, user_id FROM system_user_email_alias"
+        )).fetchall()
+    except Exception:
+        return {}
+    return {_norm_email(r.email): int(r.user_id) for r in rows}
+
+
 def fetch_pospro_pipelines() -> list[dict]:
     from models.deal_pipeline import DealPipeline
     out = []
@@ -98,12 +118,36 @@ def fetch_pospro_pipelines() -> list[dict]:
     return out
 
 
-def build_user_mapping(b24: list[dict], pospro: list[dict]) -> dict:
+def build_user_mapping(
+    b24: list[dict],
+    pospro: list[dict],
+    aliases: dict[str, int] | None = None,
+) -> dict:
     """
-    Авто-маппинг по email. unmatched = список Б24-юзеров без совпадения —
-    их пользователь должен ручно привязать (или решить что они не нужны).
+    Авто-маппинг по email. Сначала точное совпадение по основному email,
+    затем — через email-алиасы (`system_user_email_alias`): позволяет
+    замерженным дублям b24-юзера автоматически привязываться к основному
+    system_user, не создавая запись заново.
+
+    unmatched = список Б24-юзеров без совпадения — их пользователь должен
+    ручно привязать (или решить что они не нужны).
     """
     by_email = {_norm_email(u['email']): u for u in pospro if u.get('email')}
+    by_id = {u['id']: u for u in pospro}
+    aliases = aliases or {}
+
+    def _resolve(email: str):
+        """Возвращает pospro-юзера или None. Сначала основной email, потом alias."""
+        if not email:
+            return None, None
+        hit = by_email.get(email)
+        if hit:
+            return hit, None
+        alias_uid = aliases.get(email)
+        if alias_uid and alias_uid in by_id:
+            return by_id[alias_uid], 'alias'
+        return None, None
+
     mapping = {}
     unmatched = []
     for u in b24:
@@ -111,13 +155,14 @@ def build_user_mapping(b24: list[dict], pospro: list[dict]) -> dict:
         last = (u.get('LAST_NAME') or '').strip()
         first = (u.get('NAME') or '').strip()
         full = f'{last} {first}'.strip() or email or f'ID {u["ID"]}'
-        hit = by_email.get(email) if email else None
+        hit, via = _resolve(email)
         entry = {
             'b24_id': int(u['ID']),
             'b24_name': full,
             'b24_email': u.get('EMAIL'),
             'pospro_id': hit['id'] if hit else None,
             'pospro_name': hit['name'] if hit else None,
+            'match_via': via,  # 'alias' если через alias, иначе None
         }
         mapping[str(u['ID'])] = entry
         if not hit:
@@ -196,6 +241,7 @@ def main():
     with app.app_context():
         pospro_users = fetch_pospro_users()
         pospro_pipelines = fetch_pospro_pipelines()
+        pospro_aliases = fetch_pospro_email_aliases()
 
     print(
         f'\nPosPro state:\n'
@@ -205,7 +251,7 @@ def main():
         flush=True,
     )
 
-    user_map = build_user_mapping(b24_users, pospro_users)
+    user_map = build_user_mapping(b24_users, pospro_users, pospro_aliases)
     pipeline_map = build_pipeline_mapping(b24_cats, pospro_pipelines)
     stage_map = build_stage_mapping(
         b24_stages_by_cat, b24_cats, pipeline_map, pospro_pipelines,
