@@ -1,23 +1,21 @@
 """
-Шаг 2 миграции из Б24: достроить маппинг до 100%.
+Шаг «подготовка маппинга» миграции из Б24. Standalone: сам тянет мету
+из Б24 + БД (не зависит от файла с диска, т.к. /disk у Render Jobs
+не persistent между запусками).
 
-Действия (все идемпотентны, можно гонять многократно):
+Действия (все идемпотентны):
   1. Создаёт в PosPro недостающих `system_users` по email из Б24.
      Пароль — временный `b24-import-<b24_id>` (owner потом сбросит).
-     Флаги — минимальные: обычный менеджер, видит только свои сделки/задачи.
-  2. Явные override'ы маппинга воронок:
-       cat 0 'Общая (базовая)' → PosPro-воронка «Розница»
-       cat 1 'Партнерские продажи' → «Партнёрские продажи» (fuzzy «ё»/«е»)
-  3. Нормализация fuzzy-matching воронок (ё→е, lower, strip).
-  4. Для каждой Б24-стадии в замапленной воронке:
-       - если нет соответствующей PosPro-стадии — создаёт её с именем
-         один-в-один из Б24, type по правилу:
-           STATUS_ID == 'WON' или оканчивается ':WON' → type='won'
-           STATUS_ID оканчивается ':LOSE' или ':APOLOGY' → type='lost'
-           остальное → type='normal'
-       - order продолжает max(order)+10 в этой воронке
-  5. Сохраняет финальный маппинг в
-     `/disk/b24_migration/b24_mapping_final.json`.
+     Флаги — минимальные: обычный менеджер.
+  2. Авто-матчинг воронок по name (ё→е, lower, strip) + явные
+     override'ы (cat 0 'Общая (базовая)' → 'Розница').
+  3. Для каждой Б24-стадии в замапленной воронке создаёт недостающую
+     PosPro-стадию с именем 1:1 из Б24, type:
+       STATUS_ID оканчивается ':WON' → 'won'
+       STATUS_ID оканчивается ':LOSE' / ':APOLOGY' → 'lost'
+       остальное → 'normal'
+  4. Сохраняет финальный маппинг в БД (таблица `b24_meta`, key='mapping')
+     — чтобы следующие Jobs (migrate_*) его читали.
 
 Запуск:
     python -u -m migrations.bitrix24.fix_mapping
@@ -26,19 +24,15 @@
 import os
 import sys
 import json
-import secrets
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from app import app
 from extensions import db
+from sqlalchemy import text as sql_text
 
 from models.systemuser import SystemUser
 from models.deal_pipeline import DealPipeline, DealStage
-
-
-MAPPING_IN = '/disk/b24_migration/b24_mapping.json'
-MAPPING_OUT = '/disk/b24_migration/b24_mapping_final.json'
 
 # Явные override'ы когда авто-матчинг по имени ошибается.
 PIPELINE_OVERRIDES_BY_B24_ID = {
@@ -228,35 +222,73 @@ def fetch_b24_stages_for_each_cat(b24_cats: list[dict]) -> dict[int, list[dict]]
     return out
 
 
+def _save_mapping_to_db(report: dict) -> None:
+    """Сохраняем финальный mapping в простейшую key-value таблицу b24_meta."""
+    db.session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS b24_meta (
+            key VARCHAR(64) PRIMARY KEY,
+            value JSONB NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """))
+    db.session.execute(
+        sql_text("""
+            INSERT INTO b24_meta (key, value, updated_at)
+            VALUES ('mapping', CAST(:v AS JSONB), NOW())
+            ON CONFLICT (key) DO UPDATE
+              SET value = EXCLUDED.value, updated_at = NOW()
+        """),
+        {'v': json.dumps(report, ensure_ascii=False)},
+    )
+    db.session.commit()
+
+
 def main():
     print('=== fix_mapping start ===', flush=True)
-    if not os.path.exists(MAPPING_IN):
-        print(f'!! Not found: {MAPPING_IN}', flush=True)
-        print('   Run `fetch_mapping` first.', flush=True)
-        sys.exit(1)
-    with open(MAPPING_IN, encoding='utf-8') as f:
-        report = json.load(f)
 
-    # Повторно получим стадии Б24 (мы не сохраняли их отдельно) + сами
-    # pospro_pipelines из БД.
-    from migrations.bitrix24.fetch_mapping import fetch_b24_categories
+    from migrations.bitrix24.fetch_mapping import (
+        fetch_b24_users, fetch_b24_categories,
+        fetch_pospro_users, fetch_pospro_pipelines,
+        build_user_mapping, build_pipeline_mapping, build_stage_mapping,
+    )
+
+    # 1) Тянем мету из Б24.
+    print('→ fetching B24 meta…', flush=True)
+    b24_users = fetch_b24_users()
+    b24_cats = fetch_b24_categories()
+    b24_stages_by_cat = fetch_b24_stages_for_each_cat(b24_cats)
 
     with app.app_context():
-        print('→ fetching B24 categories + stages…', flush=True)
-        b24_cats = fetch_b24_categories()
-        b24_stages_by_cat = fetch_b24_stages_for_each_cat(b24_cats)
-
-        from migrations.bitrix24.fetch_mapping import fetch_pospro_pipelines
+        # 2) Тянем нашу мету.
+        pospro_users = fetch_pospro_users()
         pospro_pipelines = fetch_pospro_pipelines()
 
+        # 3) Строим авто-маппинг (как fetch_mapping делал).
+        user_map = build_user_mapping(b24_users, pospro_users)
+        pipeline_map = build_pipeline_mapping(b24_cats, pospro_pipelines)
+        stage_map = build_stage_mapping(
+            b24_stages_by_cat, b24_cats, pipeline_map, pospro_pipelines,
+        )
+        report = {
+            'users': user_map,
+            'pipelines': pipeline_map,
+            'stages': stage_map,
+        }
+
+        # 4) Создаём недостающих юзеров.
         print('\n→ ensure users…', flush=True)
         report['users']['map'] = ensure_users(report['users']['map'])
 
+        # 5) Применяем overrides + fuzzy для воронок.
         print('\n→ apply pipeline overrides + fuzzy…', flush=True)
+        # Переподтянем pospro_pipelines на случай если fuzzy-match требует
+        # свежий срез (мы юзеров только что добавили, но воронки не трогали —
+        # можно использовать уже загруженный список).
         report['pipelines'] = apply_pipeline_overrides(
             report['pipelines'], pospro_pipelines,
         )
 
+        # 6) Для каждой замапленной воронки создаём недостающие стадии.
         print('\n→ ensure stages (create missing)…', flush=True)
         pipeline_map = report['pipelines']
         stage_report = report['stages']
@@ -268,8 +300,7 @@ def main():
                 print(f'  skip cat {cid} ({c.get("NAME")!r}) — no pipeline mapping',
                       flush=True)
                 continue
-            # b24_category_id в stage_report может быть null у новосозданных —
-            # заполним.
+            # Дозаполним b24_category_id в stage_report для новых записей.
             for s in b24_stages_by_cat.get(cid, []):
                 sid = s['STATUS_ID']
                 if sid not in stage_report:
@@ -305,12 +336,11 @@ def main():
         print(f'  Pipelines: {pipes_matched}/{pipes_total}', flush=True)
         print(f'  Stages:    {stages_matched}/{stages_total}', flush=True)
 
-    report['generated_at'] = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
-    os.makedirs(os.path.dirname(MAPPING_OUT), exist_ok=True)
-    with open(MAPPING_OUT, 'w', encoding='utf-8') as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
-    size_kb = os.path.getsize(MAPPING_OUT) / 1024
-    print(f'\n✅ Final mapping saved: {MAPPING_OUT} ({size_kb:.1f} KB)', flush=True)
+        # 7) Сохраняем финальный mapping в БД.
+        report['generated_at'] = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
+        _save_mapping_to_db(report)
+        print('\n✅ Final mapping saved to DB (table b24_meta, key=mapping)', flush=True)
+        print('   Retrieve: GET /api/admin/b24-migration/mapping', flush=True)
 
 
 if __name__ == '__main__':

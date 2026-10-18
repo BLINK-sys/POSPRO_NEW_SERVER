@@ -9,11 +9,11 @@ Owner-only — ничего из этого обычным юзерам не н�
       агрегированный по entity_type (сколько сущностей импортировано).
 """
 
-import os
 import json
 
-from flask import Blueprint, jsonify, send_file, request
+from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy import text as sql_text
 
 from extensions import db
 from models.systemuser import SystemUser
@@ -21,8 +21,6 @@ from models.b24_mirror import B24Mirror
 
 
 b24_migration_bp = Blueprint('b24_migration', __name__)
-
-MAPPING_PATH = '/disk/b24_migration/b24_mapping.json'
 
 
 def _owner_only():
@@ -40,18 +38,29 @@ def _owner_only():
                         methods=['GET'], strict_slashes=False)
 @jwt_required()
 def download_mapping():
+    """Отдаёт финальный маппинг из таблицы b24_meta (сохранён fix_mapping-ом)."""
     err = _owner_only()
     if err:
         return err
-    if not os.path.exists(MAPPING_PATH):
+    try:
+        row = db.session.execute(
+            sql_text("SELECT value FROM b24_meta WHERE key='mapping'")
+        ).fetchone()
+    except Exception as e:
+        return jsonify({
+            'error': 'b24_meta table missing or query failed',
+            'details': str(e),
+        }), 404
+    if not row:
         return jsonify({
             'error': 'Mapping not found. Запусти Render Job '
-                     '`python -u -m migrations.bitrix24.fetch_mapping`.',
-            'expected_path': MAPPING_PATH,
+                     '`python -u -m migrations.bitrix24.fix_mapping`.',
         }), 404
-    with open(MAPPING_PATH, encoding='utf-8') as f:
-        data = json.load(f)
-    return jsonify(data), 200
+    value = row[0]
+    # Postgres JSONB — psycopg уже вернул dict.
+    if isinstance(value, str):
+        value = json.loads(value)
+    return jsonify(value), 200
 
 
 @b24_migration_bp.route('/admin/b24-migration/status',
