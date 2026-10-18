@@ -73,6 +73,8 @@ from models.systemuser import SystemUser
 from models.kp_template import KpTemplate  # noqa: F401
 # То же для компаний CRM и мультисвязи сделка↔контакт.
 from models.kp_company import KpCompany, DealContact  # noqa: F401
+# Таблица-зеркало импорта из Bitrix24 (идемпотентность + rollback).
+from models.b24_mirror import B24Mirror  # noqa: F401
 
 
 def create_app():
