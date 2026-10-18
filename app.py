@@ -41,6 +41,7 @@ from routes.user_preferences import user_prefs_bp
 from routes.deal_pipelines import deal_pipelines_bp
 from routes.deal_sources import deal_sources_bp
 from routes.deals import deals_bp
+from routes.deals_analytics import deals_analytics_bp
 from routes.crm_sources import crm_sources_bp
 from routes.crm_webhooks import crm_webhooks_bp
 from routes.tasks import tasks_bp
@@ -141,6 +142,7 @@ def create_app():
     app.register_blueprint(user_prefs_bp, url_prefix='/api')  # /api/user-prefs/<key>
     app.register_blueprint(deal_sources_bp, url_prefix='/api')    # /api/admin/deal-sources (справочник «Источник сделки»)
     app.register_blueprint(deals_bp, url_prefix='/api')           # /api/admin/deals
+    app.register_blueprint(deals_analytics_bp, url_prefix='/api')  # /api/admin/deals/{stats,by-client,sources-stats}
     app.register_blueprint(crm_sources_bp, url_prefix='/api')     # /api/admin/crm-sources
     app.register_blueprint(crm_webhooks_bp, url_prefix='/api')    # /api/webhooks/crm/ingest/<token>
 

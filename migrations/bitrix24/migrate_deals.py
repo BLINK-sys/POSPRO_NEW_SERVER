@@ -62,22 +62,18 @@ def _parse_dt(iso: str | None) -> datetime | None:
         return None
 
 
-def _deal_contact_ids(deal_b24_id) -> list[str]:
+def _deal_primary_contact_id(d: dict) -> str | None:
     """
-    Доп. контакты сделки: crm.deal.contact.items.get.
-    Возвращает список B24 CONTACT_ID (primary первым, если IS_PRIMARY='Y').
+    Primary контакт сделки берём из CONTACT_ID (в основном ответе
+    crm.deal.list) — это 95% кейсов. Доп. контакты в этом MVP миграции
+    не тащим: отдельный crm.deal.contact.items.get на каждую сделку
+    добавил бы +60k запросов при 29k сделок (= 8+ часов с rate-limit).
+    Если потом понадобится — отдельным Job'ом догрузим.
     """
-    try:
-        r = b24_call('crm.deal.contact.items.get', {'id': deal_b24_id})
-        items = r.get('result') or []
-    except Exception as e:
-        print(f'    !! contact.items.get err for deal {deal_b24_id}: {e}',
-              flush=True)
-        return []
-    # Сортируем: primary (SORT=10 обычно) первым
-    items.sort(key=lambda x: (0 if x.get('IS_PRIMARY') == 'Y' else 1,
-                              int(x.get('SORT') or 0)))
-    return [str(it['CONTACT_ID']) for it in items if it.get('CONTACT_ID')]
+    cid = d.get('CONTACT_ID')
+    if cid in (None, '', '0', 0):
+        return None
+    return str(cid)
 
 
 def _resolve_stage_status(ps_id: int) -> str:
@@ -115,14 +111,15 @@ def migrate_one(d: dict, mapping: dict, owner_id: int, dry_run: bool) -> str:
     company_pid = (mirror_get('company', company_b24)
                    if company_b24 and company_b24 != '0' else None)
 
-    # Контакты сделки: primary + остальные.
-    contact_b24_ids = _deal_contact_ids(b24_id)
-    contact_pospro_ids: list[int] = []
-    for cid in contact_b24_ids:
-        pid = mirror_get('contact', cid)
-        if pid and pid not in contact_pospro_ids:
-            contact_pospro_ids.append(pid)
-    primary_contact = contact_pospro_ids[0] if contact_pospro_ids else None
+    # Primary контакт сделки (без доп. контактов — см. комментарий в
+    # _deal_primary_contact_id).
+    primary_contact = None
+    pcb24 = _deal_primary_contact_id(d)
+    if pcb24:
+        pid = mirror_get('contact', pcb24)
+        if pid:
+            primary_contact = pid
+    contact_pospro_ids: list[int] = [primary_contact] if primary_contact else []
 
     amount = None
     try:
