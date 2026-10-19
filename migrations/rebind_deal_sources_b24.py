@@ -104,12 +104,15 @@ def main() -> int:
                 src_before = deal.source_id
                 var_before = deal.source_variant_id
 
-                # resolve добавляет новые DealSource/DealSourceVariant если
-                # нужно — считаем сколько создалось для отчёта.
-                before_sources = db.session.query(text("1")).from_statement(
-                    text("SELECT 1")
-                )  # noop — используем прямой count ниже
                 src_id, var_id = _resolve_source_and_variant(b24_data)
+
+                # Если UF-поле в B24 пустое — НЕ трогаем существующий
+                # source_id. У старых сделок (до 2023, когда поле ещё не
+                # существовало) source мог быть выставлен ранее через
+                # enrich_sources по стандартному SOURCE_ID — пусть
+                # остаётся. Так же не трогаем variant если UF пустое.
+                if src_id is None:
+                    continue
 
                 if src_id == src_before and var_id == var_before:
                     continue
