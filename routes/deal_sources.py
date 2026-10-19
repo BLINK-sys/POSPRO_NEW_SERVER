@@ -85,7 +85,23 @@ def list_sources():
     if err:
         return err
     items = DealSource.query.order_by(DealSource.sort_order, DealSource.name).all()
-    return jsonify({'success': True, 'sources': [s.to_dict() for s in items]}), 200
+    # Денормализуем кол-во вариантов — одним запросом, чтобы на фронте
+    # /admin/deals/sources сразу было видно «вариантов: N» без разворота.
+    counts: dict[int, int] = {}
+    if items:
+        rows = db.session.query(
+            DealSourceVariant.parent_source_id,
+            db.func.count(DealSourceVariant.id),
+        ).filter(
+            DealSourceVariant.parent_source_id.in_([s.id for s in items]),
+        ).group_by(DealSourceVariant.parent_source_id).all()
+        counts = {sid: int(c) for sid, c in rows}
+    out = []
+    for s in items:
+        d = s.to_dict()
+        d['variants_count'] = counts.get(s.id, 0)
+        out.append(d)
+    return jsonify({'success': True, 'sources': out}), 200
 
 
 @deal_sources_bp.route('/admin/deal-sources', methods=['POST'])
