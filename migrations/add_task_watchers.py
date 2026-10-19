@@ -34,8 +34,13 @@ def _parse_args():
     p.add_argument('--user-id', action='append', default=[], type=int,
                    help='ID юзера (альтернатива --user; можно несколько раз)')
     p.add_argument('--list', action='store_true',
-                   help='Diag-режим: распечатать 20 последних задач и всех '
-                        'юзеров (id/name/email), чтобы найти id для --task-id.')
+                   help='Diag-режим: распечатать --list-limit последних '
+                        'задач и всех юзеров (id/name/email), чтобы найти id.')
+    p.add_argument('--list-limit', type=int, default=50)
+    p.add_argument('--list-grep', default=None,
+                   help='Фильтр заголовков через SQL ILIKE %...%. '
+                        'Передавай latin-подстроку или часть эмоджи — '
+                        'кириллица в argv на Render ломается.')
     p.add_argument('--apply', action='store_true')
     return p.parse_args()
 
@@ -80,8 +85,12 @@ def main() -> int:
     with app.app_context():
         if args.list:
             print('=== LIST MODE ===', flush=True)
-            print('--- 20 последних задач ---', flush=True)
-            for t in Task.query.order_by(Task.id.desc()).limit(20):
+            print(f'--- {args.list_limit} последних задач ---', flush=True)
+            q = Task.query
+            if args.list_grep:
+                q = q.filter(db.func.lower(Task.title).like(
+                    f'%{args.list_grep.lower()}%'))
+            for t in q.order_by(Task.id.desc()).limit(args.list_limit):
                 print(f'  id={t.id:<5} {t.title!r}', flush=True)
             print('', flush=True)
             print('--- Все юзеры ---', flush=True)
