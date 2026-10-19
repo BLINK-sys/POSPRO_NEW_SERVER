@@ -33,6 +33,7 @@ from extensions import db
 from models.systemuser import SystemUser
 from models.deal import Deal
 from models.deal_pipeline import DealStage
+from models.deal_source import DealSource, DealSourceVariant
 from models.kp_company import DealContact
 
 from migrations.bitrix24._b24 import iter_list, call as b24_call
@@ -42,14 +43,85 @@ from migrations.bitrix24._utils import (
 )
 
 
+# Основное UF-поле «Источник...» в B24 (enumeration). ID получено через
+# diag b24_deal_ufields_diag — см. его вывод. Если в B24 появятся новые
+# значения в enum, их просто добавляем в B24_SOURCE_MAP (по id → name,
+# name должен точно совпадать с DealSource.name).
+B24_UF_SOURCE = 'UF_CRM_1694591054634'
+B24_SOURCE_MAP: dict[str, str] = {
+    '591':  'Instagram',
+    '601':  'OLX (Астана)',
+    '593':  'OLX (Регионы)',
+    '575':  'Kaspi.kz',
+    '597':  'Kaspi звонок',
+    '577':  'Satu.kz',
+    '585':  'Wildberries.ru',
+    '583':  'Forte.kz',
+    '587':  'Ozon.ru',
+    '589':  'Halykmarket.kz',
+    '579':  'Старый клиент',
+    '581':  'По рекомендации',
+    '599':  '2GIS',
+    '603':  'Партнер',
+    '611':  'Корпоративный клиент',
+    '615':  'Kaspi магазин',
+    '617':  'Сайт',
+    '1023': 'ОЛХ(Выс чек)',
+}
+
+
 FIELDS = [
     'ID', 'TITLE', 'STAGE_ID', 'CATEGORY_ID',
     'OPPORTUNITY', 'CURRENCY_ID', 'IS_WON', 'IS_RETURN',
     'ASSIGNED_BY_ID', 'CREATED_BY_ID',
     'COMPANY_ID', 'CONTACT_ID',
     'BEGINDATE', 'CLOSEDATE', 'DATE_CREATE', 'DATE_MODIFY',
-    'SOURCE_ID', 'COMMENTS', 'TYPE_ID',
+    'SOURCE_ID', 'SOURCE_DESCRIPTION', 'COMMENTS', 'TYPE_ID',
+    B24_UF_SOURCE,
 ]
+
+
+def _resolve_source_and_variant(d: dict) -> tuple[int | None, int | None]:
+    """
+    По B24-сделке возвращает (source_id, source_variant_id) для PosPro.
+
+    - source: имя через B24_SOURCE_MAP → get-or-create в DealSource
+    - variant: SOURCE_DESCRIPTION целиком (строка) → get-or-create в
+      DealSourceVariant под этим родителем. Если description пустое или
+      source отсутствует — variant = None.
+
+    Коммитов тут не делаем — caller сам закоммитит в своём цикле.
+    """
+    enum_id = d.get(B24_UF_SOURCE)
+    if enum_id in (None, '', 0, '0'):
+        return None, None
+    name = B24_SOURCE_MAP.get(str(enum_id))
+    if not name:
+        return None, None
+
+    src = DealSource.query.filter(
+        db.func.lower(DealSource.name) == name.lower(),
+    ).first()
+    if not src:
+        src = DealSource(name=name, is_active=True)
+        db.session.add(src)
+        db.session.flush()
+
+    descr = (d.get('SOURCE_DESCRIPTION') or '').strip()
+    if not descr:
+        return src.id, None
+
+    # Обрезаем до 500 символов (размер колонки).
+    descr = descr[:500]
+    variant = DealSourceVariant.query.filter_by(
+        parent_source_id=src.id, name=descr,
+    ).first()
+    if not variant:
+        variant = DealSourceVariant(parent_source_id=src.id, name=descr)
+        db.session.add(variant)
+        db.session.flush()
+
+    return src.id, variant.id
 
 
 def _parse_dt(iso: str | None) -> datetime | None:
@@ -133,12 +205,14 @@ def migrate_one(d: dict, mapping: dict, owner_id: int, dry_run: bool) -> str:
     closedate = _parse_dt(d.get('CLOSEDATE'))
     comments = (d.get('COMMENTS') or '').strip() or None
     status = _resolve_stage_status(stage_id)
+    source_id, source_variant_id = _resolve_source_and_variant(d)
 
     if dry_run:
         return (f'[dry-run] would create: {name!r} pipeline={pipeline_id} '
                 f'stage={stage_id} status={status} amount={amount} '
                 f'company_pid={company_pid} contacts={len(contact_pospro_ids)} '
-                f'resp=#{responsible} creator=#{creator}')
+                f'resp=#{responsible} creator=#{creator} '
+                f'source=#{source_id} variant=#{source_variant_id}')
 
     deal = Deal(
         name=name[:255],
@@ -153,6 +227,8 @@ def migrate_one(d: dict, mapping: dict, owner_id: int, dry_run: bool) -> str:
         client_id=primary_contact,
         company_id=company_pid,
         notes=comments,
+        source_id=source_id,
+        source_variant_id=source_variant_id,
         source_ref_type='bitrix24',
         source_ref_id=str(b24_id),
         created_at=begindate or datetime.utcnow(),

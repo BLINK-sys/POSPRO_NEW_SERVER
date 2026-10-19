@@ -22,7 +22,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 
 from extensions import db
-from models.deal_source import DealSource
+from models.deal_source import DealSource, DealSourceVariant
 
 
 deal_sources_bp = Blueprint('deal_sources', __name__)
@@ -165,5 +165,124 @@ def delete_source(sid):
     # SET NULL в FK → сделки не удаляются, просто теряют источник.
     # crm_ingest_source.default_deal_source_id тоже обнуляется (SET NULL).
     db.session.delete(s)
+    db.session.commit()
+    return jsonify({'success': True}), 200
+
+
+# ============================================================================
+# DealSourceVariant — «Дополнительно об источнике» (дочерний справочник)
+# ============================================================================
+
+def _parse_variant_payload(data: dict, partial: bool = False):
+    fields: dict = {}
+    name = (data.get('name') or '').strip() or None
+    if not partial and not name:
+        return False, 'Название варианта обязательно', {}
+    if name is not None:
+        if len(name) > 500:
+            return False, 'Название слишком длинное (макс 500)', {}
+        fields['name'] = name
+    if 'order_pos' in data:
+        try:
+            fields['order_pos'] = int(data['order_pos'] or 0)
+        except (TypeError, ValueError):
+            return False, 'order_pos должен быть числом', {}
+    return True, None, fields
+
+
+@deal_sources_bp.route('/admin/deal-sources/<int:sid>/variants',
+                       methods=['GET'], strict_slashes=False)
+@jwt_required()
+def list_variants(sid):
+    err = _check_admin_or_system()
+    if err:
+        return err
+    if not DealSource.query.get(sid):
+        return jsonify({'error': 'Источник не найден'}), 404
+    rows = DealSourceVariant.query.filter_by(parent_source_id=sid)\
+        .order_by(DealSourceVariant.order_pos, DealSourceVariant.name).all()
+    return jsonify({'success': True, 'variants': [v.to_dict() for v in rows]}), 200
+
+
+@deal_sources_bp.route('/admin/deal-sources/<int:sid>/variants',
+                       methods=['POST'], strict_slashes=False)
+@jwt_required()
+def create_variant(sid):
+    err = _check_admin_or_system()
+    if err:
+        return err
+    err = _check_can_manage()
+    if err:
+        return err
+    if not DealSource.query.get(sid):
+        return jsonify({'error': 'Источник не найден'}), 404
+
+    data = request.get_json() or {}
+    ok, msg, fields = _parse_variant_payload(data)
+    if not ok:
+        return jsonify({'error': msg}), 400
+
+    dup = DealSourceVariant.query.filter(
+        DealSourceVariant.parent_source_id == sid,
+        db.func.lower(DealSourceVariant.name) == fields['name'].lower(),
+    ).first()
+    if dup:
+        return jsonify({'error': 'Такой вариант уже существует'}), 409
+
+    v = DealSourceVariant(parent_source_id=sid, **fields)
+    db.session.add(v)
+    db.session.commit()
+    return jsonify({'success': True, 'variant': v.to_dict()}), 201
+
+
+@deal_sources_bp.route('/admin/deal-source-variants/<int:vid>',
+                       methods=['PUT'], strict_slashes=False)
+@jwt_required()
+def update_variant(vid):
+    err = _check_admin_or_system()
+    if err:
+        return err
+    err = _check_can_manage()
+    if err:
+        return err
+
+    v = DealSourceVariant.query.get(vid)
+    if not v:
+        return jsonify({'error': 'Вариант не найден'}), 404
+
+    data = request.get_json() or {}
+    ok, msg, fields = _parse_variant_payload(data, partial=True)
+    if not ok:
+        return jsonify({'error': msg}), 400
+
+    if 'name' in fields and fields['name'].lower() != (v.name or '').lower():
+        dup = DealSourceVariant.query.filter(
+            DealSourceVariant.parent_source_id == v.parent_source_id,
+            db.func.lower(DealSourceVariant.name) == fields['name'].lower(),
+            DealSourceVariant.id != vid,
+        ).first()
+        if dup:
+            return jsonify({'error': 'Такой вариант уже существует'}), 409
+
+    for k, val in fields.items():
+        setattr(v, k, val)
+    db.session.commit()
+    return jsonify({'success': True, 'variant': v.to_dict()}), 200
+
+
+@deal_sources_bp.route('/admin/deal-source-variants/<int:vid>',
+                       methods=['DELETE'], strict_slashes=False)
+@jwt_required()
+def delete_variant(vid):
+    err = _check_admin_or_system()
+    if err:
+        return err
+    err = _check_can_manage()
+    if err:
+        return err
+    v = DealSourceVariant.query.get(vid)
+    if not v:
+        return jsonify({'error': 'Вариант не найден'}), 404
+    db.session.delete(v)
     db.session.commit()
     return jsonify({'success': True}), 200

@@ -75,6 +75,12 @@ class Deal(db.Model):
     source_id = db.Column(
         db.Integer, db.ForeignKey('deal_source.id', ondelete='SET NULL'), nullable=True,
     )
+    # Дочерний «вариант» источника — «Дополнительно об источнике».
+    # См. models.deal_source.DealSourceVariant.
+    source_variant_id = db.Column(
+        db.Integer, db.ForeignKey('deal_source_variant.id', ondelete='SET NULL'),
+        nullable=True,
+    )
     status = db.Column(db.String(16), nullable=False, default='open', server_default=db.text("'open'"))
     tags = db.Column(JSONB, nullable=False, default=list, server_default=db.text("'[]'::jsonb"))
     notes = db.Column(db.Text, nullable=True)
@@ -112,6 +118,7 @@ class Deal(db.Model):
             'priority': self.priority,
             'source': self.source,
             'source_id': self.source_id,
+            'source_variant_id': self.source_variant_id,
             'status': self.status,
             'tags': self.tags or [],
             'notes': self.notes,

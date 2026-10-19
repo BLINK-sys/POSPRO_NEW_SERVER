@@ -213,9 +213,10 @@ def _deal_full_dict(deal: Deal) -> dict:
 
     # Разворачиваем источник сделки (DealSource) — название + цвет для чипа.
     d['deal_source'] = None
+    d['source_variant'] = None
     if deal.source_id:
         try:
-            from models.deal_source import DealSource
+            from models.deal_source import DealSource, DealSourceVariant
             ds = DealSource.query.get(deal.source_id)
             if ds:
                 d['deal_source'] = {
@@ -223,6 +224,14 @@ def _deal_full_dict(deal: Deal) -> dict:
                     'name': ds.name,
                     'color': ds.color,
                 }
+            if deal.source_variant_id:
+                dv = DealSourceVariant.query.get(deal.source_variant_id)
+                if dv and dv.parent_source_id == deal.source_id:
+                    d['source_variant'] = {
+                        'id': dv.id,
+                        'parent_source_id': dv.parent_source_id,
+                        'name': dv.name,
+                    }
         except Exception:
             pass
 
@@ -295,6 +304,31 @@ def _deal_full_dict(deal: Deal) -> dict:
 # ============================================================================
 # Валидация
 # ============================================================================
+
+def _validate_source_variant_pair(source_id, source_variant_id):
+    """
+    Проверяет что source_variant (если указан) принадлежит выбранному
+    родителю. Возвращает (jsonify, 400) при ошибке, None если ок.
+    """
+    if not source_variant_id:
+        return None
+    if not source_id:
+        return jsonify({
+            'error': 'Для выбора «Доп. источника» надо сначала выбрать источник',
+        }), 400
+    try:
+        from models.deal_source import DealSourceVariant
+        v = DealSourceVariant.query.get(int(source_variant_id))
+    except Exception:
+        v = None
+    if not v:
+        return jsonify({'error': 'Доп. источник не найден'}), 400
+    if v.parent_source_id != int(source_id):
+        return jsonify({
+            'error': 'Доп. источник не принадлежит выбранному источнику',
+        }), 400
+    return None
+
 
 def _parse_deal_payload(data: dict, *, partial: bool = False):
     """Валидация тела POST/PUT /deals."""
@@ -390,6 +424,16 @@ def _parse_deal_payload(data: dict, *, partial: bool = False):
                 fields['source_id'] = int(sid)
             except (TypeError, ValueError):
                 return False, 'source_id должен быть числом', {}
+
+    if 'source_variant_id' in data:
+        vid = data.get('source_variant_id')
+        if vid in (None, '', 0):
+            fields['source_variant_id'] = None
+        else:
+            try:
+                fields['source_variant_id'] = int(vid)
+            except (TypeError, ValueError):
+                return False, 'source_variant_id должен быть числом', {}
 
     if 'status' in data:
         st = data.get('status')
@@ -563,15 +607,26 @@ def list_deals():
             return None
         return source_by_key.get(ref_type)
 
-    # Батч-резолв DealSource для всех сделок страницы — чтобы карточки
-    # канбана могли показать «Источник» (deal_source.name + color).
+    # Батч-резолв DealSource + DealSourceVariant для карточек канбана —
+    # показать «Источник» и «Доп. источник» без N+1.
     sources_by_id: dict[int, dict] = {}
+    variants_by_id: dict[int, dict] = {}
     source_ids = {d.source_id for d in deals if d.source_id}
+    variant_ids = {d.source_variant_id for d in deals if d.source_variant_id}
     if source_ids:
         try:
             from models.deal_source import DealSource
             for s in DealSource.query.filter(DealSource.id.in_(source_ids)).all():
                 sources_by_id[s.id] = {'id': s.id, 'name': s.name, 'color': s.color}
+        except Exception:
+            pass
+    if variant_ids:
+        try:
+            from models.deal_source import DealSourceVariant
+            for v in DealSourceVariant.query.filter(DealSourceVariant.id.in_(variant_ids)).all():
+                variants_by_id[v.id] = {
+                    'id': v.id, 'parent_source_id': v.parent_source_id, 'name': v.name,
+                }
         except Exception:
             pass
 
@@ -580,6 +635,9 @@ def list_deals():
         row = d.to_dict()
         row['source_name'] = _resolve_source_name(d.source_ref_type)
         row['deal_source'] = sources_by_id.get(d.source_id) if d.source_id else None
+        row['source_variant'] = (
+            variants_by_id.get(d.source_variant_id) if d.source_variant_id else None
+        )
         out.append(row)
 
     return jsonify({
@@ -627,6 +685,14 @@ def create_deal():
     if not ok:
         return jsonify({'error': msg}), 400
 
+    # Валидация: вариант источника должен принадлежать выбранному
+    # родителю. source_id обязателен если выбран variant.
+    err = _validate_source_variant_pair(
+        fields.get('source_id'), fields.get('source_variant_id'),
+    )
+    if err:
+        return err
+
     pipeline_id = fields['pipeline_id']
     stage_id = fields['stage_id']
 
@@ -670,6 +736,7 @@ def create_deal():
         priority=fields.get('priority', 'normal'),
         source=fields.get('source'),
         source_id=fields.get('source_id'),
+        source_variant_id=fields.get('source_variant_id'),
         status=status,
         tags=fields.get('tags', []),
         notes=fields.get('notes'),
@@ -737,6 +804,20 @@ def update_deal(did):
     # авто-логику статуса и запись в activity).
     if 'stage_id' in fields and fields['stage_id'] != d.stage_id:
         return jsonify({'error': 'Смена стадии — через POST /deals/<id>/move'}), 400
+
+    # Валидация source_variant_id. Берём effective значения с учётом того
+    # что часть полей могла не прийти в partial-update.
+    #   - если меняется source_id (без явного source_variant_id) — старый
+    #     вариант сбрасываем автоматически, т.к. он был от другого parent;
+    #   - если переданы оба — вариант должен принадлежать новому родителю.
+    if 'source_id' in fields and fields.get('source_id') != d.source_id \
+            and 'source_variant_id' not in fields:
+        fields['source_variant_id'] = None
+    eff_source_id = fields.get('source_id', d.source_id)
+    eff_variant_id = fields.get('source_variant_id', d.source_variant_id)
+    err = _validate_source_variant_pair(eff_source_id, eff_variant_id)
+    if err:
+        return err
 
     # Обработка мульти-контактов отдельно — это не колонка Deal.
     contact_ids_payload = fields.pop('contact_ids', None)
