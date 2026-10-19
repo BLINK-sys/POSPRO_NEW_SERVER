@@ -110,6 +110,14 @@ def _apply_filters(q):
             q = q.filter(Deal.source_id == int(source_id))
         except (TypeError, ValueError):
             pass
+    source_variant_id = request.args.get('source_variant_id')
+    if source_variant_id == 'none':
+        q = q.filter(Deal.source_variant_id.is_(None))
+    elif source_variant_id:
+        try:
+            q = q.filter(Deal.source_variant_id == int(source_variant_id))
+        except (TypeError, ValueError):
+            pass
     if amount_min is not None:
         q = q.filter(Deal.amount >= amount_min)
     if amount_max is not None:

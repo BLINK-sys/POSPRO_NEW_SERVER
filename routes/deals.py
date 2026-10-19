@@ -555,6 +555,15 @@ def list_deals():
             q = q.filter(Deal.source_id == int(source_id))
         except (TypeError, ValueError):
             pass
+    # Фильтр по доп. источнику (variant): 'none' → без варианта, int → конкретный.
+    source_variant_id = request.args.get('source_variant_id')
+    if source_variant_id == 'none':
+        q = q.filter(Deal.source_variant_id.is_(None))
+    elif source_variant_id:
+        try:
+            q = q.filter(Deal.source_variant_id == int(source_variant_id))
+        except (TypeError, ValueError):
+            pass
     # Диапазон суммы — для фильтра на /admin/deals/history.
     amount_min = request.args.get('amount_min', type=float)
     amount_max = request.args.get('amount_max', type=float)
