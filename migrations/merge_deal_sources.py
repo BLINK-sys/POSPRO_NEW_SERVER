@@ -140,6 +140,19 @@ def main() -> int:
                 "UPDATE deal SET source_id = :did WHERE source_id = :sid"
             ), {'did': dst['id'], 'sid': src['id']})
 
+        # 2.5) Ingest-источники с default_deal_source_id = src → переставить
+        # на dst. Иначе после DELETE src у них станет NULL (ondelete=SET NULL).
+        cnt_ingest = db.session.execute(text(
+            "SELECT COUNT(*) FROM crm_ingest_source WHERE default_deal_source_id = :sid"
+        ), {'sid': src['id']}).scalar() or 0
+        print(f'  INGEST default: {cnt_ingest} источников {src["id"]} → {dst["id"]}',
+              flush=True)
+        if args.apply and cnt_ingest:
+            db.session.execute(text(
+                "UPDATE crm_ingest_source SET default_deal_source_id = :did "
+                "WHERE default_deal_source_id = :sid"
+            ), {'did': dst['id'], 'sid': src['id']})
+
         # 3) Удаление самого src DealSource. CASCADE подчистит оставшиеся
         # варианты (должно быть 0 после п.1), SET NULL — crm_ingest_source.
         print(f'  DELETE deal_source #{src["id"]}', flush=True)
