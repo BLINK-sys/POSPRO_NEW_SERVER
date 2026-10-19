@@ -48,8 +48,8 @@ def main() -> int:
         print('=== B24 (tasks.task.list) ===', flush=True)
         try:
             r = call('tasks.task.list', {
-                'select': ['ID'],
-                'order': {'ID': 'desc'},
+                'select[]': ['ID'],
+                'order[ID]': 'desc',
                 'start': 0,
             })
             tasks_page = (r.get('result') or {}).get('tasks') or []
