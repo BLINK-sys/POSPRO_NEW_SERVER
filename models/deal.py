@@ -83,6 +83,11 @@ class Deal(db.Model):
     )
     status = db.Column(db.String(16), nullable=False, default='open', server_default=db.text("'open'"))
     tags = db.Column(JSONB, nullable=False, default=list, server_default=db.text("'[]'::jsonb"))
+    # Значения справочников-опросника при переходе стадии (Теплота, Город,
+    # Деятельность, Тип бизнеса — любые которые завёл админ в /admin/dictionaries).
+    # Формат: {<dict_code>: <dictionary_item.id>}. См. models.dictionary.
+    survey_values = db.Column(JSONB, nullable=False, default=dict,
+                              server_default=db.text("'{}'::jsonb"))
     notes = db.Column(db.Text, nullable=True)
 
     # Ingest-провенанс.
@@ -121,6 +126,7 @@ class Deal(db.Model):
             'source_variant_id': self.source_variant_id,
             'status': self.status,
             'tags': self.tags or [],
+            'survey_values': dict(self.survey_values or {}),
             'notes': self.notes,
             'source_ref_type': self.source_ref_type,
             'source_ref_id': self.source_ref_id,

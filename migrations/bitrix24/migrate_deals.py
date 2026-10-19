@@ -78,6 +78,12 @@ FIELDS = [
     'BEGINDATE', 'CLOSEDATE', 'DATE_CREATE', 'DATE_MODIFY',
     'SOURCE_ID', 'SOURCE_DESCRIPTION', 'COMMENTS', 'TYPE_ID',
     B24_UF_SOURCE,
+    # UF-поля опросника (heat/city/activity/business_type).
+    # См. migrations/migrate_survey_from_b24.py — там же обратный маппинг.
+    'UF_CRM_1732275174616',       # heat
+    'UF_CRM_1668403860',          # city
+    'UF_CRM_1668403913',          # activity
+    'UF_CRM_DEAL_1744377549767',  # business_type
 ]
 
 
@@ -122,6 +128,48 @@ def _resolve_source_and_variant(d: dict) -> tuple[int | None, int | None]:
         db.session.flush()
 
     return src.id, variant.id
+
+
+# ─── Survey (Dictionary) resolver ─────────────────────────────────────────
+# Для новых импортов сразу тянем heat/city/activity/business_type из UF-полей
+# и мэппим на DictionaryItem.id. Полная таблица enum→name — в
+# migrations/migrate_survey_from_b24.py (SURVEYS). Здесь используем
+# тот же mapping для get-or-create в Dictionary + DictionaryItem.
+
+
+def _resolve_survey_values(d: dict) -> dict:
+    """
+    Из b24-сделки `d` возвращает dict {code: dictionary_item.id} для сохранения
+    в Deal.survey_values. Пустые UF-поля пропускаем. Коммит делает caller.
+    """
+    try:
+        from migrations.migrate_survey_from_b24 import SURVEYS
+    except Exception:
+        return {}
+    from models.dictionary import Dictionary, DictionaryItem
+
+    out: dict = {}
+    for code, (uf, label, enum) in SURVEYS.items():
+        raw = d.get(uf)
+        if raw in (None, '', 0, '0'):
+            continue
+        name = enum.get(str(raw))
+        if not name:
+            continue
+        dict_obj = Dictionary.query.filter_by(code=code).first()
+        if not dict_obj:
+            dict_obj = Dictionary(code=code, label=label)
+            db.session.add(dict_obj)
+            db.session.flush()
+        item = DictionaryItem.query.filter_by(
+            dict_id=dict_obj.id, name=name,
+        ).first()
+        if not item:
+            item = DictionaryItem(dict_id=dict_obj.id, name=name)
+            db.session.add(item)
+            db.session.flush()
+        out[code] = item.id
+    return out
 
 
 def _parse_dt(iso: str | None) -> datetime | None:
@@ -206,6 +254,7 @@ def migrate_one(d: dict, mapping: dict, owner_id: int, dry_run: bool) -> str:
     comments = (d.get('COMMENTS') or '').strip() or None
     status = _resolve_stage_status(stage_id)
     source_id, source_variant_id = _resolve_source_and_variant(d)
+    survey_values = _resolve_survey_values(d)
 
     if dry_run:
         return (f'[dry-run] would create: {name!r} pipeline={pipeline_id} '
@@ -229,6 +278,7 @@ def migrate_one(d: dict, mapping: dict, owner_id: int, dry_run: bool) -> str:
         notes=comments,
         source_id=source_id,
         source_variant_id=source_variant_id,
+        survey_values=survey_values,
         source_ref_type='bitrix24',
         source_ref_id=str(b24_id),
         created_at=begindate or datetime.utcnow(),

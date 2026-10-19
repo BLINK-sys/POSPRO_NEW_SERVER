@@ -101,6 +101,23 @@ def _parse_stage_payload(data: dict, *, partial: bool = False):
         fields['type'] = stype
     if 'is_active' in data:
         fields['is_active'] = bool(data.get('is_active'))
+    if 'required_dict_codes' in data:
+        v = data.get('required_dict_codes')
+        if v is None:
+            v = []
+        if not isinstance(v, list):
+            return False, 'required_dict_codes должен быть массивом', {}
+        # Чистим: только строки, лёгкий dedupe, обрезаем до 64 ascii-символов.
+        out: list[str] = []
+        seen: set[str] = set()
+        for s in v:
+            if not isinstance(s, str):
+                continue
+            s = s.strip().lower()[:64]
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        fields['required_dict_codes'] = out
     if not partial and 'pipeline_id' in data:
         try:
             fields['pipeline_id'] = int(data['pipeline_id'])
@@ -471,6 +488,8 @@ def update_stage(sid):
         s.type = fields['type']
     if 'is_active' in fields:
         s.is_active = fields['is_active']
+    if 'required_dict_codes' in fields:
+        s.required_dict_codes = fields['required_dict_codes']
     s.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({'success': True, 'stage': s.to_dict()}), 200

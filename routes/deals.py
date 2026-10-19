@@ -305,6 +305,60 @@ def _deal_full_dict(deal: Deal) -> dict:
 # Валидация
 # ============================================================================
 
+def _validate_and_merge_survey(deal, posted):
+    """
+    Проверяет posted survey_values (dict code→item_id) против Dictionary и
+    DictionaryItem — все коды должны существовать, item'ы должны принадлежать
+    своему справочнику. Возвращает (ok, error, merged_dict). Null-значение
+    в posted ОЧИЩАЕТ ключ в текущем словаре.
+    """
+    if not isinstance(posted, dict):
+        return False, 'survey_values должен быть объектом {code: item_id}', {}
+    try:
+        from models.dictionary import Dictionary, DictionaryItem
+    except Exception:
+        return False, 'Внутренняя ошибка: dictionary не загружен', {}
+
+    current = dict(deal.survey_values or {})
+    # Собираем все коды из posted и валидируем.
+    codes = [str(c) for c in posted.keys()]
+    if not codes:
+        return True, None, current
+    dicts = {
+        d.code: d for d in Dictionary.query.filter(Dictionary.code.in_(codes)).all()
+    }
+    # Соберём item'ы одним запросом для всех ненулевых значений.
+    item_ids: list[int] = []
+    for v in posted.values():
+        if v in (None, '', 0):
+            continue
+        try:
+            item_ids.append(int(v))
+        except (TypeError, ValueError):
+            return False, f'survey_values: значение {v!r} должно быть числом', {}
+    items_by_id = {}
+    if item_ids:
+        items_by_id = {
+            it.id: it for it in DictionaryItem.query.filter(
+                DictionaryItem.id.in_(item_ids),
+            ).all()
+        }
+    for code, val in posted.items():
+        code = str(code)
+        if val in (None, '', 0):
+            current.pop(code, None)
+            continue
+        d_obj = dicts.get(code)
+        if not d_obj:
+            return False, f'Справочник {code!r} не найден', {}
+        iid = int(val)
+        it = items_by_id.get(iid)
+        if not it or it.dict_id != d_obj.id:
+            return False, f'Элемент #{iid} не принадлежит справочнику {code!r}', {}
+        current[code] = iid
+    return True, None, current
+
+
 def _validate_source_variant_pair(source_id, source_variant_id):
     """
     Проверяет что source_variant (если указан) принадлежит выбранному
@@ -434,6 +488,17 @@ def _parse_deal_payload(data: dict, *, partial: bool = False):
                 fields['source_variant_id'] = int(vid)
             except (TypeError, ValueError):
                 return False, 'source_variant_id должен быть числом', {}
+
+    if 'survey_values' in data:
+        sv = data.get('survey_values')
+        if sv is None:
+            fields['survey_values'] = {}
+        elif isinstance(sv, dict):
+            # Валидация против справочников — в create/update_deal через
+            # _validate_and_merge_survey. Здесь только проверка типа.
+            fields['survey_values'] = sv
+        else:
+            return False, 'survey_values должен быть объектом', {}
 
     if 'status' in data:
         st = data.get('status')
@@ -702,6 +767,15 @@ def create_deal():
     if err:
         return err
 
+    # survey_values валидируем через fake-объект (merged стартует с пустого).
+    if 'survey_values' in fields:
+        class _Empty: pass
+        _tmp = _Empty(); _tmp.survey_values = {}
+        ok, msg, merged = _validate_and_merge_survey(_tmp, fields['survey_values'])
+        if not ok:
+            return jsonify({'error': msg}), 400
+        fields['survey_values'] = merged
+
     pipeline_id = fields['pipeline_id']
     stage_id = fields['stage_id']
 
@@ -748,6 +822,7 @@ def create_deal():
         source_variant_id=fields.get('source_variant_id'),
         status=status,
         tags=fields.get('tags', []),
+        survey_values=fields.get('survey_values', {}),
         notes=fields.get('notes'),
     )
     db.session.add(d)
@@ -827,6 +902,13 @@ def update_deal(did):
     err = _validate_source_variant_pair(eff_source_id, eff_variant_id)
     if err:
         return err
+
+    # survey_values: валидируем против Dictionary + мерджим с текущими.
+    if 'survey_values' in fields:
+        ok, msg, merged = _validate_and_merge_survey(d, fields['survey_values'])
+        if not ok:
+            return jsonify({'error': msg}), 400
+        fields['survey_values'] = merged
 
     # Обработка мульти-контактов отдельно — это не колонка Deal.
     contact_ids_payload = fields.pop('contact_ids', None)
@@ -1032,6 +1114,32 @@ def move_deal(did):
     if new_stage_id == d.stage_id:
         # Идемпотентный no-op.
         return jsonify({'success': True, 'deal': _deal_full_dict(d)}), 200
+
+    # Опросник: если тело содержит survey_values — валидируем и мерджим ДО
+    # проверки required (чтобы юзер мог одним запросом «заполнил опрос +
+    # перенёс стадию»). Валидация survey_values — отдельной функцией,
+    # мерджим с текущими.
+    posted_sv = data.get('survey_values')
+    if posted_sv is not None:
+        ok, msg, merged = _validate_and_merge_survey(d, posted_sv)
+        if not ok:
+            return jsonify({'error': msg}), 400
+        d.survey_values = merged
+
+    # Проверка required_dict_codes целевой стадии. Если какие-то коды не
+    # заполнены в survey_values — отказываем с 400 и списком missing_codes.
+    # Фронт на основании missing_codes открывает модалку-опросник и
+    # повторяет POST /move со survey_values внутри.
+    required_codes = list(new_stage.required_dict_codes or [])
+    if required_codes:
+        sv = d.survey_values or {}
+        missing = [c for c in required_codes if not sv.get(c)]
+        if missing:
+            return jsonify({
+                'error': 'Для перехода в эту стадию нужно заполнить обязательные поля',
+                'missing_codes': missing,
+                'required_codes': required_codes,
+            }), 400
 
     from_stage_id = d.stage_id
     from_status = d.status
