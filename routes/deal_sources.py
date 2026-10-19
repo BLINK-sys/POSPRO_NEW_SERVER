@@ -185,6 +185,38 @@ def delete_source(sid):
     return jsonify({'success': True}), 200
 
 
+@deal_sources_bp.route('/admin/deal-sources/reorder', methods=['POST'])
+@jwt_required()
+def reorder_sources():
+    """
+    Принимает `[{id, sort_order}, ...]` — пачкой проставляет новый порядок.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    err = _check_can_manage()
+    if err:
+        return err
+
+    payload = request.get_json()
+    if not isinstance(payload, list):
+        return jsonify({'error': 'Ожидался массив {id, sort_order}'}), 400
+
+    ids = [item.get('id') for item in payload if isinstance(item, dict)]
+    sources = {s.id: s for s in DealSource.query.filter(DealSource.id.in_(ids)).all()}
+
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        sid = item.get('id')
+        order = item.get('sort_order')
+        if sid in sources and isinstance(order, int):
+            sources[sid].sort_order = order
+
+    db.session.commit()
+    return jsonify({'success': True}), 200
+
+
 # ============================================================================
 # DealSourceVariant — «Дополнительно об источнике» (дочерний справочник)
 # ============================================================================
