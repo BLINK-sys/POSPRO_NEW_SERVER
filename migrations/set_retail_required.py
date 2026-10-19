@@ -75,7 +75,7 @@ def main() -> int:
               f'mode={"APPLY" if args.apply else "DRY-RUN"}', flush=True)
 
         stages = DealStage.query.filter_by(pipeline_id=pipeline.id)\
-            .order_by(DealStage.order_pos.asc(), DealStage.id.asc()).all()
+            .order_by(DealStage.order.asc(), DealStage.id.asc()).all()
         print(f'стадий: {len(stages)}', flush=True)
         print('', flush=True)
 
@@ -91,7 +91,7 @@ def main() -> int:
                 n_changed += 1
                 if args.apply:
                     s.required_dict_codes = want
-            print(f'  [{i:>2}] order={s.order_pos:<4} id={s.id:<5} '
+            print(f'  [{i:>2}] order={s.order:<4} id={s.id:<5} '
                   f'{s.name!r:<40} {status}', flush=True)
 
         if args.apply and n_changed:
