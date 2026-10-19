@@ -3,13 +3,13 @@
 -- любые новые). Устройство: родительская `dictionary` (code+label) и
 -- дочерние `dictionary_item` (name/order/is_active).
 --
--- Связь со стадией: `deal_stage.required_dict_codes JSONB` — массив
+-- Связь со стадией: deal_stage.required_dict_codes JSONB — массив
 -- кодов справочников, обязательных на ВХОДЕ в стадию. Проверка в
--- POST /deals/<id>/move; если какие-то пусты → 400 с missing_codes,
+-- POST /deals/<id>/move — если какие-то пусты → 400 с missing_codes,
 -- фронт показывает модалку.
 --
--- Значения на сделке: `deal.survey_values JSONB` — { "<dict_code>":
--- <item_id>, ... }. Отображаются в блоке «Информация» карточки сделки.
+-- Значения на сделке: deal.survey_values JSONB — объект вида
+-- dict_code → dict_item_id. Отображаются в блоке Информация карточки сделки.
 --
 -- Источники (DealSource) оставлены отдельной таблицей — у них своя
 -- 2-уровневая структура (parent + variant).
