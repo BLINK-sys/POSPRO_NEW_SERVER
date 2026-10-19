@@ -49,12 +49,19 @@ def _parse_args():
 
 
 def _fetch_batch(b24_ids: list[str]) -> dict:
-    """Вытаскивает нужные поля для списка B24 deal-id одним запросом."""
+    """
+    Вытаскивает нужные поля для списка B24 deal-id одним запросом.
+
+    ВАЖНО про filter[ID][]: B24 для array-фильтра требует суффикс `[]`,
+    иначе через doseq=True все значения кроме последнего затираются как
+    одноимённые query-параметры. С `[]` urlencode даёт
+    `filter[ID][]=1&filter[ID][]=2&...` — B24 трактует как IN.
+    """
     if not b24_ids:
         return {}
     r = call('crm.deal.list', {
         'select[]': ['ID', 'SOURCE_DESCRIPTION', B24_UF_SOURCE],
-        'filter[ID]': b24_ids,
+        'filter[ID][]': [str(x) for x in b24_ids],
         'start': 0,
     })
     out = {}
