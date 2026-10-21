@@ -78,6 +78,9 @@ def main() -> int:
                AND tm.id IS NULL
              ORDER BY CAST(bm.b24_id AS INTEGER) DESC
         """)).fetchall()
+        valid_user_ids = {r[0] for r in db.session.execute(text(
+            "SELECT id FROM system_users"
+        ))}
         if args.limit:
             rows = rows[:args.limit]
 
@@ -127,12 +130,15 @@ def main() -> int:
                 co_worker_ids = []
                 for aid in acc:
                     pid = user_pospro_id(mapping, aid, 0)
-                    if pid and pid != responsible and pid not in co_worker_ids:
+                    if (pid and pid != responsible
+                            and pid in valid_user_ids
+                            and pid not in co_worker_ids):
                         co_worker_ids.append(pid)
                 observer_ids = []
                 for aid in aud:
                     pid = user_pospro_id(mapping, aid, 0)
                     if (pid and pid != responsible
+                            and pid in valid_user_ids
                             and pid not in observer_ids
                             and pid not in co_worker_ids):
                         observer_ids.append(pid)
