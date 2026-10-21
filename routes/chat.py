@@ -138,6 +138,22 @@ def _require_membership(room_id: int, user_id: int) -> ChatMember | None:
 # Serialization
 # ============================================================================
 
+def _iso_utc(dt):
+    """
+    Сериализация naive-UTC datetime (у нас везде `datetime.utcnow`) в
+    ISO-строку с суффиксом 'Z'. Без 'Z' фронт `new Date(iso)` трактует
+    строку как ЛОКАЛЬНОЕ время и не делает конвертацию в TZ юзера —
+    на выходе юзер в Алматы видит UTC-5h (05:51 вместо 10:51).
+    """
+    if dt is None:
+        return None
+    s = dt.isoformat()
+    # Если уже есть tz-suffix (+00:00 / ±HH:MM / Z) — не дублируем.
+    if s.endswith('Z') or '+' in s[10:] or '-' in s[10:]:
+        return s
+    return s + 'Z'
+
+
 def _room_summary(room: ChatRoom, me_id: int) -> dict:
     """Компактное представление комнаты для списка."""
     last_msg = (
@@ -157,6 +173,12 @@ def _room_summary(room: ChatRoom, me_id: int) -> dict:
             q = q.filter(ChatMessage.created_at > my_member.last_read_at)
         unread = q.count()
 
+    # member_ids — чтобы фронт мог определить «второго» в direct-чате и
+    # показать его имя вместо «Личка».
+    member_ids = [
+        m.user_id for m in ChatMember.query.filter_by(room_id=room.id).all()
+    ]
+
     return {
         'id': room.id,
         'kind': room.kind,
@@ -164,11 +186,12 @@ def _room_summary(room: ChatRoom, me_id: int) -> dict:
         'related_deal_id': room.related_deal_id,
         'related_task_id': room.related_task_id,
         'is_archived': bool(room.is_archived),
-        'archived_at': room.archived_at.isoformat() if room.archived_at else None,
-        'created_at': room.created_at.isoformat() if room.created_at else None,
-        'updated_at': room.updated_at.isoformat() if room.updated_at else None,
+        'archived_at': _iso_utc(room.archived_at),
+        'created_at': _iso_utc(room.created_at),
+        'updated_at': _iso_utc(room.updated_at),
         'last_message': _message_dict(last_msg) if last_msg else None,
         'unread': unread,
+        'member_ids': member_ids,
     }
 
 
@@ -187,10 +210,10 @@ def _message_dict(m: ChatMessage) -> dict:
         'author_id': m.author_id,
         'text': m.text if not m.deleted_at else None,
         'reply_to_id': m.reply_to_id,
-        'created_at': m.created_at.isoformat() if m.created_at else None,
-        'edited_at': m.edited_at.isoformat() if m.edited_at else None,
-        'deleted_at': m.deleted_at.isoformat() if m.deleted_at else None,
-        'pinned_at': m.pinned_at.isoformat() if m.pinned_at else None,
+        'created_at': _iso_utc(m.created_at),
+        'edited_at': _iso_utc(m.edited_at),
+        'deleted_at': _iso_utc(m.deleted_at),
+        'pinned_at': _iso_utc(m.pinned_at),
         'pinned_by': m.pinned_by,
         'reactions': [{'emoji': e, 'user_ids': uids} for e, uids in grouped.items()],
         'attachments': [
@@ -346,8 +369,8 @@ def get_room(rid):
     d = _room_summary(room, uid)
     d['members'] = [
         {'id': m.id, 'user_id': m.user_id,
-         'joined_at': m.joined_at.isoformat() if m.joined_at else None,
-         'last_read_at': m.last_read_at.isoformat() if m.last_read_at else None}
+         'joined_at': _iso_utc(m.joined_at),
+         'last_read_at': _iso_utc(m.last_read_at)}
         for m in members
     ]
     return jsonify({'success': True, 'room': d}), 200
@@ -743,7 +766,7 @@ def read_status(rid):
         'members': [
             {
                 'user_id': m.user_id,
-                'last_read_at': m.last_read_at.isoformat() if m.last_read_at else None,
+                'last_read_at': _iso_utc(m.last_read_at),
             }
             for m in members
         ],
@@ -1115,7 +1138,7 @@ def chat_stream():
                     payload = json.dumps({
                         'room_id': cm.room_id,
                         'user_id': cm.user_id,
-                        'last_read_at': cm.last_read_at.isoformat() if cm.last_read_at else None,
+                        'last_read_at': _iso_utc(cm.last_read_at),
                     }, ensure_ascii=False)
                     yield f'event: read\ndata: {payload}\n\n'
                     last_ping = time.time()
