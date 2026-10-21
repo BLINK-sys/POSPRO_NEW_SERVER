@@ -981,6 +981,18 @@ def mark_read(rid):
 
 @chat_bp.route('/admin/chat/stream', methods=['GET'])
 def chat_stream():
+    # 2026-10-21: ВРЕМЕННО ОТКЛЮЧЕН. SSE-стрим держал Postgres connection
+    # на всю жизнь подписки → при 15+ активных менеджерах pool_size=15/25
+    # исчерпывался, остальные REST-ручки падали QueuePool timeout → 502
+    # на всём бэке. Отдаём 404 — фронтовый ChatUnreadProvider сам упадёт
+    # на fallback polling (30 сек) и чат будет работать не в real-time,
+    # но прод остаётся живым. Правильный fix (gevent worker или Redis
+    # pub/sub) — отдельной задачей.
+    import os
+    if os.getenv('ENABLE_CHAT_SSE') != '1':
+        from flask import abort
+        abort(404)
+
     """
     SSE-стрим новых сообщений и реакций во всех комнатах юзера.
     JWT — через ?token= query (EventSource не умеет кастомные заголовки).
