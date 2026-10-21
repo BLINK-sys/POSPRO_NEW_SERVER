@@ -49,7 +49,7 @@ def main() -> int:
             print(f'  task#{r.id} ({r.n} members): {r.title!r}', flush=True)
             mem = db.session.execute(text("""
                 SELECT tm.user_id, tm.role, u.full_name
-                  FROM task_member tm JOIN system_user u ON u.id = tm.user_id
+                  FROM task_member tm JOIN system_users u ON u.id = tm.user_id
                  WHERE tm.task_id = :tid
             """), {'tid': r.id}).fetchall()
             for m in mem:
