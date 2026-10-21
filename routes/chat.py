@@ -249,6 +249,26 @@ def list_rooms():
         return jsonify({'success': True, 'rooms': []}), 200
 
     rooms = ChatRoom.query.filter(ChatRoom.id.in_(room_ids)).all()
+
+    # Фильтр: для deal/task-комнат показываем только где уже есть ≥1
+    # сообщение. Пустые чаты сделок/задач — шум (у юзера их десятки по
+    # членству, никто там не писал). Для direct/group/general чат виден
+    # всегда — там комната сама означает намерение общаться.
+    rooms_with_msg: set[int] = set()
+    deal_task_ids = [r.id for r in rooms if r.kind in ('deal', 'task')]
+    if deal_task_ids:
+        rows = db.session.execute(db.select(ChatMessage.room_id).where(
+            ChatMessage.room_id.in_(deal_task_ids),
+            ChatMessage.deleted_at.is_(None),
+        ).distinct()).all()
+        rooms_with_msg = {r[0] for r in rows}
+
+    def _visible(r: ChatRoom) -> bool:
+        if r.kind in ('deal', 'task'):
+            return r.id in rooms_with_msg
+        return True
+
+    rooms = [r for r in rooms if _visible(r)]
     summaries = [_room_summary(r, uid) for r in rooms]
     summaries.sort(
         key=lambda s: (s['last_message']['created_at'] if s['last_message']
