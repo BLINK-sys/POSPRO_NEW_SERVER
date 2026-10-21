@@ -67,16 +67,19 @@ def main() -> int:
         # --- СДЕЛКА ---
         if deal_b24:
             # Timeline comments — обычно именно эти комменты видно в карточке сделки.
+            # ВНИМАНИЕ: вложенные dict/list в params нужно вручную расшивать
+            # на order[FIELD]=val, filter[FIELD]=val — urlencode(doseq)
+            # не раскрывает dict.
             r = _safe('crm.timeline.comment.list', {
-                'order': {'ID': 'DESC'},
-                'filter': {'ENTITY_ID': deal_b24, 'ENTITY_TYPE': 'deal'},
+                'order[ID]': 'DESC',
+                'filter[ENTITY_ID]': deal_b24,
+                'filter[ENTITY_TYPE]': 'deal',
                 'start': 0,
             })
             _dump(f'crm.timeline.comment.list deal#{deal_b24}', r)
 
-            # UF-поля сделки с типом file (DEPRECATED в UI уже нет такого, но
-            # могут остаться старые записи). Нам нужны ВСЕ UF type=file.
-            r = _safe('crm.deal.userfield.list', {'filter': {'USER_TYPE_ID': 'file'}})
+            # UF-поля сделки с типом file
+            r = _safe('crm.deal.userfield.list', {'filter[USER_TYPE_ID]': 'file'})
             _dump('crm.deal.userfield.list filter type=file', r)
 
             # Сама сделка — чтобы увидеть что в UF-file полях у неё лежит.
@@ -91,9 +94,11 @@ def main() -> int:
         # --- ЗАДАЧА ---
         if task_b24:
             # Комментарии задачи — legacy, но работает.
+            # ARGS: PositionalArg1=TASKID, PositionalArg2=arOrder, …
+            # через REST: TASKID + ORDER[ID]=ASC
             r = _safe('task.commentitem.getlist', {
                 'TASKID': task_b24,
-                'ORDER': {'ID': 'ASC'},
+                'ORDER[ID]': 'ASC',
             })
             _dump(f'task.commentitem.getlist task#{task_b24}', r)
 
