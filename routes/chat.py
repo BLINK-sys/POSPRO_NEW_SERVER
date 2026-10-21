@@ -1167,6 +1167,12 @@ def chat_stream():
                     yield f': ping {int(time.time())}\n\n'
                     last_ping = time.time()
 
+                # КРИТИЧНО: освобождаем Postgres connection после каждой
+                # итерации. Без этого scoped_session держит коннект
+                # пиннингом за gthread всю жизнь SSE (минуты/часы) →
+                # pool_size 15/25 исчерпывается при 15+ активных подписках
+                # → остальные REST-ручки падают с QueuePool timeout.
+                db.session.remove()
                 time.sleep(1)
 
     headers = {
