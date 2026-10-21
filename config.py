@@ -17,9 +17,19 @@ class Config:
     # каждым взятием соединения и поднимает новое если предыдущее мертво.
     # pool_recycle гарантирует что мы заранее переподключимся раньше,
     # чем PostgreSQL нас выкинет (Render обычно идёт 10 минут — ставим 5).
+    # Default SQLAlchemy pool_size=5 + max_overflow=10 → 15 коннектов,
+    # а у нас 4 worker × 32 thread = 128 потоков. SSE-стримы чата
+    # /api/admin/chat/stream держат коннект весь срок подписки (минутами),
+    # поэтому pool забивается за секунды и остальные REST-ручки падают с
+    # `QueuePool limit of size 5 overflow 10 reached`.
+    # 2026-10-21: подняли pool до 20/40 → max 60 коннектов, укладывается
+    # в лимит Postgres на Render Standard (~97 connections).
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,
         "pool_recycle": 300,
+        "pool_size": 20,
+        "max_overflow": 40,
+        "pool_timeout": 30,
     }
     MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB (общий лимит; для драйверов проверка 200MB в роуте)
     DRIVER_MAX_SIZE = 200 * 1024 * 1024  # 200MB для драйверов товара
