@@ -17,19 +17,22 @@ class Config:
     # каждым взятием соединения и поднимает новое если предыдущее мертво.
     # pool_recycle гарантирует что мы заранее переподключимся раньше,
     # чем PostgreSQL нас выкинет (Render обычно идёт 10 минут — ставим 5).
-    # Default SQLAlchemy pool_size=5 + max_overflow=10 → 15 коннектов,
-    # а у нас 4 worker × 32 thread = 128 потоков. SSE-стримы чата
-    # /api/admin/chat/stream держат коннект весь срок подписки (минутами),
-    # поэтому pool забивается за секунды и остальные REST-ручки падают с
-    # `QueuePool limit of size 5 overflow 10 reached`.
-    # 2026-10-21: подняли pool до 20/40 → max 60 коннектов, укладывается
-    # в лимит Postgres на Render Standard (~97 connections).
+    # Postgres plan Basic 1GB → лимит ~97 connections (из них 3-5 резерв
+    # superuser), доступно ~90. Наш web-сервис — 1 instance, но есть
+    # background workers (satu_upload, MS_Order, Investors_bot) + pgAdmin
+    # + разовые psql — суммарно ~15-20 коннектов стороны.
+    # На web остаётся безопасно ~60.
+    #
+    # SSE-стрим /api/admin/chat/stream держит коннект на весь срок
+    # подписки — поэтому мы задираем pool, иначе 15-20 активных
+    # менеджеров съедают пул → REST-ручки падают QueuePool timeout.
+    # 2026-10-21: pool_size=15 + max_overflow=25 → max 40 на инстанс.
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,
-        "pool_recycle": 300,
-        "pool_size": 20,
-        "max_overflow": 40,
-        "pool_timeout": 30,
+        "pool_recycle": 180,
+        "pool_size": 15,
+        "max_overflow": 25,
+        "pool_timeout": 20,
     }
     MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB (общий лимит; для драйверов проверка 200MB в роуте)
     DRIVER_MAX_SIZE = 200 * 1024 * 1024  # 200MB для драйверов товара
