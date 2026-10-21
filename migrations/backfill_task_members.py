@@ -162,9 +162,9 @@ def main() -> int:
                        if (tid, uid) not in have]
                 if new:
                     db.session.execute(text("""
-                        INSERT INTO task_member (task_id, user_id, role,
-                                                 created_at, updated_at)
-                        VALUES (:tid, :uid, :role, NOW(), NOW())
+                        INSERT INTO task_member (task_id, user_id, role, added_at)
+                        VALUES (:tid, :uid, :role, NOW())
+                        ON CONFLICT (task_id, user_id) DO NOTHING
                     """), [{'tid': t, 'uid': u, 'role': r} for t, u, r in new])
                 db.session.commit()
                 # Чтобы не держать соединение всю миграцию:
