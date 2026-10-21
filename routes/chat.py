@@ -154,7 +154,12 @@ def _iso_utc(dt):
     return s + 'Z'
 
 
-def _room_summary(room: ChatRoom, me_id: int) -> dict:
+def _room_summary(
+    room: ChatRoom,
+    me_id: int,
+    deal_titles: dict[int, str] | None = None,
+    task_titles: dict[int, str] | None = None,
+) -> dict:
     """Компактное представление комнаты для списка."""
     last_msg = (
         ChatMessage.query.filter_by(room_id=room.id, deleted_at=None)
@@ -179,12 +184,35 @@ def _room_summary(room: ChatRoom, me_id: int) -> dict:
         m.user_id for m in ChatMember.query.filter_by(room_id=room.id).all()
     ]
 
+    # deal_title / task_title — чтобы в списке не было «Сделка №N» без
+    # смысла, а было реальное название. deal_titles/task_titles —
+    # заранее подгружены батчем в list_rooms; если None (одиночные
+    # вызовы get_room / detail) — делаем точечный запрос.
+    deal_title: str | None = None
+    task_title: str | None = None
+    if room.kind == 'deal' and room.related_deal_id:
+        if deal_titles is not None:
+            deal_title = deal_titles.get(room.related_deal_id)
+        else:
+            from models.deal import Deal
+            d = Deal.query.get(room.related_deal_id)
+            deal_title = (d.name if d else None)
+    elif room.kind == 'task' and room.related_task_id:
+        if task_titles is not None:
+            task_title = task_titles.get(room.related_task_id)
+        else:
+            from models.task import Task
+            t = Task.query.get(room.related_task_id)
+            task_title = (t.title if t else None)
+
     return {
         'id': room.id,
         'kind': room.kind,
         'name': room.name,
         'related_deal_id': room.related_deal_id,
         'related_task_id': room.related_task_id,
+        'deal_title': deal_title,
+        'task_title': task_title,
         'is_archived': bool(room.is_archived),
         'archived_at': _iso_utc(room.archived_at),
         'created_at': _iso_utc(room.created_at),
@@ -269,7 +297,30 @@ def list_rooms():
         return True
 
     rooms = [r for r in rooms if _visible(r)]
-    summaries = [_room_summary(r, uid) for r in rooms]
+
+    # Батч-подгрузка названий сделок/задач: без неё N+1 на каждом рендере
+    # списка. Для юзера с 500 задачами это раньше делало 500 SELECT по
+    # Task — здесь делаем 1.
+    deal_ids = {r.related_deal_id for r in rooms
+                if r.kind == 'deal' and r.related_deal_id}
+    task_ids = {r.related_task_id for r in rooms
+                if r.kind == 'task' and r.related_task_id}
+    deal_titles: dict[int, str] = {}
+    task_titles: dict[int, str] = {}
+    if deal_ids:
+        from models.deal import Deal
+        rows = db.session.execute(db.select(Deal.id, Deal.name).where(
+            Deal.id.in_(deal_ids)
+        )).all()
+        deal_titles = {r[0]: r[1] for r in rows}
+    if task_ids:
+        from models.task import Task
+        rows = db.session.execute(db.select(Task.id, Task.title).where(
+            Task.id.in_(task_ids)
+        )).all()
+        task_titles = {r[0]: r[1] for r in rows}
+
+    summaries = [_room_summary(r, uid, deal_titles, task_titles) for r in rooms]
     summaries.sort(
         key=lambda s: (s['last_message']['created_at'] if s['last_message']
                        else s['created_at']) or '',
