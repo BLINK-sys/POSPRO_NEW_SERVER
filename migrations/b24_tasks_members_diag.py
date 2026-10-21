@@ -1,9 +1,12 @@
 """
-Readonly diag: что реально возвращает B24 в accomplices/auditors для
-5 последних задач. Нужно чтобы понять почему migrate_tasks не создал
-ни одного TaskMember.
+Readonly diag: разные API для получения accomplices/auditors задачи.
+Пробуем на задаче, у которой гарантированно есть соисполнители.
+
+Берём b24_id из нашей таблицы b24_mirror по pospro_id task#2 (там я
+руками видел observers в UI) ИЛИ по аргументу --b24-id N.
 """
 
+import argparse
 import json
 import os
 import sys
@@ -11,40 +14,81 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import app
+from extensions import db
+from sqlalchemy import text
+
 from migrations.bitrix24._b24 import call
 
 
-SELECT = [
-    'id', 'title', 'responsibleId', 'createdBy',
-    'accomplices', 'auditors',
-]
-
-
 def main() -> int:
-    with app.app_context():
-        print('=== tasks.task.list — последние 5 с SELECT как в migrate ===',
-              flush=True)
-        r = call('tasks.task.list', {
-            'select[]': SELECT,
-            'order[ID]': 'DESC',
-            'start': 0,
-        })
-        tasks = (r.get('result') or {}).get('tasks') or []
-        for t in tasks[:5]:
-            print(json.dumps(t, ensure_ascii=False, indent=2), flush=True)
-            print('---', flush=True)
+    p = argparse.ArgumentParser()
+    p.add_argument('--b24-id', type=str, default=None)
+    p.add_argument('--pospro-id', type=int, default=None)
+    args = p.parse_args()
 
-        # Для первой задачи — отдельно tasks.task.get, он обычно отдаёт
-        # больше полей, в т.ч. accomplices/auditors гарантированно.
-        if tasks:
-            tid = tasks[0].get('id') or tasks[0].get('ID')
-            print(f'\n=== tasks.task.get(id={tid}) полный ===', flush=True)
+    with app.app_context():
+        b24_id = args.b24_id
+        if not b24_id:
+            # fallback — последняя задача с наибольшим id в mirror
+            pid = args.pospro_id
+            if pid is None:
+                row = db.session.execute(text("""
+                    SELECT b24_id FROM b24_mirror
+                     WHERE entity_type='task'
+                     ORDER BY CAST(b24_id AS INTEGER) DESC
+                     LIMIT 1
+                """)).fetchone()
+                b24_id = row.b24_id if row else None
+            else:
+                row = db.session.execute(text("""
+                    SELECT b24_id FROM b24_mirror
+                     WHERE entity_type='task' AND pospro_id=:pid
+                """), {'pid': pid}).fetchone()
+                b24_id = row.b24_id if row else None
+            if not b24_id:
+                print('не нашёл b24_id', flush=True)
+                return 1
+
+        print(f'=== b24_id={b24_id} ===', flush=True)
+
+        print('\n--- 1) tasks.task.get(taskId, [select]) UPPERCASE ---', flush=True)
+        try:
             r = call('tasks.task.get', {
-                'taskId': tid,
-                'select[]': SELECT,
+                'taskId': b24_id,
+                'select[]': ['ID', 'TITLE', 'RESPONSIBLE_ID',
+                             'ACCOMPLICES', 'AUDITORS'],
             })
-            print(json.dumps(r.get('result'), ensure_ascii=False, indent=2),
+            print(json.dumps(r.get('result'), ensure_ascii=False, indent=2)[:2500],
                   flush=True)
+        except Exception as e:
+            print(f'FAIL: {e}', flush=True)
+
+        print('\n--- 2) tasks.task.get(taskId) без select — всё по умолчанию ---',
+              flush=True)
+        try:
+            r = call('tasks.task.get', {'taskId': b24_id})
+            full = r.get('result') or {}
+            if isinstance(full, dict) and 'task' in full:
+                task = full['task']
+                # ключи, которые нам интересны
+                for k in sorted(task.keys()):
+                    if 'omplice' in k.lower() or 'uditor' in k.lower():
+                        print(f'  {k}: {task[k]!r}', flush=True)
+                print(f'  (всего ключей: {len(task)})', flush=True)
+                print(f'  все ключи: {sorted(task.keys())}', flush=True)
+            else:
+                print(json.dumps(full, ensure_ascii=False, indent=2)[:1500],
+                      flush=True)
+        except Exception as e:
+            print(f'FAIL: {e}', flush=True)
+
+        print('\n--- 3) task.item.getdata(ID) — legacy API ---', flush=True)
+        try:
+            r = call('task.item.getdata', {'ID': b24_id})
+            print(json.dumps(r.get('result'), ensure_ascii=False, indent=2)[:2500],
+                  flush=True)
+        except Exception as e:
+            print(f'FAIL: {e}', flush=True)
     return 0
 
 
