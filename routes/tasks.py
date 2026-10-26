@@ -1195,12 +1195,17 @@ def watch_task(tid):
 @jwt_required()
 def watch_task_batch(tid):
     """
-    Поставить задачу в «Отслеживаемые» нескольким пользователям сразу.
+    Массово изменить, кто отслеживает задачу.
+
+    Body: {"add": [uid, ...], "remove": [uid, ...]}  (одно из двух
+    допустимо пустым; старый формат {"user_ids": [...]} эквивалентен add).
 
     Доступно: owner / admin / system / can_see_all_tasks.
-    В список кандидатов пускаем только участников задачи (постановщик,
+    В list `add` допускаются только участники задачи (постановщик,
     исполнитель, соисполнители, наблюдатели) — чтобы «отслеживать» не
-    превратить в универсальный «назначить всем подряд».
+    превратить в универсальный «назначить всем подряд». Из `remove`
+    выбрасываем свои id у любых пользователей — там нет риска: убираем
+    только своё же.
     """
     err = _check_admin_or_system()
     if err:
@@ -1220,11 +1225,13 @@ def watch_task_batch(tid):
         return jsonify({'error': 'Задача не найдена'}), 404
 
     data = request.get_json() or {}
-    raw_ids = data.get('user_ids') or []
+    raw_add = data.get('add', data.get('user_ids')) or []
+    raw_remove = data.get('remove') or []
     try:
-        req_ids = {int(x) for x in raw_ids}
+        add_ids = {int(x) for x in raw_add}
+        remove_ids = {int(x) for x in raw_remove}
     except (TypeError, ValueError):
-        return jsonify({'error': 'user_ids должен быть массивом id'}), 400
+        return jsonify({'error': 'add/remove должны быть массивами id'}), 400
 
     # Участники задачи: постановщик + исполнитель + соисп. + наблюдатели.
     from models.task import TaskMember, TaskWatcher
@@ -1235,8 +1242,8 @@ def watch_task_batch(tid):
     if task.responsible_id:
         allowed.add(task.responsible_id)
 
-    to_add = req_ids & allowed
-    not_allowed = sorted(req_ids - allowed)
+    to_add = add_ids & allowed
+    not_allowed = sorted(add_ids - allowed)
 
     added = 0
     for uid in to_add:
@@ -1246,11 +1253,22 @@ def watch_task_batch(tid):
         if not exists:
             db.session.add(TaskWatcher(user_id=uid, task_id=tid))
             added += 1
-    if added:
+
+    removed = 0
+    if remove_ids:
+        q = TaskWatcher.query.filter(
+            TaskWatcher.task_id == tid,
+            TaskWatcher.user_id.in_(remove_ids),
+        )
+        removed = q.delete(synchronize_session=False)
+
+    if added or removed:
         db.session.commit()
+
     return jsonify({
         'success': True,
         'added': added,
+        'removed': removed,
         'skipped_not_allowed': not_allowed,
     }), 200
 
