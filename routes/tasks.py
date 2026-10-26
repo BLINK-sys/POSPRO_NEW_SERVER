@@ -1184,6 +1184,71 @@ def watch_task(tid):
     return jsonify({'success': True, 'is_watched': True}), 200
 
 
+@tasks_bp.route('/admin/tasks/<int:tid>/watch/batch', methods=['POST'],
+                strict_slashes=False)
+@jwt_required()
+def watch_task_batch(tid):
+    """
+    Поставить задачу в «Отслеживаемые» нескольким пользователям сразу.
+
+    Доступно: owner / admin / system / can_see_all_tasks.
+    В список кандидатов пускаем только участников задачи (постановщик,
+    исполнитель, соисполнители, наблюдатели) — чтобы «отслеживать» не
+    превратить в универсальный «назначить всем подряд».
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    role, user_id = _current_role_and_id()
+    if not user_id:
+        return jsonify({'error': 'Нет пользователя'}), 401
+
+    # Право — тот же can_see_all_tasks, что и для «видеть всё».
+    from services.perms import is_owner as _is_owner
+    from services.perms import can_see_all_tasks as _cs
+    if not (_is_owner(user_id) or role in ('admin', 'system') or _cs(user_id)):
+        return jsonify({'error': 'Нет прав'}), 403
+
+    task = _visible_tasks_query(role, user_id).filter(Task.id == tid).first()
+    if not task:
+        return jsonify({'error': 'Задача не найдена'}), 404
+
+    data = request.get_json() or {}
+    raw_ids = data.get('user_ids') or []
+    try:
+        req_ids = {int(x) for x in raw_ids}
+    except (TypeError, ValueError):
+        return jsonify({'error': 'user_ids должен быть массивом id'}), 400
+
+    # Участники задачи: постановщик + исполнитель + соисп. + наблюдатели.
+    from models.task import TaskMember, TaskWatcher
+    members = TaskMember.query.filter_by(task_id=tid).all()
+    allowed: set[int] = {m.user_id for m in members}
+    if task.creator_id:
+        allowed.add(task.creator_id)
+    if task.responsible_id:
+        allowed.add(task.responsible_id)
+
+    to_add = req_ids & allowed
+    not_allowed = sorted(req_ids - allowed)
+
+    added = 0
+    for uid in to_add:
+        exists = TaskWatcher.query.filter_by(
+            user_id=uid, task_id=tid,
+        ).first()
+        if not exists:
+            db.session.add(TaskWatcher(user_id=uid, task_id=tid))
+            added += 1
+    if added:
+        db.session.commit()
+    return jsonify({
+        'success': True,
+        'added': added,
+        'skipped_not_allowed': not_allowed,
+    }), 200
+
+
 @tasks_bp.route('/admin/tasks/<int:tid>/watch', methods=['DELETE'],
                 strict_slashes=False)
 @jwt_required()
