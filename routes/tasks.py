@@ -154,6 +154,12 @@ def _task_full_dict(task: Task, viewer_user_id: int | None = None) -> dict:
          'added_at': m.added_at.isoformat() if m.added_at else None}
         for m in members
     ]
+    # Кто сейчас отслеживает задачу — чтобы в модалке «Добавить в
+    # избранное» показать уже отмеченных и не дать поставить повторно.
+    from models.task import TaskWatcher
+    d['watcher_ids'] = [
+        w.user_id for w in TaskWatcher.query.filter_by(task_id=task.id).all()
+    ]
     checklist = (
         TaskChecklist.query.filter_by(task_id=task.id)
         .order_by(TaskChecklist.order, TaskChecklist.id).all()
