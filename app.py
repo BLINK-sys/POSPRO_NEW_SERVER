@@ -92,6 +92,14 @@ def create_app():
     db.init_app(app)
     jwt.init_app(app)
 
+    # SEO П.1: API-поддомен (pospro-new-server.onrender.com) не должен
+    # попадать в поисковую выдачу — там только JSON, не контент для
+    # пользователей. Отдаём X-Robots-Tag: noindex на все ответы.
+    @app.after_request
+    def _add_noindex(resp):
+        resp.headers.setdefault('X-Robots-Tag', 'noindex, nofollow')
+        return resp
+
     # 🔹 Категории, товары, характеристики
     app.register_blueprint(categories_bp, url_prefix="/categories")  # /categories/*
     app.register_blueprint(products_bp, url_prefix="/products")  # /products/*
