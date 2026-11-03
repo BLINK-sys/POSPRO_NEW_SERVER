@@ -70,6 +70,7 @@ from routes.product_auto_fill import product_auto_fill_bp
 from routes.integrations import integrations_bp
 from routes.collector import collector_bp
 from routes.header_settings import header_settings_bp
+from routes.maintenance import maintenance_bp
 from routes.section_cards import section_cards_bp
 from routes.static_pages import static_pages_bp
 from models.systemuser import SystemUser
@@ -170,6 +171,8 @@ def create_app():
     app.register_blueprint(entity_attachments_bp, url_prefix='/api')  # /api/admin/{deals,tasks}/<id>/attachments
     app.register_blueprint(search_page_bp, url_prefix='/api')  # /api/public/search-page, /api/admin/search-page/*
     app.register_blueprint(header_settings_bp, url_prefix='/api')  # /api/public/header, /api/admin/header/*
+    # Техническое обслуживание: /api/public/maintenance-status + /api/admin/maintenance/*
+    app.register_blueprint(maintenance_bp)
     app.register_blueprint(static_pages_bp, url_prefix='/api')     # /api/public/static-page/<slug>, /api/admin/static-page/<slug>
     app.register_blueprint(kp_logos_bp, url_prefix='/api')     # /api/kp-logos
 
