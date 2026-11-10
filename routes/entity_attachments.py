@@ -40,9 +40,16 @@ from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models.entity_attachment import EntityAttachment, ENTITY_TYPES
+from models.entity_attachment import (
+    EntityAttachment, EntityAttachmentVersion, ENTITY_TYPES,
+)
 from models.deal import Deal
 from models.task import Task
+from models.systemuser import SystemUser
+
+
+# Лимит версий на один attachment. Старше — удаляются (БД + файл).
+ATTACHMENT_VERSION_LIMIT = 30
 
 
 entity_attachments_bp = Blueprint('entity_attachments', __name__)
@@ -335,6 +342,17 @@ def delete_attachment(aid):
         except OSError as e:
             print(f'⚠️ delete_attachment: os.remove({disk_path}): {e}', flush=True)
 
+    # Файлы версий (entity_attachment_version.disk_path) — чистим вручную
+    # перед удалением записи attachment'а. Сами записи в БД уйдут
+    # каскадом (ON DELETE CASCADE на FK).
+    versions = EntityAttachmentVersion.query.filter_by(attachment_id=aid).all()
+    for v in versions:
+        if v.disk_path and os.path.exists(v.disk_path):
+            try:
+                os.remove(v.disk_path)
+            except OSError as e:
+                print(f'⚠️ delete_attachment: os.remove(version {v.disk_path}): {e}', flush=True)
+
     db.session.delete(a)
     db.session.commit()
     return jsonify({'success': True}), 200
@@ -432,6 +450,14 @@ def put_attachment_raw(aid):
         return jsonify({'error': 'Пустое тело запроса'}), 400
 
     os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+
+    # Перед тем как перезаписать файл — делаем снимок старого содержимого
+    # в entity_attachment_version (если файл реально существует и это не
+    # первое сохранение после создания). Так у юзера остаётся история
+    # правок, до ATTACHMENT_VERSION_LIMIT штук.
+    if os.path.exists(disk_path):
+        _save_version_snapshot(a, disk_path)
+
     # Пишем через временный .tmp и rename — чтобы читатели не поймали
     # полу-записанный файл.
     tmp = disk_path + '.tmp'
@@ -441,8 +467,139 @@ def put_attachment_raw(aid):
 
     a.file_size = len(data)
     a.uploaded_at = datetime.utcnow()
-    # uploaded_by тут не трогаем: автор — кто создал файл, а не кто
-    # последним сохранил; для «кто редактировал» добавим отдельное поле
-    # когда это реально понадобится.
+    db.session.commit()
+    return jsonify({'success': True, 'attachment': a.to_dict()}), 200
+
+
+# ============================================================================
+# Версии файла (история правок из встроенного редактора)
+# ============================================================================
+
+
+def _save_version_snapshot(a: EntityAttachment, current_disk_path: str) -> None:
+    """
+    Снимает текущий файл attachment'а в файл-версию и создаёт запись
+    в entity_attachment_version. Старые версии сверх лимита удаляются.
+    """
+    # Создаём запись — чтобы получить id для имени файла.
+    uid = _current_user_id()
+    ver = EntityAttachmentVersion(
+        attachment_id=a.id,
+        disk_path='',  # временно, сейчас заполним после flush'а
+        file_size=os.path.getsize(current_disk_path),
+        saved_by=uid,
+    )
+    db.session.add(ver)
+    db.session.flush()  # id
+    ver.disk_path = f'{current_disk_path}.v{ver.id}'
+    # Копируем содержимое старого файла в .v<id>.
+    try:
+        with open(current_disk_path, 'rb') as src, open(ver.disk_path, 'wb') as dst:
+            dst.write(src.read())
+    except Exception:
+        # Если файл версии не удалось записать — откатываем запись,
+        # не ломая основной save.
+        db.session.rollback()
+        return
+
+    # Чистим лишние версии: оставляем последние ATTACHMENT_VERSION_LIMIT.
+    old_versions = (
+        EntityAttachmentVersion.query
+        .filter_by(attachment_id=a.id)
+        .order_by(EntityAttachmentVersion.saved_at.desc())
+        .offset(ATTACHMENT_VERSION_LIMIT)
+        .all()
+    )
+    for v in old_versions:
+        try:
+            if v.disk_path and os.path.exists(v.disk_path):
+                os.remove(v.disk_path)
+        except OSError:
+            pass
+        db.session.delete(v)
+
+
+def _current_user_id() -> int | None:
+    try:
+        return int(get_jwt_identity()) if get_jwt_identity() else None
+    except (TypeError, ValueError):
+        return None
+
+
+@entity_attachments_bp.route('/admin/attachments/<int:aid>/versions', methods=['GET'])
+@jwt_required()
+def list_attachment_versions(aid):
+    """
+    Список версий attachment'а (новые сверху). Отдаём id, время, автора,
+    размер.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    a = EntityAttachment.query.get(aid)
+    if not a:
+        return jsonify({'error': 'Файл не найден'}), 404
+    err = _check_attachment_visible(a)
+    if err:
+        return err
+    versions = (
+        EntityAttachmentVersion.query
+        .filter_by(attachment_id=aid)
+        .order_by(EntityAttachmentVersion.saved_at.desc())
+        .all()
+    )
+    # Имена авторов — одним запросом.
+    uids = sorted({v.saved_by for v in versions if v.saved_by})
+    users = {u.id: u for u in SystemUser.query.filter(SystemUser.id.in_(uids)).all()} if uids else {}
+    out = []
+    for v in versions:
+        u = users.get(v.saved_by) if v.saved_by else None
+        name = (u.full_name or u.email) if u else None
+        out.append(v.to_dict(user_name=name))
+    return jsonify({'versions': out}), 200
+
+
+@entity_attachments_bp.route(
+    '/admin/attachments/<int:aid>/versions/<int:vid>/restore',
+    methods=['POST'],
+)
+@jwt_required()
+def restore_attachment_version(aid, vid):
+    """
+    Восстановить attachment из выбранной версии. Текущее содержимое
+    сначала бэкапится как новая версия (чтобы юзер мог откатить восстановление
+    тоже), затем файл версии копируется поверх основного.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    a = EntityAttachment.query.get(aid)
+    if not a:
+        return jsonify({'error': 'Файл не найден'}), 404
+    err = _check_attachment_visible(a)
+    if err:
+        return err
+    v = EntityAttachmentVersion.query.filter_by(id=vid, attachment_id=aid).first()
+    if not v:
+        return jsonify({'error': 'Версия не найдена'}), 404
+    if not v.disk_path or not os.path.exists(v.disk_path):
+        return jsonify({'error': 'Файл версии отсутствует на диске'}), 410
+    disk_path = _disk_path(a)
+    if not disk_path:
+        return jsonify({'error': 'Файл нельзя заменить (внешний URL)'}), 400
+
+    # Снимаем ТЕКУЩЕЕ содержимое в новую версию — чтобы restore был
+    # обратимым (можно отменить, выбрав предыдущую «current»).
+    if os.path.exists(disk_path):
+        _save_version_snapshot(a, disk_path)
+
+    # Копируем файл версии поверх основного (через .tmp + replace).
+    tmp = disk_path + '.tmp'
+    with open(v.disk_path, 'rb') as src, open(tmp, 'wb') as dst:
+        dst.write(src.read())
+    os.replace(tmp, disk_path)
+
+    a.file_size = os.path.getsize(disk_path)
+    a.uploaded_at = datetime.utcnow()
     db.session.commit()
     return jsonify({'success': True, 'attachment': a.to_dict()}), 200
