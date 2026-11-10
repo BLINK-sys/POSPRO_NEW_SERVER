@@ -67,7 +67,20 @@ def _fetch_all_groups() -> list[dict]:
 
 
 def main() -> int:
-    print('Fetching sonet_group.get via B24_WEBHOOK_PROJECTS …', flush=True)
+    # 0. Короткий ping — метод app.info работает с ЛЮБЫМ вебхуком вне
+    #    зависимости от scope. Если отвечает 401 INVALID_CREDENTIALS —
+    #    сам URL битый (не существует/не создан/перевыпущен), виноват
+    #    не scope. Это разводит две причины: «URL плохой» vs «scope нет».
+    print('Ping app.info …', flush=True)
+    try:
+        info = _call('app.info')
+        print(f'  OK: {info}', flush=True)
+    except Exception as e:
+        print(f'  FAIL: {e}', flush=True)
+        print('  → URL вебхука не работает. Нужно пересоздать его в Б24.', flush=True)
+        return 1
+
+    print('\nFetching sonet_group.get via B24_WEBHOOK_PROJECTS …', flush=True)
     try:
         groups = _fetch_all_groups()
     except Exception as e:
