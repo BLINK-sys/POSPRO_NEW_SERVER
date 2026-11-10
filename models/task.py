@@ -61,6 +61,20 @@ class Task(db.Model):
     # «Проект» в таблице задач: если задача связана со сделкой — берётся
     # имя сделки, иначе — имя проекта (см. UI-логику).
     project_id = db.Column(db.Integer, db.ForeignKey('project.id', ondelete='SET NULL'), nullable=True)
+    # Канбан проекта: текущая колонка (стадия) задачи внутри проекта.
+    # NULL = задача не размещена в канбане проекта (например проекта нет
+    # или колонка была удалена). При смене глобального status автомап
+    # пересчитывает: если в проекте найдётся колонка с совпадающим
+    # maps_to_status — задача едет туда, старая колонка кладётся в
+    # prev_project_stage_id для возможного «вернуться».
+    project_stage_id = db.Column(
+        db.Integer, db.ForeignKey('project_stage.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    prev_project_stage_id = db.Column(
+        db.Integer, db.ForeignKey('project_stage.id', ondelete='SET NULL'),
+        nullable=True,
+    )
 
     started_at = db.Column(db.DateTime, nullable=True)   # когда перевели в in_progress
     due_at = db.Column(db.DateTime, nullable=True)
@@ -96,6 +110,8 @@ class Task(db.Model):
             'deal_id': self.deal_id,
             'client_id': self.client_id,
             'project_id': self.project_id,
+            'project_stage_id': self.project_stage_id,
+            'prev_project_stage_id': self.prev_project_stage_id,
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'due_at': self.due_at.isoformat() if self.due_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,

@@ -177,6 +177,7 @@ def _task_full_dict(task: Task, viewer_user_id: int | None = None) -> dict:
     # решает как показывать (обычно оба чипа).
     d['deal_ref'] = None
     d['project_ref'] = None
+    d['project_stage_ref'] = None
     if task.deal_id:
         deal = Deal.query.get(task.deal_id)
         if deal:
@@ -186,6 +187,16 @@ def _task_full_dict(task: Task, viewer_user_id: int | None = None) -> dict:
         pr = Project.query.get(task.project_id)
         if pr:
             d['project_ref'] = {'id': pr.id, 'name': pr.name, 'color': pr.color}
+    if task.project_stage_id:
+        from models.project import ProjectStage
+        st = ProjectStage.query.get(task.project_stage_id)
+        if st:
+            d['project_stage_ref'] = {
+                'id': st.id,
+                'name': st.name,
+                'color': st.color,
+                'maps_to_status': st.maps_to_status,
+            }
     return d
 
 
@@ -415,11 +426,23 @@ def list_tasks():
         ).all()
         watched_ids = {r[0] for r in rows}
 
+    # Денормализуем project_stage_ref (колонка канбана) одной выборкой,
+    # чтобы в общем списке задач показать чип «В проекте X · Закупка».
+    stages_map: dict = {}
+    stage_ids = [t.project_stage_id for t in tasks if t.project_stage_id]
+    if stage_ids:
+        from models.project import ProjectStage
+        stages_map = {
+            s.id: s for s in
+            ProjectStage.query.filter(ProjectStage.id.in_(stage_ids)).all()
+        }
+
     out = []
     for t in tasks:
         row = t.to_dict()
         row['deal_ref'] = None
         row['project_ref'] = None
+        row['project_stage_ref'] = None
         row['is_watched'] = t.id in watched_ids
         if t.deal_id and t.deal_id in deals_map:
             deal = deals_map[t.deal_id]
@@ -427,6 +450,14 @@ def list_tasks():
         if t.project_id and t.project_id in projs_map:
             pr = projs_map[t.project_id]
             row['project_ref'] = {'id': pr.id, 'name': pr.name, 'color': pr.color}
+        if t.project_stage_id and t.project_stage_id in stages_map:
+            st = stages_map[t.project_stage_id]
+            row['project_stage_ref'] = {
+                'id': st.id,
+                'name': st.name,
+                'color': st.color,
+                'maps_to_status': st.maps_to_status,
+            }
         out.append(row)
 
     return jsonify({
@@ -693,6 +724,58 @@ def change_task_status(tid):
 
     from_status = t.status
     now = datetime.utcnow()
+
+    # Автомап статуса в колонку канбана проекта.
+    # Правила:
+    #  - Если задача в проекте и new_status=done + у проекта несколько
+    #    колонок done — блокируем (ambiguity, нужно явно выбрать в
+    #    канбане). 409 Conflict + список колонок.
+    #  - Если prev_project_stage_id существует и ЕЁ maps_to_status
+    #    совпадает с new_status — возвращаем задачу туда (возврат из
+    #    автомапа, типичный кейс «нажал Отменить завершение»).
+    #  - Иначе если текущая колонка уже подходит по статусу — не трогаем.
+    #  - Иначе — ставим первую колонку с maps_to_status == new_status.
+    #  - Если ни одной нет — обнуляем project_stage_id (в канбане
+    #    «без колонки»).
+    if t.project_id:
+        from models.project import ProjectStage
+        matching = (
+            ProjectStage.query.filter_by(
+                project_id=t.project_id, maps_to_status=new_status,
+            )
+            .order_by(ProjectStage.sort_order, ProjectStage.id).all()
+        )
+        if new_status == 'done' and len(matching) > 1:
+            return jsonify({
+                'error': 'Несколько «конечных» колонок в проекте — выбери явно',
+                'code': 'ambiguous_done_stage',
+                'project_id': t.project_id,
+                'stages': [s.to_dict() for s in matching],
+            }), 409
+
+        old_stage_id = t.project_stage_id
+        prev = (ProjectStage.query.get(t.prev_project_stage_id)
+                if t.prev_project_stage_id else None)
+
+        new_stage: ProjectStage | None = None
+        if prev and prev.project_id == t.project_id and prev.maps_to_status == new_status:
+            new_stage = prev
+        elif old_stage_id:
+            cur = ProjectStage.query.get(old_stage_id)
+            if cur and cur.project_id == t.project_id and cur.maps_to_status == new_status:
+                new_stage = cur
+        if new_stage is None and matching:
+            new_stage = matching[0]
+
+        if new_stage is not None:
+            t.prev_project_stage_id = (
+                old_stage_id if old_stage_id and old_stage_id != new_stage.id
+                else t.prev_project_stage_id
+            )
+            t.project_stage_id = new_stage.id
+        else:
+            t.prev_project_stage_id = old_stage_id
+            t.project_stage_id = None
 
     if new_status == 'in_progress' and t.started_at is None:
         t.started_at = now

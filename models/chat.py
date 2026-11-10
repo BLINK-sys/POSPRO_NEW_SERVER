@@ -35,6 +35,11 @@ class ChatRoom(db.Model):
     name = db.Column(db.String(255), nullable=True)
     related_deal_id = db.Column(db.Integer, db.ForeignKey('deal.id', ondelete='CASCADE'), nullable=True)
     related_task_id = db.Column(db.Integer, db.ForeignKey('task.id', ondelete='CASCADE'), nullable=True)
+    # Для kind='project' — чат проекта, появился вместе с модулем «Проекты».
+    related_project_id = db.Column(
+        db.Integer, db.ForeignKey('project.id', ondelete='CASCADE'),
+        nullable=True,
+    )
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     # Архивные чаты — комната, чья сделка/задача уже удалена, но
