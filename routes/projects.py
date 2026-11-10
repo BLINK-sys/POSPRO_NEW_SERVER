@@ -279,9 +279,10 @@ def _build_members_payload(project: Project) -> list[dict]:
     есть задачи в проекте. Для каждого — его настройка can_see_all_tasks
     и булев флаг `is_owner` (= владелец проекта).
 
-    Из списка исключаются глобальные is_owner-ы системы: им настройка
-    видимости не нужна (они и так видят всё), а в UI они только
-    захламляли бы таблицу участников и фильтр «Менеджер» на канбане.
+    Из списка исключаются те, у кого полный доступ ко всем проектам:
+    is_owner и can_manage_projects. Им настройка видимости не нужна
+    (они и так видят всё), а в UI они только захламляли бы таблицу
+    участников и фильтр «Менеджер» на канбане.
     """
     ids = set(_project_member_user_ids(project.id))
     if project.owner_id:
@@ -292,8 +293,10 @@ def _build_members_payload(project: Project) -> list[dict]:
         u.id: u for u in
         SystemUser.query.filter(SystemUser.id.in_(ids)).all()
     }
-    # Выкидываем глобальных владельцев системы.
-    ids = {uid for uid in ids if users.get(uid) and not users[uid].is_owner}
+    # Выкидываем тех, кому настройка видимости бесполезна.
+    def _fully_visible(u: SystemUser) -> bool:
+        return bool(u.is_owner or getattr(u, 'can_manage_projects', False))
+    ids = {uid for uid in ids if users.get(uid) and not _fully_visible(users[uid])}
     if not ids:
         return []
     settings_rows = {
