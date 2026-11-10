@@ -275,13 +275,25 @@ def _serialize_project_full(p: Project) -> dict:
 
 def _build_members_payload(project: Project) -> list[dict]:
     """
-    Собирает список «участников» проекта: owner + все, у кого есть задачи
-    в проекте. Для каждого — его настройка can_see_all_tasks и булев флаг
-    `is_owner` (для галочки/иконки в UI).
+    Собирает список «участников» проекта: owner проекта + все, у кого
+    есть задачи в проекте. Для каждого — его настройка can_see_all_tasks
+    и булев флаг `is_owner` (= владелец проекта).
+
+    Из списка исключаются глобальные is_owner-ы системы: им настройка
+    видимости не нужна (они и так видят всё), а в UI они только
+    захламляли бы таблицу участников и фильтр «Менеджер» на канбане.
     """
     ids = set(_project_member_user_ids(project.id))
     if project.owner_id:
         ids.add(project.owner_id)
+    if not ids:
+        return []
+    users = {
+        u.id: u for u in
+        SystemUser.query.filter(SystemUser.id.in_(ids)).all()
+    }
+    # Выкидываем глобальных владельцев системы.
+    ids = {uid for uid in ids if users.get(uid) and not users[uid].is_owner}
     if not ids:
         return []
     settings_rows = {
@@ -291,15 +303,9 @@ def _build_members_payload(project: Project) -> list[dict]:
             ProjectMemberSettings.user_id.in_(ids),
         ).all()
     }
-    users = {
-        u.id: u for u in
-        SystemUser.query.filter(SystemUser.id.in_(ids)).all()
-    }
     out: list[dict] = []
     for uid in sorted(ids):
-        u = users.get(uid)
-        if not u:
-            continue
+        u = users[uid]
         s = settings_rows.get(uid)
         out.append({
             'user_id': uid,
