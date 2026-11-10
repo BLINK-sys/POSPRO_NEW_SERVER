@@ -366,3 +366,83 @@ def download_attachment(aid):
         download_name=a.file_name or 'file',
         mimetype=a.mime_type or 'application/octet-stream',
     )
+
+
+# ============================================================================
+# Edit-in-place: /raw endpoints для встроенного редактора документов
+# ============================================================================
+
+@entity_attachments_bp.route('/admin/attachments/<int:aid>/raw', methods=['GET'])
+@jwt_required()
+def get_attachment_raw(aid):
+    """
+    Отдать файл inline (не attachment) — чтобы фронтовый редактор
+    (Univer / etc) мог загрузить его как ArrayBuffer и инициализироваться.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    a = EntityAttachment.query.get(aid)
+    if not a:
+        return jsonify({'error': 'Файл не найден'}), 404
+    err = _check_attachment_visible(a)
+    if err:
+        return err
+    disk_path = _disk_path(a)
+    if not disk_path or not os.path.exists(disk_path):
+        return jsonify({'error': 'Файл отсутствует на диске'}), 410
+
+    return send_file(
+        disk_path,
+        as_attachment=False,
+        download_name=a.file_name or 'file',
+        mimetype=a.mime_type or 'application/octet-stream',
+    )
+
+
+@entity_attachments_bp.route('/admin/attachments/<int:aid>/raw', methods=['PUT'])
+@jwt_required()
+def put_attachment_raw(aid):
+    """
+    Перезаписать содержимое файла (тот же путь на диске, то же имя, тот же
+    mime). Используется встроенным редактором документов при «Сохранить».
+
+    Body: сырое содержимое файла (например xlsx-blob), Content-Type можно
+    прислать таким же как mime у attachment — он не проверяется строго.
+
+    Безопасность: можно только тому же редактору что вызывает GET /raw
+    (та же проверка _check_attachment_visible). Расширение/mime менять
+    нельзя — это бы сломало логику типа файла в UI.
+    """
+    err = _check_admin_or_system()
+    if err:
+        return err
+    a = EntityAttachment.query.get(aid)
+    if not a:
+        return jsonify({'error': 'Файл не найден'}), 404
+    err = _check_attachment_visible(a)
+    if err:
+        return err
+    disk_path = _disk_path(a)
+    if not disk_path:
+        return jsonify({'error': 'Файл нельзя заменить (внешний URL)'}), 400
+
+    data = request.get_data()
+    if not data:
+        return jsonify({'error': 'Пустое тело запроса'}), 400
+
+    os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+    # Пишем через временный .tmp и rename — чтобы читатели не поймали
+    # полу-записанный файл.
+    tmp = disk_path + '.tmp'
+    with open(tmp, 'wb') as f:
+        f.write(data)
+    os.replace(tmp, disk_path)
+
+    a.file_size = len(data)
+    a.uploaded_at = datetime.utcnow()
+    # uploaded_by тут не трогаем: автор — кто создал файл, а не кто
+    # последним сохранил; для «кто редактировал» добавим отдельное поле
+    # когда это реально понадобится.
+    db.session.commit()
+    return jsonify({'success': True, 'attachment': a.to_dict()}), 200

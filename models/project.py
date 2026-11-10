@@ -115,14 +115,13 @@ class ProjectStage(db.Model):
 
 class ProjectMember(db.Model):
     """
-    Участник проекта. Роли:
-    - owner    — может всё внутри проекта + настройки (один на проект
-                 обычно, но на уровне БД не ограничено — удобно если
-                 нужно передать владение).
-    - member   — работает с задачами, видит канбан.
-    - observer — только чтение.
-    Доступ ко всему разделу `/admin/projects` даёт глобальный флаг
-    `can_manage_projects`.
+    LEGACY. Ручное членство в проекте, оставлено только ради обратной
+    совместимости миграции add_projects_kanban.sql (таблица в БД есть,
+    выпиливать её отдельной миграцией). Код больше не использует.
+
+    «Участник проекта» теперь computed — любой юзер, у которого в проекте
+    есть задача (как responsible / creator / co-worker / observer).
+    Настройка видимости — `ProjectMemberSettings`.
     """
     __tablename__ = 'project_member'
     __table_args__ = (
@@ -154,4 +153,46 @@ class ProjectMember(db.Model):
             'user_id': self.user_id,
             'role': self.role,
             'added_at': self.added_at.isoformat() if self.added_at else None,
+        }
+
+
+class ProjectMemberSettings(db.Model):
+    """
+    Per-user настройка видимости задач в конкретном проекте.
+    can_see_all_tasks:
+      - False (дефолт): юзер видит в канбане/списке только СВОИ задачи
+        (где он responsible или co-worker). Постановщик/наблюдатель — тоже
+        считаются «своими» для видимости, но в «только свои» не попадают
+        (чтобы не захламлять список задачами, которые ты поставил другим).
+      - True: видит все задачи проекта + фильтр «Менеджер» на канбане.
+
+    Запись создаётся лениво при PUT — отсутствие строки = False.
+    owner проекта / is_owner / can_manage_projects ВСЕГДА видят всё,
+    эта настройка на них не распространяется.
+    """
+    __tablename__ = 'project_member_settings'
+
+    project_id = db.Column(
+        db.Integer, db.ForeignKey('project.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    user_id = db.Column(
+        db.Integer, db.ForeignKey('system_users.id', ondelete='CASCADE'),
+        primary_key=True,
+    )
+    can_see_all_tasks = db.Column(
+        db.Boolean, nullable=False, default=False,
+        server_default=db.text('false'),
+    )
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False, server_default=db.text('NOW()'),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            'project_id': self.project_id,
+            'user_id': self.user_id,
+            'can_see_all_tasks': bool(self.can_see_all_tasks),
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

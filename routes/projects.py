@@ -22,19 +22,29 @@ Endpoints (под `/api/admin`):
   DELETE /projects/<pid>/stages/<sid>        удалить (задачи этой колонки → NULL)
   POST   /projects/<pid>/stages/reorder      {order: [sid, sid, ...]}
 
-  GET    /projects/<pid>/members             участники с ролями
-  POST   /projects/<pid>/members             {user_id, role}
-  PUT    /projects/<pid>/members/<mid>       {role}
-  DELETE /projects/<pid>/members/<mid>
+  GET    /projects/<pid>/members             computed-список юзеров
+                                             (у кого есть задачи
+                                             в проекте) + owner, с их
+                                             настройкой can_see_all_tasks.
+                                             Видят только can_manage.
+  PUT    /projects/<pid>/members/<uid>       upsert настройки
+                                             {can_see_all_tasks: bool}
 
-  GET    /projects/<pid>/tasks               все задачи проекта (для канбана/списка)
+  GET    /projects/<pid>/tasks               задачи проекта.
+                                             ?responsible_ids=1,2,3 —
+                                             фильтр для юзеров с
+                                             can_see_all_tasks/manage.
+                                             «Только свои» фильтр
+                                             игнорит (видит только
+                                             responsible / co-worker).
   POST   /projects/<pid>/tasks/<tid>/move    {stage_id} — DnD-перенос.
                                              Автомап status по stage.maps_to_status.
                                              Сохраняет prev_project_stage_id.
 
-Auth: admin/system обязательно. Настройка (создание/правки стадий,
-участников, статуса, владельца) — только can_manage_projects или owner
-проекта.
+Auth: admin/system обязательно. Настройка (стадии/статус/владелец/
+настройки участников) — только can_manage_projects или owner проекта.
+Просмотр проекта — + любой, у кого в проекте есть задача (как
+responsible / creator / co-worker / observer).
 """
 
 from __future__ import annotations
@@ -47,9 +57,10 @@ from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 
 from extensions import db
 from models.project import (
-    Project, ProjectMember, ProjectStage, PROJECT_STAGE_STATUS_VALUES,
+    Project, ProjectMember, ProjectMemberSettings, ProjectStage,
+    PROJECT_STAGE_STATUS_VALUES,
 )
-from models.task import Task
+from models.task import Task, TaskMember
 from models.systemuser import SystemUser
 
 
@@ -123,8 +134,12 @@ def _check_can_manage_projects_global():
 def _check_project_access(project: Project) -> tuple[bool, str]:
     """
     Может ли юзер ХОТЯ БЫ видеть проект (без права настраивать).
-    True если он owner/can_manage_projects/project.owner/один из участников.
-    Возвращает (allowed, scope) где scope = 'manage' | 'view'.
+    Правила (с 2026-11-10):
+      - is_owner / can_manage_projects / project.owner_id → scope='manage'.
+      - любой, у кого в проекте есть задача как creator / responsible /
+        co-worker / observer → scope='view'. Запись в project_member
+        больше не нужна — членство вычисляется из task'ов.
+      - иначе — нет доступа.
     """
     from services.perms import is_owner as _is_owner
     from services.perms import can_manage_projects as _cmp
@@ -135,10 +150,57 @@ def _check_project_access(project: Project) -> tuple[bool, str]:
         return True, 'manage'
     if project.owner_id == uid:
         return True, 'manage'
-    m = ProjectMember.query.filter_by(project_id=project.id, user_id=uid).first()
-    if m:
+    # Есть ли у меня хоть одна задача в этом проекте, где я как-то фигурирую.
+    has_task = db.session.query(
+        db.session.query(Task.id).filter(
+            Task.project_id == project.id,
+            db.or_(Task.creator_id == uid, Task.responsible_id == uid),
+        ).exists()
+        | db.session.query(TaskMember.task_id).join(
+            Task, Task.id == TaskMember.task_id,
+        ).filter(
+            Task.project_id == project.id,
+            TaskMember.user_id == uid,
+        ).exists()
+    ).scalar()
+    if has_task:
         return True, 'view'
     return False, 'none'
+
+
+def _can_see_all_tasks(project: Project, uid: int, scope: str) -> bool:
+    """
+    Видит ли юзер в проекте все задачи. True если:
+      - scope='manage' (owner / can_manage_projects / project.owner);
+      - или в ProjectMemberSettings стоит can_see_all_tasks=True.
+    """
+    if scope == 'manage':
+        return True
+    s = ProjectMemberSettings.query.filter_by(
+        project_id=project.id, user_id=uid,
+    ).first()
+    return bool(s and s.can_see_all_tasks)
+
+
+def _project_member_user_ids(project_id: int) -> list[int]:
+    """
+    Computed-список user_id, участвующих в задачах проекта
+    (creator / responsible / task_member). Owner проекта добавляется
+    отдельно вызывающей стороной. Сортировка — по user_id ASC.
+    """
+    q_tasks = db.session.query(Task.creator_id).filter(
+        Task.project_id == project_id, Task.creator_id.isnot(None),
+    ).union(
+        db.session.query(Task.responsible_id).filter(
+            Task.project_id == project_id, Task.responsible_id.isnot(None),
+        )
+    ).union(
+        db.session.query(TaskMember.user_id).join(
+            Task, Task.id == TaskMember.task_id,
+        ).filter(Task.project_id == project_id)
+    )
+    ids = [row[0] for row in q_tasks.all() if row[0] is not None]
+    return sorted(set(ids))
 
 
 def _parse_payload(data: dict, *, partial: bool = False):
@@ -198,8 +260,7 @@ def _default_stage_map_for(position: int, total: int) -> str:
 
 def _serialize_project_full(p: Project) -> dict:
     out = p.to_dict()
-    out['members'] = [m.to_dict() for m in
-                      ProjectMember.query.filter_by(project_id=p.id).all()]
+    out['members'] = _build_members_payload(p)
     out['stages'] = [
         s.to_dict() for s in
         ProjectStage.query.filter_by(project_id=p.id)
@@ -209,6 +270,44 @@ def _serialize_project_full(p: Project) -> dict:
         db.session.query(db.func.count(Task.id))
         .filter(Task.project_id == p.id).scalar() or 0
     )
+    return out
+
+
+def _build_members_payload(project: Project) -> list[dict]:
+    """
+    Собирает список «участников» проекта: owner + все, у кого есть задачи
+    в проекте. Для каждого — его настройка can_see_all_tasks и булев флаг
+    `is_owner` (для галочки/иконки в UI).
+    """
+    ids = set(_project_member_user_ids(project.id))
+    if project.owner_id:
+        ids.add(project.owner_id)
+    if not ids:
+        return []
+    settings_rows = {
+        s.user_id: s for s in
+        ProjectMemberSettings.query.filter(
+            ProjectMemberSettings.project_id == project.id,
+            ProjectMemberSettings.user_id.in_(ids),
+        ).all()
+    }
+    users = {
+        u.id: u for u in
+        SystemUser.query.filter(SystemUser.id.in_(ids)).all()
+    }
+    out: list[dict] = []
+    for uid in sorted(ids):
+        u = users.get(uid)
+        if not u:
+            continue
+        s = settings_rows.get(uid)
+        out.append({
+            'user_id': uid,
+            'is_owner': uid == project.owner_id,
+            'can_see_all_tasks': bool(s.can_see_all_tasks) if s else False,
+            'full_name': u.full_name or u.email or f'#{uid}',
+            'email': u.email,
+        })
     return out
 
 
@@ -556,22 +655,30 @@ def reorder_stages(pid):
 @projects_bp.route('/admin/projects/<int:pid>/members', methods=['GET'])
 @jwt_required()
 def list_members(pid):
+    """
+    Computed-список участников: все, у кого есть задачи в проекте
+    (responsible/creator/co-worker/observer) + owner проекта. У каждого —
+    текущая настройка can_see_all_tasks из ProjectMemberSettings.
+    Виден только тем, кто может настраивать проект (owner / can_manage).
+    """
     err = _check_admin_or_system()
     if err:
         return err
     p = Project.query.get(pid)
     if not p:
         return jsonify({'error': 'Проект не найден'}), 404
-    allowed, _ = _check_project_access(p)
-    if not allowed:
-        return jsonify({'error': 'Нет доступа'}), 403
-    members = ProjectMember.query.filter_by(project_id=pid).all()
-    return jsonify({'members': [m.to_dict() for m in members]}), 200
+    if not _can_manage_project(p):
+        return jsonify({'error': 'Нет прав на просмотр настроек участников'}), 403
+    return jsonify({'members': _build_members_payload(p)}), 200
 
 
-@projects_bp.route('/admin/projects/<int:pid>/members', methods=['POST'])
+@projects_bp.route('/admin/projects/<int:pid>/members/<int:uid>', methods=['PUT'])
 @jwt_required()
-def add_member(pid):
+def update_member_settings(pid, uid):
+    """
+    Upsert настройки видимости для пары (проект, юзер).
+    Body: {"can_see_all_tasks": bool}
+    """
     err = _check_admin_or_system()
     if err:
         return err
@@ -580,72 +687,24 @@ def add_member(pid):
         return jsonify({'error': 'Проект не найден'}), 404
     if not _can_manage_project(p):
         return jsonify({'error': 'Нет прав'}), 403
-    data = request.get_json() or {}
-    try:
-        uid = int(data.get('user_id'))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'user_id обязателен'}), 400
-    role = (data.get('role') or 'member').strip()
-    if role not in ('owner', 'member', 'observer'):
-        return jsonify({'error': 'role должен быть owner/member/observer'}), 400
-
     if not SystemUser.query.get(uid):
         return jsonify({'error': 'Пользователь не найден'}), 404
 
-    existing = ProjectMember.query.filter_by(
+    data = request.get_json() or {}
+    val = bool(data.get('can_see_all_tasks'))
+
+    row = ProjectMemberSettings.query.filter_by(
         project_id=pid, user_id=uid,
     ).first()
-    if existing:
-        existing.role = role
-        db.session.commit()
-        return jsonify({'member': existing.to_dict()}), 200
-
-    m = ProjectMember(project_id=pid, user_id=uid, role=role)
-    db.session.add(m)
+    if row is None:
+        row = ProjectMemberSettings(
+            project_id=pid, user_id=uid, can_see_all_tasks=val,
+        )
+        db.session.add(row)
+    else:
+        row.can_see_all_tasks = val
     db.session.commit()
-    return jsonify({'member': m.to_dict()}), 201
-
-
-@projects_bp.route('/admin/projects/<int:pid>/members/<int:mid>', methods=['PUT'])
-@jwt_required()
-def update_member(pid, mid):
-    err = _check_admin_or_system()
-    if err:
-        return err
-    p = Project.query.get(pid)
-    if not p:
-        return jsonify({'error': 'Проект не найден'}), 404
-    if not _can_manage_project(p):
-        return jsonify({'error': 'Нет прав'}), 403
-    m = ProjectMember.query.filter_by(id=mid, project_id=pid).first()
-    if not m:
-        return jsonify({'error': 'Участник не найден'}), 404
-    data = request.get_json() or {}
-    role = (data.get('role') or '').strip()
-    if role not in ('owner', 'member', 'observer'):
-        return jsonify({'error': 'role должен быть owner/member/observer'}), 400
-    m.role = role
-    db.session.commit()
-    return jsonify({'member': m.to_dict()}), 200
-
-
-@projects_bp.route('/admin/projects/<int:pid>/members/<int:mid>', methods=['DELETE'])
-@jwt_required()
-def remove_member(pid, mid):
-    err = _check_admin_or_system()
-    if err:
-        return err
-    p = Project.query.get(pid)
-    if not p:
-        return jsonify({'error': 'Проект не найден'}), 404
-    if not _can_manage_project(p):
-        return jsonify({'error': 'Нет прав'}), 403
-    m = ProjectMember.query.filter_by(id=mid, project_id=pid).first()
-    if not m:
-        return jsonify({'error': 'Участник не найден'}), 404
-    db.session.delete(m)
-    db.session.commit()
-    return jsonify({'success': True}), 200
+    return jsonify({'member': row.to_dict()}), 200
 
 
 # ---------------------------------------------------------------------------
@@ -655,19 +714,54 @@ def remove_member(pid, mid):
 @projects_bp.route('/admin/projects/<int:pid>/tasks', methods=['GET'])
 @jwt_required()
 def project_tasks(pid):
+    """
+    Query:
+      ?responsible_ids=1,2,3  — фильтр по responsible (действует для
+                                юзеров с can_see_all_tasks=True и для
+                                can_manage). Для обычных «только свои»
+                                фильтр игнорируется — они всегда видят
+                                только своё.
+    """
     err = _check_admin_or_system()
     if err:
         return err
     p = Project.query.get(pid)
     if not p:
         return jsonify({'error': 'Проект не найден'}), 404
-    allowed, _ = _check_project_access(p)
+    allowed, scope = _check_project_access(p)
     if not allowed:
         return jsonify({'error': 'Нет доступа'}), 403
-    tasks = (
-        Task.query.filter_by(project_id=pid)
-        .order_by(Task.created_at.desc()).all()
-    )
+
+    uid = _current_user_id()
+    see_all = _can_see_all_tasks(p, uid, scope)
+
+    q = Task.query.filter_by(project_id=pid)
+    if not see_all:
+        # «Только свои»: responsible = me или co-worker в TaskMember.
+        # Постановщика/наблюдателя не включаем — иначе список захламится
+        # задачами, которые юзер поставил другим.
+        own_subq = db.session.query(TaskMember.task_id).filter(
+            TaskMember.user_id == uid, TaskMember.role == 'co-worker',
+        )
+        q = q.filter(
+            db.or_(Task.responsible_id == uid, Task.id.in_(own_subq))
+        )
+    else:
+        raw = (request.args.get('responsible_ids') or '').strip()
+        if raw:
+            ids: list[int] = []
+            for piece in raw.split(','):
+                piece = piece.strip()
+                if not piece:
+                    continue
+                try:
+                    ids.append(int(piece))
+                except ValueError:
+                    continue
+            if ids:
+                q = q.filter(Task.responsible_id.in_(ids))
+
+    tasks = q.order_by(Task.created_at.desc()).all()
     return jsonify({'tasks': [t.to_dict() for t in tasks]}), 200
 
 

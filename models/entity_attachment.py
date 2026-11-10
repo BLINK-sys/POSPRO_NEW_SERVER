@@ -12,7 +12,7 @@ from datetime import datetime
 from extensions import db
 
 
-ENTITY_TYPES = ('deal', 'task')
+ENTITY_TYPES = ('deal', 'task', 'project')
 
 
 class EntityAttachment(db.Model):
