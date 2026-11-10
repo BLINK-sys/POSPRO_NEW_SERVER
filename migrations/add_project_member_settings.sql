@@ -6,7 +6,7 @@
 --
 -- Эта таблица хранит ТОЛЬКО настройку отображения для пары (проект,
 -- юзер): видит ли он все задачи проекта или только свои. Запись
--- создаётся лениво при PUT; отсутствие записи = default (false).
+-- создаётся лениво при PUT (отсутствие записи = default false).
 
 CREATE TABLE IF NOT EXISTS project_member_settings (
     project_id          INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,

@@ -22,10 +22,24 @@ SQL_PATH = os.path.join(os.path.dirname(__file__), 'add_project_member_settings.
 
 
 def _split_statements(sql: str):
+    """
+    Наивный splitter по ';' — осторожно с ';' в комментариях. Чтобы
+    не падать «can't execute an empty query», отфильтровываем куски,
+    в которых все непустые строки — комментарии (`--`).
+    """
     for stmt in sql.split(';'):
         s = stmt.strip()
-        if s:
-            yield s
+        if not s:
+            continue
+        # все непустые строки = комментарии → это pure-comment chunk,
+        # который psycopg2 не умеет выполнять. Пропускаем.
+        non_comment = [
+            ln for ln in s.splitlines()
+            if ln.strip() and not ln.strip().startswith('--')
+        ]
+        if not non_comment:
+            continue
+        yield s
 
 
 def apply():
