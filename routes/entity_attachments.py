@@ -588,12 +588,11 @@ def restore_attachment_version(aid, vid):
     if not disk_path:
         return jsonify({'error': 'Файл нельзя заменить (внешний URL)'}), 400
 
-    # Снимаем ТЕКУЩЕЕ содержимое в новую версию — чтобы restore был
-    # обратимым (можно отменить, выбрав предыдущую «current»).
-    if os.path.exists(disk_path):
-        _save_version_snapshot(a, disk_path)
-
     # Копируем файл версии поверх основного (через .tmp + replace).
+    # Текущее содержимое в новую версию НЕ пишем: это раздувало список
+    # версий лишними записями при каждом restore. Если нужно откатить
+    # restore — выбирайте ту версию, которая была до него (она остаётся
+    # в истории, т.к. restore читает файл версии, а не удаляет его).
     tmp = disk_path + '.tmp'
     with open(v.disk_path, 'rb') as src, open(tmp, 'wb') as dst:
         dst.write(src.read())
