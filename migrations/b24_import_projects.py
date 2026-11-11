@@ -110,15 +110,18 @@ def _fetch_group_users(group_id: int) -> list[dict]:
 
 
 def _fetch_group_task_ids(group_id: int) -> list[int]:
-    """tasks.task.list?filter[GROUP_ID]=<gid> — все id задач группы.
-       Пагинируем через start, select только id для скорости."""
+    """tasks.task.list с filter={GROUP_ID: <gid>} — все id задач группы.
+       Пагинируем через start. ВАЖНО: передавать filter ИМЕННО объектом
+       (`{'filter': {...}}`), не строковым ключом `filter[...]` —
+       Bitrix по-разному парсит эти формы в REST, и при строковом ключе
+       в JSON-режиме фильтр просто игнорируется."""
     ids: list[int] = []
     start = 0
     wm = _main_webhook()
     while True:
         out = _call(wm, 'tasks.task.list', {
-            'filter[GROUP_ID]': group_id,
-            'select[]': ['id'],
+            'filter': {'GROUP_ID': group_id},
+            'select': ['ID'],
             'start': start,
         })
         result = out.get('result') or {}
