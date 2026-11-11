@@ -109,6 +109,36 @@ def _fetch_group_users(group_id: int) -> list[dict]:
     return res if isinstance(res, list) else []
 
 
+def _fetch_group_task_ids(group_id: int) -> list[int]:
+    """tasks.task.list?filter[GROUP_ID]=<gid> — все id задач группы.
+       Пагинируем через start, select только id для скорости."""
+    ids: list[int] = []
+    start = 0
+    wm = _main_webhook()
+    while True:
+        out = _call(wm, 'tasks.task.list', {
+            'filter[GROUP_ID]': group_id,
+            'select[]': ['id'],
+            'start': start,
+        })
+        result = out.get('result') or {}
+        tasks = result.get('tasks') if isinstance(result, dict) else []
+        if not tasks:
+            break
+        for t in tasks:
+            try:
+                ids.append(int(t.get('id') or t.get('ID')))
+            except (TypeError, ValueError):
+                continue
+        nxt = out.get('next')
+        if nxt is None:
+            break
+        start = int(nxt)
+        if start > 200_000:
+            break
+    return ids
+
+
 def _fetch_group_stages(group_id: int) -> list[dict]:
     """task.stages.get через основной вебхук (у него scope task).
        isAdmin=Y — чтобы видеть все стадии, даже если юзер не админ группы."""
@@ -243,16 +273,20 @@ def plan_for_group(
             'can_see_all_tasks': can_see_all,
         })
 
-    # Задачи — считаем количество тех, у кого в b24_data groupId этой группы
-    # (JSONB → text -> сравнение; поддерживаем оба ключа — 'groupId' и 'GROUP_ID').
-    task_count = db.session.execute(
-        db.text("""
-            SELECT COUNT(*) FROM task
-            WHERE (b24_data->>'groupId')::int = :gid
-               OR (b24_data->>'GROUP_ID')::int = :gid
-        """),
-        {'gid': gid},
-    ).scalar() or 0
+    # Задачи — на нашей стороне в `task` groupId не сохранён. Тянем список
+    # b24_id задач группы из B24 и ищем их в b24_mirror(entity_type='task').
+    b24_task_ids = _fetch_group_task_ids(gid)
+    task_ids = []
+    if b24_task_ids:
+        rows = db.session.execute(
+            db.text("""
+                SELECT pospro_id FROM b24_mirror
+                 WHERE entity_type = 'task' AND b24_id = ANY(:ids)
+            """),
+            {'ids': [str(x) for x in b24_task_ids]},
+        ).fetchall()
+        task_ids = [r[0] for r in rows]
+    task_count = len(task_ids)
 
     return {
         'b24_group_id': gid,
@@ -267,7 +301,9 @@ def plan_for_group(
         'existing_project_name': existing_project.name if existing_project else None,
         'stages': stages_plan,
         'members': members_plan,
+        'task_ids': task_ids,
         'task_count': task_count,
+        'b24_task_count': len(b24_task_ids),
     }
 
 
@@ -312,7 +348,11 @@ def print_dry_run(plan: dict) -> None:
         print(f"    [{m['role']}] B24#{m['b24_user_id']:<6} {status}{flag}", flush=True)
 
     # Tasks
-    print(f"  tasks to link: {plan['task_count']}", flush=True)
+    print(
+        f"  tasks in B24 group: {plan['b24_task_count']}  "
+        f"→ linkable (есть в b24_mirror): {plan['task_count']}",
+        flush=True,
+    )
 
 
 def apply_plan(plan: dict) -> int:
@@ -399,19 +439,19 @@ def apply_plan(plan: dict) -> int:
                 can_see_all_tasks=True,
             ))
 
-    # Привязать задачи
-    linked = db.session.execute(
-        db.text("""
-            UPDATE task
-               SET project_id = :pid
-             WHERE project_id IS NULL
-               AND ((b24_data->>'groupId')::int = :gid
-                 OR (b24_data->>'GROUP_ID')::int = :gid)
-        """),
-        {'pid': project.id, 'gid': gid},
-    ).rowcount or 0
-    if linked:
-        print(f'  linked {linked} tasks → Project #{project.id}', flush=True)
+    # Привязать задачи. Task.project_id ставим только там, где он NULL,
+    # чтобы не перехватить задачу, вручную привязанную к другому проекту.
+    if plan['task_ids']:
+        linked = db.session.execute(
+            db.text("""
+                UPDATE task
+                   SET project_id = :pid
+                 WHERE id = ANY(:ids) AND project_id IS NULL
+            """),
+            {'pid': project.id, 'ids': plan['task_ids']},
+        ).rowcount or 0
+        if linked:
+            print(f'  linked {linked} tasks → Project #{project.id}', flush=True)
 
     return project.id
 
@@ -446,6 +486,9 @@ def main() -> int:
         try:
             plan = plan_for_group(g, resolver)
         except Exception as e:
+            # rollback — иначе сессия остаётся в aborted state и
+            # следующие SELECT'ы в plan_for_group тоже валятся.
+            db.session.rollback()
             print(f'\n#{g.get("ID")}  FAILED to plan: {e}', flush=True)
             counters['failed'] += 1
             continue
@@ -454,7 +497,8 @@ def main() -> int:
         counters['new' if not plan['existing_project_id'] else 'update'] += 1
         counters['new_stages'] += sum(1 for s in plan['stages'] if not s['existing_id'])
         counters['upd_stages'] += sum(1 for s in plan['stages'] if s['existing_id'])
-        counters['tasks_to_link'] += plan['task_count']
+        counters['tasks_linkable'] += plan['task_count']
+        counters['tasks_in_b24'] += plan['b24_task_count']
         if args.apply:
             try:
                 apply_plan(plan)
