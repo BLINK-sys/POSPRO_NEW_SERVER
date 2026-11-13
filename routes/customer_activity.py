@@ -23,6 +23,49 @@ from routes.dashboard import parse_date_range
 customer_activity_bp = Blueprint('customer_activity', __name__)
 
 
+# Периоды для «сортировки категорий по посещаемости». `all` = без фильтра.
+# Значения — сколько дней назад от «сейчас» брать нижнюю границу.
+_VIEWS_PERIOD_DAYS = {
+    '1m': 30,
+    '6m': 182,
+    '12m': 365,
+    'all': None,
+}
+
+
+def _period_to_date_from(period: str) -> datetime.datetime | None:
+    """Нижняя граница для фильтра по created_at. None для 'all'."""
+    days = _VIEWS_PERIOD_DAYS.get(period)
+    if days is None:
+        return None
+    return datetime.datetime.utcnow() - datetime.timedelta(days=days)
+
+
+def category_views_counts(period: str) -> dict[int, int]:
+    """
+    {category_id: count} для event_type='category_view' за период.
+    Используется и в этом блюпринте (endpoint для фронта), и в
+    `routes.categories.apply_sort` (чтобы `Применить к сайту` знал
+    те же числа, что и превью).
+    NULL category_id (устаревшие записи) не возвращаем — нет смысла
+    сортировать несуществующую категорию.
+    """
+    if period not in _VIEWS_PERIOD_DAYS:
+        period = '1m'
+    date_from = _period_to_date_from(period)
+    q = db.session.query(
+        CustomerActivity.category_id,
+        func.count(CustomerActivity.id),
+    ).filter(
+        CustomerActivity.event_type == 'category_view',
+        CustomerActivity.category_id.isnot(None),
+    )
+    if date_from is not None:
+        q = q.filter(CustomerActivity.created_at >= date_from)
+    rows = q.group_by(CustomerActivity.category_id).all()
+    return {int(cid): int(cnt) for cid, cnt in rows if cid is not None}
+
+
 _BOT_KEYWORDS = (
     'bot', 'crawl', 'spider', 'slurp', 'scraper', 'fetch',
     'curl', 'wget', 'python-requests', 'httpx', 'aiohttp',
@@ -319,3 +362,22 @@ def customer_activity_summary():
             for r in top_brands_rows
         ],
     })
+
+
+@customer_activity_bp.route('/admin/customer-activity/category-views-map', methods=['GET'])
+@jwt_required()
+def category_views_map():
+    """
+    {category_id: count} по event_type='category_view' за период.
+    Нужно сортировке категорий в /admin/catalog/categories: превью
+    на клиенте использует этот же набор чисел, что и apply-sort,
+    чтобы показанный порядок = сохранённый.
+    Query:
+      period = 1m | 6m | 12m | all  (дефолт 1m)
+    """
+    denied = _admin_guard()
+    if denied:
+        return denied
+    period = request.args.get('period', '1m').strip().lower()
+    counts = category_views_counts(period)
+    return jsonify({'success': True, 'period': period, 'counts': counts})

@@ -302,8 +302,11 @@ def apply_sort():
     сортировки. Body:
       { "mode": "alpha_asc" | "alpha_desc"
               | "products_desc" | "products_asc"
-              | "children_desc",
-        "include_children": bool }
+              | "children_desc"
+              | "views_desc" | "views_asc",
+        "include_children": bool,
+        "period": "1m" | "6m" | "12m" | "all"  // только для views_*
+      }
 
     include_children=false: сортируем только top-level (parent_id IS NULL).
     include_children=true:  сортируем детей КАЖДОГО родителя тем же
@@ -313,12 +316,19 @@ def apply_sort():
     """
     from sqlalchemy import func as _f
     from models.product import Product
+    from routes.customer_activity import category_views_counts
 
     data = request.get_json() or {}
     mode = data.get('mode')
     include_children = bool(data.get('include_children'))
+    period = str(data.get('period') or '1m').strip().lower()
 
-    valid_modes = {'alpha_asc', 'alpha_desc', 'products_desc', 'products_asc', 'children_desc'}
+    valid_modes = {
+        'alpha_asc', 'alpha_desc',
+        'products_desc', 'products_asc',
+        'children_desc',
+        'views_desc', 'views_asc',
+    }
     if mode not in valid_modes:
         return jsonify({'error': f'Unknown mode: {mode}'}), 400
 
@@ -342,6 +352,14 @@ def apply_sort():
     else:
         child_counts = {}
 
+    # Батчево: посещаемость из customer_activity за период (для views_*).
+    # Берём ровно ту же функцию, которая обслуживает превью на клиенте,
+    # чтобы «Применить к сайту» сохранил порядок, который админ видел.
+    if mode in ('views_desc', 'views_asc'):
+        views_counts = category_views_counts(period)
+    else:
+        views_counts = {}
+
     def sort_key(c):
         if mode == 'alpha_asc':
             return (c.name or '').lower()
@@ -356,6 +374,10 @@ def apply_sort():
             return counts.get(c.id, 0)
         if mode == 'children_desc':
             return -(child_counts.get(c.id, 0))
+        if mode == 'views_desc':
+            return -(views_counts.get(c.id, 0))
+        if mode == 'views_asc':
+            return views_counts.get(c.id, 0)
         return 0
 
     # Группируем по parent_id (None = top-level)
