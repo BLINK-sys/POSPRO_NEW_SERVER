@@ -1,55 +1,92 @@
+"""
+GET/PUT настроек подвала. В одной записи:
+  - текст «о компании» (однострочник), соцсети, контактная информация;
+  - юридические реквизиты (выводятся в подвале кратким блоком и на
+    отдельной странице `/requisites`);
+  - contacts_order / info_order — JSON-массивы ключей в нужном порядке
+    для колонок «Контакты» / «Информация». NULL = дефолтный порядок,
+    зашитый во фронте.
+
+Публичный путь не требует авторизации, но save-операция должна быть
+доступна только админам — JWT-гвард оставлен на уровне зеркала через
+Next-прокси (во фронте стоит проверка роли перед вызовом).
+"""
+
+import json
+
 from flask import Blueprint, request, jsonify
+
 from extensions import db
 from models.footer_settings import FooterSetting
 
+
 footer_settings_bp = Blueprint('footer_settings', __name__)
+
+
+_EDITABLE_FIELDS = (
+    'description',
+    'instagram_url', 'whatsapp_url', 'telegram_url',
+    'phone', 'email', 'address', 'working_hours',
+    'legal_name', 'bin_number', 'legal_address',
+    'bank_name', 'bank_bic', 'bank_iik', 'bank_kbe',
+)
+
+
+def _parse_order(raw):
+    """JSON-массив строк. Невалидный → None (фронт возьмёт дефолтный порядок)."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, list):
+        return None
+    return [str(x) for x in data if isinstance(x, (str, int))]
+
+
+def _serialize(settings: FooterSetting | None) -> dict:
+    if settings is None:
+        # Дефолтные значения — pre-set на старте, до первой записи.
+        return {
+            'description': 'PosPro — профессиональное оборудование для бизнеса.',
+            'instagram_url': '', 'whatsapp_url': '', 'telegram_url': '',
+            'phone': '', 'email': '', 'address': '', 'working_hours': '',
+            'legal_name': '', 'bin_number': '', 'legal_address': '',
+            'bank_name': '', 'bank_bic': '', 'bank_iik': '', 'bank_kbe': '',
+            'contacts_order': None, 'info_order': None,
+        }
+    out = {f: getattr(settings, f, None) or '' for f in _EDITABLE_FIELDS}
+    out['contacts_order'] = _parse_order(settings.contacts_order)
+    out['info_order'] = _parse_order(settings.info_order)
+    return out
 
 
 @footer_settings_bp.route('/footer-settings', methods=['GET'])
 def get_footer_settings():
     settings = FooterSetting.query.first()
-    if not settings:
-        # Возвращаем дефолтные значения, если нет данных в БД
-        return jsonify({
-            'description': 'PosPro - ваш надежный партнер в мире качественных товаров. Мы предлагаем широкий ассортимент и лучший сервис.',
-            'instagram_url': 'https://instagram.com/pospro',
-            'whatsapp_url': 'https://wa.me/77771234567',
-            'telegram_url': 'https://t.me/pospro',
-            'phone': '+7 (727) 123-45-67',
-            'email': 'support@pospro.kz',
-            'address': 'г. Алматы, ул. Достык, 105',
-            'working_hours': 'Пн-Пт 9:00 - 18:00'
-        })
-
-    return jsonify({
-        'description': settings.description,
-        'instagram_url': settings.instagram_url,
-        'whatsapp_url': settings.whatsapp_url,
-        'telegram_url': settings.telegram_url,
-        'phone': settings.phone,
-        'email': settings.email,
-        'address': settings.address,
-        'working_hours': settings.working_hours
-    })
+    return jsonify(_serialize(settings))
 
 
 @footer_settings_bp.route('/footer-settings', methods=['POST', 'PUT'])
 def save_footer_settings():
-    data = request.get_json()
+    data = request.get_json() or {}
 
     settings = FooterSetting.query.first()
     if not settings:
         settings = FooterSetting()
         db.session.add(settings)
 
-    settings.description = data.get('description')
-    settings.instagram_url = data.get('instagram_url')
-    settings.whatsapp_url = data.get('whatsapp_url')
-    settings.telegram_url = data.get('telegram_url')
-    settings.phone = data.get('phone')
-    settings.email = data.get('email')
-    settings.address = data.get('address')
-    settings.working_hours = data.get('working_hours')
+    for f in _EDITABLE_FIELDS:
+        if f in data:
+            setattr(settings, f, data.get(f))
+
+    if 'contacts_order' in data:
+        order = _parse_order(data.get('contacts_order'))
+        settings.contacts_order = json.dumps(order, ensure_ascii=False) if order else None
+    if 'info_order' in data:
+        order = _parse_order(data.get('info_order'))
+        settings.info_order = json.dumps(order, ensure_ascii=False) if order else None
 
     db.session.commit()
-    return jsonify({'message': 'Настройки подвала сохранены'})
+    return jsonify(_serialize(settings))
