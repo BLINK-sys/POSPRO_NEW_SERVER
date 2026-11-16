@@ -89,6 +89,15 @@ def admin_update_static_page(slug):
         page.content = data['content'] or ''
     if 'is_active' in data:
         page.is_active = bool(data['is_active'])
+    # Оформление H1 на странице (не влияет на <title>/метаданные).
+    if 'title_color' in data:
+        v = (data['title_color'] or '').strip()[:16]
+        page.title_color = v or None
+    if 'title_align' in data:
+        v = str(data['title_align'] or 'left').strip().lower()
+        page.title_align = v if v in ('left', 'center', 'right') else 'left'
+    if 'title_hidden' in data:
+        page.title_hidden = bool(data['title_hidden'])
     db.session.commit()
     return jsonify(page.to_dict())
 
