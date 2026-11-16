@@ -122,12 +122,32 @@ def _parse_mentions(text: str, members) -> set:
 
 
 def _room_push_url(room: ChatRoom) -> str:
-    """URL для клика по push-уведомлению → SW откроет эту вкладку."""
+    """URL для клика по push-уведомлению → SW откроет эту вкладку.
+       Для карточек сделки/задачи/проекта сразу открываем таб «Чат»,
+       чтобы пользователь не искал новое сообщение вручную."""
     if room.kind == 'deal' and room.related_deal_id:
-        return f'/admin/deals/{room.related_deal_id}'
+        return f'/admin/deals/{room.related_deal_id}?tab=chat'
     if room.kind == 'task' and room.related_task_id:
-        return f'/admin/tasks/{room.related_task_id}'
+        return f'/admin/tasks/{room.related_task_id}?tab=chat'
+    if room.kind == 'project' and room.related_project_id:
+        return f'/admin/projects/{room.related_project_id}?tab=chat'
     return '/admin/chat'
+
+
+def _room_notification_target(room: ChatRoom) -> tuple[str, int]:
+    """
+    Куда ведёт клик по in-app уведомлению колокольчика.
+    Для deal/task/project — прямо в карточку сущности (её `id`), чтобы
+    пользователь оказался в контексте, а не в общем списке чатов.
+    Для general/direct/group — в сам чат комнаты.
+    """
+    if room.kind == 'deal' and room.related_deal_id:
+        return 'deal', room.related_deal_id
+    if room.kind == 'task' and room.related_task_id:
+        return 'task', room.related_task_id
+    if room.kind == 'project' and room.related_project_id:
+        return 'project', room.related_project_id
+    return 'chat_room', room.id
 
 
 def _require_membership(room_id: int, user_id: int) -> ChatMember | None:
@@ -611,6 +631,9 @@ def send_message(rid):
         author = db.session.get(SystemUser, uid)
         author_name = (author.full_name if author else None) or 'Кто-то'
         push_url = _room_push_url(room)
+        # Для in-app уведомлений (колокольчик): если комната принадлежит
+        # сделке/задаче/проекту — ведём сразу в карточку сущности.
+        notif_entity_type, notif_entity_id = _room_notification_target(room)
         other_members = ChatMember.query.filter(
             ChatMember.room_id == rid,
             ChatMember.user_id != uid,
@@ -621,7 +644,8 @@ def send_message(rid):
             if m.user_id in mentioned_ids:
                 notify(
                     user_id=m.user_id, kind='chat_mention',
-                    section='chat', entity_type='chat_room', entity_id=rid,
+                    section='chat',
+                    entity_type=notif_entity_type, entity_id=notif_entity_id,
                     payload={'author_id': uid, 'preview': preview,
                              'room_id': rid, 'room_kind': room.kind},
                     push_title=f'{author_name} упомянул(а) вас',
@@ -631,7 +655,8 @@ def send_message(rid):
                 continue
             notify(
                 user_id=m.user_id, kind='chat_new_message',
-                section='chat', entity_type='chat_room', entity_id=rid,
+                section='chat',
+                entity_type=notif_entity_type, entity_id=notif_entity_id,
                 payload={'author_id': uid, 'preview': preview,
                          'room_id': rid, 'room_kind': room.kind},
                 push_title=author_name,
@@ -777,6 +802,7 @@ def upload_message(rid):
         author = db.session.get(SystemUser, uid)
         author_name = (author.full_name if author else None) or 'Кто-то'
         push_url = _room_push_url(room)
+        notif_entity_type, notif_entity_id = _room_notification_target(room)
         other = ChatMember.query.filter(
             ChatMember.room_id == rid,
             ChatMember.user_id != uid,
@@ -786,7 +812,8 @@ def upload_message(rid):
             if m.user_id in mentioned_ids:
                 notify(
                     user_id=m.user_id, kind='chat_mention',
-                    section='chat', entity_type='chat_room', entity_id=rid,
+                    section='chat',
+                    entity_type=notif_entity_type, entity_id=notif_entity_id,
                     payload={'author_id': uid, 'preview': preview,
                              'has_attachments': True,
                              'room_id': rid, 'room_kind': room.kind},
@@ -797,7 +824,8 @@ def upload_message(rid):
                 continue
             notify(
                 user_id=m.user_id, kind='chat_new_message',
-                section='chat', entity_type='chat_room', entity_id=rid,
+                section='chat',
+                entity_type=notif_entity_type, entity_id=notif_entity_id,
                 payload={'author_id': uid, 'preview': preview,
                          'has_attachments': True,
                          'room_id': rid, 'room_kind': room.kind},
