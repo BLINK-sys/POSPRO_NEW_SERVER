@@ -32,6 +32,11 @@ from models.integration import IntegrationRun, IntegrationCommand
 
 MIN_HOURS = 12         # считаем «застрял» всё что >12 часов в running
 MIN_PRODUCTS_RATIO = 0.95  # процент выгруженных товаров для авто-finish
+# После этого порога добавляем финализацию в обход ratio: воркер
+# обновляет progress через SSE и пишет его в БД только при финише,
+# поэтому «висящая» запись старше 3 суток почти всегда означает что
+# воркер фактически завершил работу, но crash'нулся на финальном commit.
+HARD_HOURS = 72
 
 
 def _ratio(progress: dict | None) -> float:
@@ -74,21 +79,25 @@ def main() -> int:
             f'age={age_h:.1f}h phase={run.phase} ratio={ratio:.2%}',
             flush=True,
         )
-        if ratio < MIN_PRODUCTS_RATIO:
-            print(f'    SKIP: прогресс <{MIN_PRODUCTS_RATIO:.0%}, не трогаем', flush=True)
+        is_hard_timeout = age_h >= HARD_HOURS
+        if ratio < MIN_PRODUCTS_RATIO and not is_hard_timeout:
+            print(f'    SKIP: прогресс <{MIN_PRODUCTS_RATIO:.0%} и возраст <{HARD_HOURS}ч', flush=True)
             continue
 
+        reason = (
+            'hard timeout' if is_hard_timeout
+            else f'ratio {ratio:.1%}'
+        )
         if args.apply:
             run.status = 'succeeded'
             run.finished_at = now
             run.error = (
-                f'auto-finished: висел {age_h:.0f}ч в running, '
-                f'фактический прогресс {ratio:.1%}'
+                f'auto-finished: висел {age_h:.0f}ч в running ({reason})'
             )
             fixed += 1
-            print(f'    MARKED succeeded', flush=True)
+            print(f'    MARKED succeeded ({reason})', flush=True)
         else:
-            print(f'    WOULD mark succeeded', flush=True)
+            print(f'    WOULD mark succeeded ({reason})', flush=True)
 
         # Чистим недоконсьюмленные команды того же типа — чтобы воркер
         # не поднял cancel/run_now от старого «мертвого» run.
