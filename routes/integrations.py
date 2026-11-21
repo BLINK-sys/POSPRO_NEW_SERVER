@@ -102,6 +102,77 @@ def _is_online(settings):
     return (datetime.utcnow() - settings.last_heartbeat_at).total_seconds() < HEARTBEAT_TIMEOUT_SEC
 
 
+# После такого простоя heartbeat'а считаем, что воркер явно не вернётся
+# к текущему running-run'у (сетевой разрыв, crash, выключение). В такой
+# ситуации статус в БД никогда сам не финализируется и карточка «Идёт
+# выгрузка» висит вечно. 10 мин = 120 пропущенных подряд heartbeat'ов,
+# это не мигающая сеть.
+ABANDONED_HEARTBEAT_MIN = 10
+# Жёсткий аварийный порог — даже если воркер онлайн, но тот же run
+# в running более 24 часов (долгий ночной job BIO/Equip укладывается
+# за 8-10 часов) — считаем что финалайзер проёбан. Защищает от кейса
+# «воркер жив, но текущую задачу потерял».
+HARD_RUN_HOURS = 24
+
+
+def _cleanup_abandoned_runs(type_):
+    """
+    Авто-финализация «висящих» running-run'ов по этому типу интеграции.
+    Два критерия, ЛЮБОЙ из них — повод закрыть run:
+      1) Воркер offline > ABANDONED_HEARTBEAT_MIN минут.
+      2) Run в running > HARD_RUN_HOURS часов.
+
+    Вызывается из всех админских GET/POST интеграции — любое обращение
+    к карточке автоматически чистит мусор. Не требует cron'а и отдельных
+    сервисов.
+
+    Возвращает список id закрытых run'ов — для логов.
+    """
+    settings = IntegrationSettings.query.filter_by(type=type_).first()
+    if not settings:
+        return []
+
+    now = datetime.utcnow()
+    worker_offline = (
+        not settings.last_heartbeat_at
+        or (now - settings.last_heartbeat_at).total_seconds()
+            > ABANDONED_HEARTBEAT_MIN * 60
+    )
+
+    runs = IntegrationRun.query.filter_by(type=type_, status='running').all()
+    closed_ids = []
+    for run in runs:
+        age_h = (now - run.started_at).total_seconds() / 3600 if run.started_at else 0
+        hard_timeout = age_h >= HARD_RUN_HOURS
+
+        if not worker_offline and not hard_timeout:
+            continue
+
+        reason_parts = []
+        if worker_offline:
+            hb_min = (
+                (now - settings.last_heartbeat_at).total_seconds() / 60
+                if settings.last_heartbeat_at else 9999
+            )
+            reason_parts.append(f'воркер offline {hb_min:.0f} мин')
+        if hard_timeout:
+            reason_parts.append(f'висит {age_h:.0f}ч')
+
+        run.status = 'failed'
+        run.finished_at = now
+        run.error = 'Auto-cleanup: ' + ', '.join(reason_parts)
+        closed_ids.append(run.id)
+
+    # Чистим недоконсьюмленные команды (cancel/run_now), чтобы при
+    # возобновлении воркер не подхватил мусор для «мертвого» run'а.
+    if closed_ids:
+        for cmd in IntegrationCommand.query.filter_by(type=type_, consumed_at=None).all():
+            db.session.delete(cmd)
+        db.session.commit()
+
+    return closed_ids
+
+
 # ============ ADMIN endpoints ============
 
 @integrations_bp.route('/', methods=['GET'])
@@ -113,6 +184,7 @@ def list_integrations():
 
     result = []
     for t in INTEGRATION_TYPES:
+        _cleanup_abandoned_runs(t)
         settings = _get_or_create_settings(t)
         last_run = IntegrationRun.query.filter_by(type=t).order_by(desc(IntegrationRun.started_at)).first()
         active_run = IntegrationRun.query.filter_by(type=t, status='running').first()
@@ -144,6 +216,7 @@ def get_integration_detail(type_):
     if not _valid_type(type_):
         return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
 
+    _cleanup_abandoned_runs(type_)
     settings = _get_or_create_settings(type_)
     active_run = IntegrationRun.query.filter_by(type=type_, status='running').first()
     queued_run = IntegrationRun.query.filter_by(type=type_, status='queued').order_by(IntegrationRun.started_at).first()
@@ -204,6 +277,11 @@ def trigger_integration(type_):
         return jsonify({'success': False, 'message': 'Доступ запрещён'}), 403
     if not _valid_type(type_):
         return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
+
+    # Авто-финализация «брошенных» run'ов до проверки на active ниже,
+    # иначе перезапуск после краха воркера был бы невозможен (status
+    # застрял в running, см. _cleanup_abandoned_runs).
+    _cleanup_abandoned_runs(type_)
 
     # Дедупликация: если этот тип уже active/queued/pending — не плодим дубли.
     # Само разрешение параллелизма (BIO+Equip нельзя вместе) — на стороне
@@ -268,6 +346,11 @@ def cancel_integration(type_):
     if not _valid_type(type_):
         return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
 
+    # «Отменить» мёртвый run через воркера бесполезно (он его не держит),
+    # но здесь auto-cleanup приведёт карточку в порядок, и UI выдаст
+    # нормальное «Нечего отменять» вместо подвешенной кнопки.
+    _cleanup_abandoned_runs(type_)
+
     active = IntegrationRun.query.filter_by(type=type_, status='running').first()
     queued = IntegrationRun.query.filter_by(type=type_, status='queued').first()
     pending = IntegrationCommand.query.filter_by(
@@ -321,6 +404,7 @@ def get_current_run(type_):
     if not _valid_type(type_):
         return jsonify({'success': False, 'message': 'Неизвестный тип'}), 404
 
+    _cleanup_abandoned_runs(type_)
     return jsonify({'success': True, 'data': _make_snapshot(type_)}), 200
 
 
