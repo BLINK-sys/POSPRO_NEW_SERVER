@@ -53,7 +53,7 @@ import os
 import re
 import unicodedata
 
-from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app
+from flask import Blueprint, request, jsonify, Response, stream_with_context, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity, verify_jwt_in_request
 from sqlalchemy import or_, and_, func
 
@@ -838,6 +838,45 @@ def upload_message(rid):
         print(f'⚠️ notify (chat upload) failed: {e}', flush=True)
 
     return jsonify({'success': True, 'message': _message_dict(msg)}), 201
+
+
+@chat_bp.route('/admin/chat/attachments/<int:aid>/download', methods=['GET'])
+@jwt_required()
+def download_chat_attachment(aid):
+    """
+    Скачать файл чата с заголовком Content-Disposition: attachment.
+    Файлы чата лежат на диске по file_url=/uploads/... и Flask-static
+    отдаёт их inline — что для картинок удобно (preview в чате), но для
+    md/csv/pdf означает «открылось во вкладке вместо скачивания».
+    Этот эндпоинт стримит тот же файл, но с attachment-дисозишеном.
+    Доступ проверяется через участие в комнате.
+    """
+    role, uid = _current_role_and_id()
+    if uid is None:
+        return jsonify({'error': 'unauthorized'}), 401
+    att = ChatAttachment.query.get(aid)
+    if not att:
+        return jsonify({'error': 'not found'}), 404
+    msg = ChatMessage.query.get(att.message_id)
+    if not msg:
+        return jsonify({'error': 'not found'}), 404
+    if not _require_membership(msg.room_id, uid):
+        return jsonify({'error': 'forbidden'}), 403
+
+    url = (att.file_url or '').lstrip('/')
+    if not url.startswith('uploads/'):
+        return jsonify({'error': 'bad path'}), 400
+    rel = url[len('uploads/'):]
+    disk_path = os.path.join(current_app.config['UPLOAD_FOLDER'], rel)
+    if not os.path.exists(disk_path):
+        return jsonify({'error': 'file missing on disk'}), 410
+
+    return send_file(
+        disk_path,
+        as_attachment=True,
+        download_name=att.file_name or 'file',
+        mimetype=att.mime_type or 'application/octet-stream',
+    )
 
 
 @chat_bp.route('/admin/chat/rooms/<int:rid>/read-status', methods=['GET'])
