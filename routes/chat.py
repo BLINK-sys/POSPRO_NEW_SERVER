@@ -947,6 +947,29 @@ def edit_message(mid):
 
     msg.text = text
     msg.edited_at = datetime.utcnow()
+
+    # Обновляем preview в висящих уведомлениях (непрочитанных), чтобы
+    # получатель при входе в колокольчик видел актуальный текст, а не
+    # редакцию. Payload не хранит message_id, матчим по комнате/автору
+    # и окну ±30 сек от created_at сообщения.
+    from models.notification import Notification
+    new_preview = (text[:80] + '…') if len(text) > 80 else text
+    created = msg.created_at or datetime.utcnow()
+    room_id_str = str(msg.room_id)
+    author_id_str = str(msg.author_id) if msg.author_id is not None else ''
+    stale = Notification.query.filter(
+        Notification.section == 'chat',
+        Notification.read_at.is_(None),
+        Notification.created_at >= created - timedelta(seconds=30),
+        Notification.created_at <= created + timedelta(seconds=30),
+        Notification.payload['room_id'].astext == room_id_str,
+        Notification.payload['author_id'].astext == author_id_str,
+    ).all()
+    for n in stale:
+        new_payload = dict(n.payload or {})
+        new_payload['preview'] = new_preview
+        n.payload = new_payload
+
     db.session.commit()
     return jsonify({'success': True, 'message': _message_dict(msg)}), 200
 
@@ -981,16 +1004,10 @@ def delete_message(mid):
         and is_owner_user(uid)
     )
 
-    if not hard:
-        msg.deleted_at = datetime.utcnow()
-        db.session.commit()
-        return jsonify({'success': True}), 200
-
-    # Hard delete: сначала чистим уведомления (payload не хранит
-    # message_id для старых записей — матчим по room_id + author_id +
-    # окну ±30s вокруг created_at), затем удаляем само сообщение.
-    # reactions/attachments уходят каскадом; reply_to_id в чужих
-    # сообщениях — ON DELETE SET NULL, цитаты просто теряют контекст.
+    # В любом режиме чистим висящие уведомления об этом сообщении —
+    # иначе получатель откроет колокольчик и увидит preview уже
+    # удалённого/скрытого сообщения. Payload не хранит message_id,
+    # матчим по room_id + author_id + окну ±30s вокруг created_at.
     from models.notification import Notification
     created = msg.created_at or datetime.utcnow()
     room_id_str = str(msg.room_id)
@@ -1002,6 +1019,15 @@ def delete_message(mid):
         Notification.payload['room_id'].astext == room_id_str,
         Notification.payload['author_id'].astext == author_id_str,
     ).delete(synchronize_session=False)
+
+    if not hard:
+        msg.deleted_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'success': True}), 200
+
+    # Hard delete: reactions/attachments уходят каскадом; reply_to_id
+    # в чужих сообщениях — ON DELETE SET NULL, цитаты просто теряют
+    # контекст.
     db.session.delete(msg)
     db.session.commit()
     return jsonify({'success': True, 'hard': True}), 200
