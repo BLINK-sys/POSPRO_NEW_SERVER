@@ -83,11 +83,10 @@ class ChatMessage(db.Model):
     # сообщения. NULL для обычного сообщения.
     reply_to_id = db.Column(db.Integer, db.ForeignKey('chat_message.id', ondelete='SET NULL'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    # Редактирование разрешено в первые 5 мин — фронтовое ограничение,
-    # бэк проверяет `(now - created_at) < 5 min` в PUT-ручке.
     edited_at = db.Column(db.DateTime, nullable=True)
     # Soft-delete — сообщение остаётся для целостности reply-ссылок,
-    # но не показывается («Сообщение удалено»).
+    # но не показывается («Сообщение удалено»). Hard-delete идёт
+    # через DELETE ?hard=1 — полностью убирает запись.
     deleted_at = db.Column(db.DateTime, nullable=True)
     # Пиннинг — закреплённые сообщения показываются в шапке чата.
     pinned_at = db.Column(db.DateTime, nullable=True)

@@ -25,8 +25,8 @@ Endpoints:
   POST   /admin/chat/rooms/<id>/messages               новое сообщение
   POST   /admin/chat/rooms/<id>/read                   mark all read up to now
 
-  PUT    /admin/chat/messages/<id>                     edit text (5 мин)
-  DELETE /admin/chat/messages/<id>                     soft delete
+  PUT    /admin/chat/messages/<id>                     edit text (без окна)
+  DELETE /admin/chat/messages/<id>[?hard=1]            soft (default) / hard
   POST   /admin/chat/messages/<id>/reactions           toggle emoji
 
   GET    /admin/chat/stream                            SSE — все комнаты юзера
@@ -63,6 +63,7 @@ from models.chat import (
     CHAT_ROOM_KINDS,
 )
 from models.systemuser import SystemUser
+from routes.auth import is_owner_user
 
 
 chat_bp = Blueprint('chat', __name__)
@@ -930,8 +931,12 @@ def edit_message(mid):
     if not _require_membership(msg.room_id, uid):
         return jsonify({'error': 'Не участник комнаты'}), 403
 
-    if (datetime.utcnow() - (msg.created_at or datetime.utcnow())) > timedelta(minutes=EDIT_WINDOW_MINUTES):
-        return jsonify({'error': f'Редактировать можно только в первые {EDIT_WINDOW_MINUTES} минут'}), 400
+    # Окно редактирования — 5 мин для всех, кроме owner'а (может
+    # править свои сообщения в любое время). Остальные тоже видят
+    # pencil, но бэк им вернёт 400, UI покажет toast.
+    if not is_owner_user(uid):
+        if (datetime.utcnow() - (msg.created_at or datetime.utcnow())) > timedelta(minutes=EDIT_WINDOW_MINUTES):
+            return jsonify({'error': f'Редактировать можно только в первые {EDIT_WINDOW_MINUTES} минут'}), 400
 
     data = request.get_json() or {}
     text = (data.get('text') or '').strip()
@@ -950,9 +955,13 @@ def edit_message(mid):
 @jwt_required()
 def delete_message(mid):
     """
-    Soft delete — сообщение остаётся для целостности reply-ссылок, но
-    text скрывается («Сообщение удалено»). Своё — всегда, чужое — только
-    admin.
+    Удаление сообщения. По умолчанию — soft delete (запись остаётся с
+    deleted_at, текст скрыт как «Сообщение удалено», reply-цитаты не
+    ломаются). С query-параметром `hard=1` — физический DELETE из БД
+    плюс зачистка висящих in-app уведомлений об этом сообщении, чтобы
+    у получателей не всплывало в колокольчике. Hard-режим доступен
+    только owner'у (`is_owner=TRUE`); остальным флаг игнорируется и
+    запрос работает как soft. Своё — всегда, чужое — только admin.
     """
     err = _check_admin_or_system()
     if err:
@@ -967,9 +976,35 @@ def delete_message(mid):
     if msg.author_id != uid and role != 'admin':
         return jsonify({'error': 'Можно удалить только своё сообщение'}), 403
 
-    msg.deleted_at = datetime.utcnow()
+    hard = (
+        (request.args.get('hard') or '').lower() in ('1', 'true', 'yes')
+        and is_owner_user(uid)
+    )
+
+    if not hard:
+        msg.deleted_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'success': True}), 200
+
+    # Hard delete: сначала чистим уведомления (payload не хранит
+    # message_id для старых записей — матчим по room_id + author_id +
+    # окну ±30s вокруг created_at), затем удаляем само сообщение.
+    # reactions/attachments уходят каскадом; reply_to_id в чужих
+    # сообщениях — ON DELETE SET NULL, цитаты просто теряют контекст.
+    from models.notification import Notification
+    created = msg.created_at or datetime.utcnow()
+    room_id_str = str(msg.room_id)
+    author_id_str = str(msg.author_id) if msg.author_id is not None else ''
+    Notification.query.filter(
+        Notification.section == 'chat',
+        Notification.created_at >= created - timedelta(seconds=30),
+        Notification.created_at <= created + timedelta(seconds=30),
+        Notification.payload['room_id'].astext == room_id_str,
+        Notification.payload['author_id'].astext == author_id_str,
+    ).delete(synchronize_session=False)
+    db.session.delete(msg)
     db.session.commit()
-    return jsonify({'success': True}), 200
+    return jsonify({'success': True, 'hard': True}), 200
 
 
 # ============================================================================
